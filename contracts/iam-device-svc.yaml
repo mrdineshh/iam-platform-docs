@@ -1,0 +1,295 @@
+openapi: 3.0.3
+info:
+  title: iam-device-svc
+  description: >
+    Second-factor device enrollment and verification (BUILD_PLAN.md Service
+    9): TOTP and FCM push approve/deny. One enrolled device record supports
+    both factors (confirmed with product owner). TOTP secrets are encrypted
+    at rest with AES-256-GCM under a per-tenant DEK stored in OpenBao.
+    Called by iam-auth-svc as a second-factor step inside the same
+    orchestrated login (AP-1) -- no separate MFA login endpoint. Push-send
+    blocks synchronously for up to 60s waiting on the mobile app's response
+    (confirmed with product owner) rather than exposing a separate polling
+    endpoint.
+  version: "1.0"
+
+servers:
+  - url: http://iam-device-svc:8080
+
+paths:
+  /api/v1/devices/enroll:
+    post:
+      operationId: enrollDevice
+      summary: Enroll a new second-factor device for a user
+      parameters:
+        - name: X-Correlation-Id
+          in: header
+          required: false
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/EnrollDeviceRequest'
+      responses:
+        '201':
+          description: >
+            Device created in PENDING status. `totpSecret`/`provisioningUri`
+            are only ever returned here, once -- not retrievable again.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EnrollDeviceResponse'
+        '404':
+          description: No such user under this tenant (checked against iam-identity-svc)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '400':
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: iam-identity-svc unavailable (circuit open or downstream failure)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/v1/devices/totp/verify:
+    post:
+      operationId: verifyTotp
+      summary: Verify a TOTP code for a tenant/user's device
+      description: >
+        Activates a PENDING device on its first successful verify. Enforces
+        failed-attempt lockout (5 attempts -> 5 minute cooldown per device).
+        Never a 4xx for "wrong code" or "locked" -- both are normal 200
+        outcomes (Guardrails Section 2's graceful-degradation style),
+        distinguished only by the `status` field.
+      parameters:
+        - name: X-Correlation-Id
+          in: header
+          required: false
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TotpVerifyRequest'
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TotpVerifyResponse'
+        '404':
+          description: No device enrolled for this tenant/user
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '400':
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/v1/devices/push/send:
+    post:
+      operationId: sendPush
+      summary: Send a push-approval challenge and block for the result
+      description: >
+        Blocks the HTTP call itself for up to 60 seconds waiting on
+        /push/respond (confirmed design -- no separate status-polling
+        endpoint). Callers (iam-auth-svc) must use a read timeout longer
+        than 60s for this specific call.
+      parameters:
+        - name: X-Correlation-Id
+          in: header
+          required: false
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PushSendRequest'
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PushSendResponse'
+        '404':
+          description: No push-capable (fcmToken-registered) device for this tenant/user
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '400':
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/v1/devices/push/respond:
+    post:
+      operationId: respondToPush
+      summary: Mobile app's approve/deny response to a pending push challenge
+      parameters:
+        - name: X-Correlation-Id
+          in: header
+          required: false
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PushRespondRequest'
+      responses:
+        '204':
+          description: Recorded
+        '404':
+          description: Unknown or expired challenge
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: Challenge already resolved (approved, denied, or timed out)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '400':
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+components:
+  schemas:
+    EnrollDeviceRequest:
+      type: object
+      required: [tenantId, userId]
+      properties:
+        tenantId:
+          type: string
+          format: uuid
+        userId:
+          type: string
+          format: uuid
+        fcmToken:
+          type: string
+          nullable: true
+          description: >
+            Optional. Present if this device also supports push (one device,
+            both factors). Omitted entries can add push later, but no
+            token-refresh endpoint exists yet (MVP scope; the mobile app that
+            would call it isn't built either -- BUILD_PLAN.md Service 12).
+
+    EnrollDeviceResponse:
+      type: object
+      required: [deviceId, status, totpSecret, provisioningUri]
+      properties:
+        deviceId:
+          type: string
+          format: uuid
+        status:
+          type: string
+          enum: [PENDING]
+        totpSecret:
+          type: string
+          description: Base32-encoded TOTP secret, shown once, for manual entry.
+        provisioningUri:
+          type: string
+          description: >
+            otpauth://totp/... URI for QR provisioning. Rendering it as a QR
+            image is a client concern (no QR-image generation server-side).
+
+    TotpVerifyRequest:
+      type: object
+      required: [tenantId, userId, code]
+      properties:
+        tenantId:
+          type: string
+          format: uuid
+        userId:
+          type: string
+          format: uuid
+        code:
+          type: string
+          pattern: '^\d{6}$'
+
+    TotpVerifyResponse:
+      type: object
+      required: [valid, status]
+      properties:
+        valid:
+          type: boolean
+        status:
+          type: string
+          enum: [PENDING, ACTIVE, LOCKED]
+
+    PushSendRequest:
+      type: object
+      required: [tenantId, userId]
+      properties:
+        tenantId:
+          type: string
+          format: uuid
+        userId:
+          type: string
+          format: uuid
+
+    PushSendResponse:
+      type: object
+      required: [challengeId, result]
+      properties:
+        challengeId:
+          type: string
+          format: uuid
+        result:
+          type: string
+          enum: [APPROVED, DENIED, TIMEOUT]
+
+    PushRespondRequest:
+      type: object
+      required: [challengeId, approve]
+      properties:
+        challengeId:
+          type: string
+          format: uuid
+        approve:
+          type: boolean
+
+    ErrorResponse:
+      type: object
+      required: [timestamp, status, error, message, path, correlationId]
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+        status:
+          type: integer
+        error:
+          type: string
+        message:
+          type: string
+        path:
+          type: string
+        correlationId:
+          type: string

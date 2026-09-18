@@ -1,0 +1,206 @@
+openapi: 3.0.3
+info:
+  title: iam-auth-svc
+  description: >
+    The login orchestrator (BUILD_PLAN.md Service 7, AP-1). Owns no data of
+    its own -- it calls iam-identity-svc (password check), iam-geo-svc +
+    iam-policy-svc (location/policy), iam-device-svc (second factor, added
+    2026-09-16 for Service 9 -- see docs/DECISIONS.md), and iam-session-svc
+    (issuance), all Resilience4j-wrapped, under one correlation ID. AP-1:
+    this is the only service allowed to issue a session by directing
+    iam-session-svc to do so; no other service may call iam-session-svc's
+    issue endpoint. No separate MFA login endpoint exists -- second-factor
+    verification is a step inside this same orchestrated login.
+  version: "1.0"
+
+servers:
+  - url: http://iam-auth-svc:8080
+
+paths:
+  /api/v1/login:
+    post:
+      operationId: login
+      summary: Password login
+      parameters:
+        - name: X-Correlation-Id
+          in: header
+          required: false
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LoginRequest'
+      responses:
+        '200':
+          description: Login succeeded, session issued
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LoginResponse'
+        '400':
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Invalid credentials
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: >
+            Denied by policy or second factor (blocked location, account
+            suspended, location/policy could not be verified, wrong/locked
+            TOTP code, or push denied/timed out -- BUILD_PLAN.md Section
+            4.6's "never fail open" rule: an unresolvable risk check is a
+            denial, not a pass). `ErrorResponse.errorCode` is always
+            populated on this status -- see the schema.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: iam-identity-svc, iam-device-svc, or iam-session-svc unavailable
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/v1/logout:
+    post:
+      operationId: logout
+      summary: End a session
+      parameters:
+        - name: X-Session-Token
+          in: header
+          required: true
+          schema:
+            type: string
+        - name: X-Correlation-Id
+          in: header
+          required: false
+          schema:
+            type: string
+      responses:
+        '204':
+          description: Session terminated
+        '400':
+          description: X-Session-Token header missing
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Unknown, expired, or already-terminated session
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: iam-session-svc unavailable
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+components:
+  schemas:
+    LoginRequest:
+      type: object
+      required: [tenantId, email, password, sourceIp]
+      properties:
+        tenantId:
+          type: string
+          format: uuid
+        email:
+          type: string
+        password:
+          type: string
+        sourceIp:
+          type: string
+          description: >
+            MVP-TEMPORARY: client-supplied rather than derived server-side
+            from a trusted proxy header. There is no PEP/gateway in front of
+            this service yet to extract a real client IP -- see
+            docs/DECISIONS.md, Service 7 entry. Must move to a
+            server-derived value (matching D2's inter-service trust model)
+            before real deployment.
+        totpCode:
+          type: string
+          nullable: true
+          pattern: '^\d{6}$'
+          description: >
+            Added 2026-09-16 for Service 9 (confirmed with product owner --
+            docs/DECISIONS.md). Optional. If present, second-factor
+            verification uses iam-device-svc's TOTP check. If absent, it
+            falls through to a blocking push-approval request instead (no
+            separate MFA login endpoint -- AP-1). There is deliberately no
+            way to skip second-factor entirely in this MVP; BUILD_PLAN.md's
+            login flow treats it as always-required, not policy-conditional.
+
+    LoginResponse:
+      type: object
+      required: [token, sessionId, expiresAt, role]
+      properties:
+        token:
+          type: string
+        sessionId:
+          type: string
+          format: uuid
+        expiresAt:
+          type: string
+          format: date-time
+        role:
+          type: string
+          enum: [ADMIN, USER]
+          description: >
+            Added for Service 14 (iam-admin-console) -- see
+            docs/DECISIONS.md. UI-branching convenience only; every
+            admin-gated backend endpoint independently re-verifies role
+            itself via iam-identity-svc, never trusts this field alone.
+
+    ErrorResponse:
+      type: object
+      required: [timestamp, status, error, message, path, correlationId]
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+        status:
+          type: integer
+        error:
+          type: string
+        message:
+          type: string
+        path:
+          type: string
+        correlationId:
+          type: string
+        errorCode:
+          type: string
+          nullable: true
+          description: >
+            Added for Service 13 (iam-login-portal) -- see docs/DECISIONS.md,
+            Service 13 pre-implementation entry. Populated on every 403 from
+            POST /api/v1/login so a caller can branch on the denial cause
+            without parsing `message`. Not populated on other status codes or
+            by any other service (the field itself lives on the shared
+            ErrorResponse in iam-service-kit, additive/nullable everywhere
+            else).
+          enum:
+            - ACCOUNT_SUSPENDED
+            - LOCATION_UNVERIFIED
+            - POLICY_UNAVAILABLE
+            - POLICY_DENIED
+            - NO_SECOND_FACTOR_ENROLLED
+            - NO_PUSH_DEVICE_ENROLLED
+            - SECOND_FACTOR_UNAVAILABLE
+            - TOTP_INVALID
+            - TOTP_LOCKED
+            - PUSH_DENIED
+            - PUSH_TIMEOUT

@@ -1,0 +1,305 @@
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: iam
+      POSTGRES_PASSWORD: localdev
+    ports: ["5432:5432"]
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./infra/postgres-init:/docker-entrypoint-initdb.d
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U iam"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  valkey:
+    image: valkey/valkey:latest
+    ports: ["6379:6379"]
+    healthcheck:
+      test: ["CMD", "valkey-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  openbao:
+    image: openbao/openbao:latest
+    environment:
+      BAO_DEV_ROOT_TOKEN_ID: dev-root-token
+      BAO_DEV_LISTEN_ADDRESS: 0.0.0.0:8200
+    ports: ["8200:8200"]
+    cap_add: ["IPC_LOCK"]
+    healthcheck:
+      test: ["CMD", "bao", "status", "-address=http://127.0.0.1:8200"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  kafka:
+    image: apache/kafka:latest
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      # Single-broker MVP (BUILD_PLAN.md deviation D4) — Kafka's internal
+      # topics default to replication factor 3, which can never be satisfied
+      # with one broker and blocks __consumer_offsets from ever being created.
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+    ports: ["9092:9092"]
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server localhost:9092"]
+      interval: 10s
+      timeout: 10s
+      retries: 10
+
+  jaeger:
+    image: jaegertracing/all-in-one:latest
+    ports: ["16686:16686", "4317:4317", "4318:4318"]   # UI on 16686, OTLP gRPC on 4317, OTLP HTTP on 4318
+
+  iam-audit-svc:
+    build:
+      context: ../workspace
+      dockerfile: iam-audit-svc/Dockerfile
+    environment:
+      DB_URL: jdbc:postgresql://postgres:5432/audit_db
+      KAFKA_BOOTSTRAP: kafka:9092
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://jaeger:4318
+      BAO_ADDR: http://openbao:8200
+      BAO_TOKEN: dev-root-token
+    depends_on:
+      postgres:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+      openbao:
+        condition: service_healthy
+    ports: ["8081:8081"]
+
+  iam-tenant-svc:
+    build:
+      context: ../workspace
+      dockerfile: iam-tenant-svc/Dockerfile
+    environment:
+      DB_URL: jdbc:postgresql://postgres:5432/tenant_db
+      KAFKA_BOOTSTRAP: kafka:9092
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://jaeger:4318
+      BAO_ADDR: http://openbao:8200
+      BAO_TOKEN: dev-root-token
+      # Service 14 (iam-admin-console) -- admin-gated endpoints only.
+      SESSION_SVC_URL: http://iam-session-svc:8080
+      IDENTITY_SVC_URL: http://iam-identity-svc:8080
+    depends_on:
+      postgres:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+      openbao:
+        condition: service_healthy
+    ports: ["8082:8080"]
+
+  iam-geo-svc:
+    build:
+      context: ../workspace
+      dockerfile: iam-geo-svc/Dockerfile
+    environment:
+      KAFKA_BOOTSTRAP: kafka:9092
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://jaeger:4318
+      BAO_ADDR: http://openbao:8200
+      BAO_TOKEN: dev-root-token
+    depends_on:
+      kafka:
+        condition: service_healthy
+      openbao:
+        condition: service_healthy
+    ports: ["8083:8080"]
+
+  iam-identity-svc:
+    build:
+      context: ../workspace
+      dockerfile: iam-identity-svc/Dockerfile
+    environment:
+      DB_URL: jdbc:postgresql://postgres:5432/identity_db
+      KAFKA_BOOTSTRAP: kafka:9092
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://jaeger:4318
+      BAO_ADDR: http://openbao:8200
+      BAO_TOKEN: dev-root-token
+      TENANT_SVC_URL: http://iam-tenant-svc:8080
+    depends_on:
+      postgres:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+      openbao:
+        condition: service_healthy
+    ports: ["8084:8080"]
+
+  iam-policy-svc:
+    build:
+      context: ../workspace
+      dockerfile: iam-policy-svc/Dockerfile
+    environment:
+      DB_URL: jdbc:postgresql://postgres:5432/policy_db
+      KAFKA_BOOTSTRAP: kafka:9092
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://jaeger:4318
+      BAO_ADDR: http://openbao:8200
+      BAO_TOKEN: dev-root-token
+      # Service 14 (iam-admin-console) -- admin-gated endpoints only.
+      SESSION_SVC_URL: http://iam-session-svc:8080
+      IDENTITY_SVC_URL: http://iam-identity-svc:8080
+    depends_on:
+      postgres:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+      openbao:
+        condition: service_healthy
+    ports: ["8085:8080"]
+
+  iam-session-svc:
+    build:
+      context: ../workspace
+      dockerfile: iam-session-svc/Dockerfile
+    environment:
+      REDIS_HOST: valkey
+      KAFKA_BOOTSTRAP: kafka:9092
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://jaeger:4318
+      BAO_ADDR: http://openbao:8200
+      BAO_TOKEN: dev-root-token
+    depends_on:
+      valkey:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+      openbao:
+        condition: service_healthy
+    ports: ["8086:8080"]
+
+  iam-device-svc:
+    build:
+      context: ../workspace
+      dockerfile: iam-device-svc/Dockerfile
+    environment:
+      DB_URL: jdbc:postgresql://postgres:5432/device_db
+      REDIS_HOST: valkey
+      KAFKA_BOOTSTRAP: kafka:9092
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://jaeger:4318
+      BAO_ADDR: http://openbao:8200
+      BAO_TOKEN: dev-root-token
+      IDENTITY_SVC_URL: http://iam-identity-svc:8080
+      FCM_PROJECT_ID: ${FCM_PROJECT_ID:-}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      valkey:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+      openbao:
+        condition: service_healthy
+    ports: ["8088:8080"]
+
+  iam-auth-svc:
+    build:
+      context: ../workspace
+      dockerfile: iam-auth-svc/Dockerfile
+    environment:
+      KAFKA_BOOTSTRAP: kafka:9092
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://jaeger:4318
+      BAO_ADDR: http://openbao:8200
+      BAO_TOKEN: dev-root-token
+      DEVICE_SVC_URL: http://iam-device-svc:8080
+    depends_on:
+      kafka:
+        condition: service_healthy
+      openbao:
+        condition: service_healthy
+    ports: ["8087:8080"]
+
+  iam-enforcement-svc:
+    build:
+      context: ../workspace
+      dockerfile: iam-enforcement-svc/Dockerfile
+    environment:
+      REDIS_HOST: valkey
+      KAFKA_BOOTSTRAP: kafka:9092
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://jaeger:4318
+      BAO_ADDR: http://openbao:8200
+      BAO_TOKEN: dev-root-token
+      SESSION_SVC_URL: http://iam-session-svc:8080
+      GEO_SVC_URL: http://iam-geo-svc:8080
+      POLICY_SVC_URL: http://iam-policy-svc:8080
+    depends_on:
+      valkey:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+      openbao:
+        condition: service_healthy
+    ports: ["8089:8080"]
+
+  iam-oidcprovider-svc:
+    build:
+      context: ../workspace
+      dockerfile: iam-oidcprovider-svc/Dockerfile
+    environment:
+      REDIS_HOST: valkey
+      KAFKA_BOOTSTRAP: kafka:9092
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://jaeger:4318
+      BAO_ADDR: http://openbao:8200
+      BAO_TOKEN: dev-root-token
+      TENANT_SVC_URL: http://iam-tenant-svc:8080
+      SESSION_SVC_URL: http://iam-session-svc:8080
+      # Service 13: auth-svc is no longer called directly by this service --
+      # iam-login-portal calls it instead. identity-svc replaces it as a
+      # dependency (resolves the email for a validated session's userId).
+      IDENTITY_SVC_URL: http://iam-identity-svc:8080
+      OIDC_ISSUER: http://localhost:8090
+      # Must be reachable from the browser, not the internal Docker service
+      # name -- same reasoning as OIDC_ISSUER above. No "{subdomain}" token
+      # in this local-dev value, so GET /authorize appends "?tenant=..."
+      # itself rather than constructing an unresolvable subdomain host.
+      # Host port 3001, not 3000 -- see iam-login-portal's own port mapping.
+      LOGIN_PORTAL_BASE_URL: http://localhost:3001
+    depends_on:
+      valkey:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+      openbao:
+        condition: service_healthy
+    ports: ["8090:8080"]
+
+  iam-login-portal:
+    build:
+      context: ../workspace
+      dockerfile: iam-login-portal/Dockerfile
+    environment:
+      AUTH_SVC_URL: http://iam-auth-svc:8080
+      TENANT_SVC_URL: http://iam-tenant-svc:8080
+      OIDCPROVIDER_SVC_URL: http://iam-oidcprovider-svc:8080
+      # No wildcard DNS in local Docker Compose -- see
+      # docs/specs/iam-login-portal-SPEC.md Section 3. This value never
+      # matches a real local Host header, so tenant resolution always falls
+      # back to the "?tenant=" override iam-oidcprovider-svc appends.
+      LOGIN_PORTAL_ROOT_DOMAIN: platform.example.com
+    # Host port 3001, not 3000 -- 3000 was already bound by an unrelated
+    # local process on the dev machine this was verified on.
+    ports: ["3001:3000"]
+
+  iam-admin-console:
+    build:
+      context: ../workspace
+      dockerfile: iam-admin-console/Dockerfile
+    # Pure static SPA (nginx) -- VITE_*_SVC_URL defaults in config.ts
+    # already point at these same host-mapped ports, so no build args
+    # needed for local dev.
+    ports: ["5173:80"]
+
+volumes:
+  pgdata:

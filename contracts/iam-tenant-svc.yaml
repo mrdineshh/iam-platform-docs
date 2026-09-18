@@ -1,0 +1,372 @@
+openapi: 3.0.3
+info:
+  title: iam-tenant-svc
+  description: >
+    Owns tenant records for the multi-tenant SaaS platform (BUILD_PLAN.md
+    Service 2). Publishes tenant.created to the audit-events Kafka topic on
+    creation. No outbound calls to any other service. Also owns OIDC client
+    registration (added 2026-09-17 for Service 11, iam-oidcprovider-svc) --
+    see docs/DECISIONS.md, Service 11 entry.
+  version: "1.0"
+
+servers:
+  - url: http://iam-tenant-svc:8080
+
+paths:
+  /api/v1/tenants:
+    post:
+      operationId: createTenant
+      summary: Create a tenant
+      parameters:
+        - name: X-Correlation-Id
+          in: header
+          required: false
+          schema:
+            type: string
+          description: Propagated if present; generated if absent.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateTenantRequest'
+      responses:
+        '201':
+          description: Tenant created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Tenant'
+        '409':
+          description: Subdomain already in use
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '400':
+          description: Validation error (missing/invalid name or subdomain)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/v1/tenants/{id}:
+    get:
+      operationId: getTenant
+      summary: Fetch a tenant by ID
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: X-Correlation-Id
+          in: header
+          required: false
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Tenant found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Tenant'
+        '404':
+          description: No tenant with this ID
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/v1/tenants/by-subdomain/{subdomain}:
+    get:
+      operationId: getTenantBySubdomain
+      summary: >
+        Resolve a tenant by its subdomain (added for Service 13,
+        iam-login-portal -- FR-6.2 subdomain-only tenant resolution. See
+        docs/DECISIONS.md, Service 13 pre-implementation entry).
+      parameters:
+        - name: subdomain
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: X-Correlation-Id
+          in: header
+          required: false
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Tenant found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Tenant'
+        '404':
+          description: No tenant with this subdomain
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/v1/oidc-clients:
+    post:
+      operationId: createOidcClient
+      summary: Register an OIDC client for a tenant (e.g. Grafana)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateOidcClientRequest'
+      responses:
+        '201':
+          description: >
+            Client registered. clientSecret is returned in plaintext here
+            only -- never again, and never retrievable afterward.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CreatedOidcClient'
+        '404':
+          description: The referenced tenant does not exist
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '400':
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/v1/oidc-clients:
+    get:
+      operationId: listOidcClients
+      summary: >
+        List OIDC clients for a tenant (added for Service 14,
+        iam-admin-console). Admin-gated -- see docs/DECISIONS.md and
+        docs/specs/iam-admin-console-SPEC.md Section 1.3.
+      parameters:
+        - name: tenantId
+          in: query
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: X-Session-Token
+          in: header
+          required: true
+          schema:
+            type: string
+        - name: X-Correlation-Id
+          in: header
+          required: false
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Clients for this tenant (never includes secrets)
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/OidcClient'
+        '400':
+          description: Missing tenantId or X-Session-Token
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: X-Session-Token unknown or expired
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Session does not belong to this tenant, or user is not role=ADMIN
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: iam-session-svc or iam-identity-svc unavailable
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/v1/oidc-clients/{id}:
+    get:
+      operationId: getOidcClient
+      summary: Fetch an OIDC client's public info (never the secret)
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Client found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OidcClient'
+        '404':
+          description: No client with this ID
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/v1/oidc-clients/{id}/verify-secret:
+    post:
+      operationId: verifyOidcClientSecret
+      summary: >
+        Check a client_secret against a registered client. Never returns a
+        distinguishable response for "no such client" vs "wrong secret"
+        (client enumeration). Called only by iam-oidcprovider-svc.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/VerifyClientSecretRequest'
+      responses:
+        '200':
+          description: Always 200 -- see summary.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/VerifyClientSecretResponse'
+
+components:
+  schemas:
+    CreateOidcClientRequest:
+      type: object
+      required: [tenantId, name, redirectUris]
+      properties:
+        tenantId:
+          type: string
+          format: uuid
+        name:
+          type: string
+        redirectUris:
+          type: array
+          items:
+            type: string
+          minItems: 1
+
+    OidcClient:
+      type: object
+      required: [clientId, tenantId, name, redirectUris, createdAt]
+      properties:
+        clientId:
+          type: string
+          format: uuid
+        tenantId:
+          type: string
+          format: uuid
+        name:
+          type: string
+        redirectUris:
+          type: array
+          items:
+            type: string
+        createdAt:
+          type: string
+          format: date-time
+
+    CreatedOidcClient:
+      allOf:
+        - $ref: '#/components/schemas/OidcClient'
+        - type: object
+          required: [clientSecret]
+          properties:
+            clientSecret:
+              type: string
+
+    VerifyClientSecretRequest:
+      type: object
+      required: [clientSecret]
+      properties:
+        clientSecret:
+          type: string
+
+    VerifyClientSecretResponse:
+      type: object
+      required: [valid]
+      properties:
+        valid:
+          type: boolean
+        tenantId:
+          type: string
+          format: uuid
+          nullable: true
+
+    CreateTenantRequest:
+      type: object
+      required: [name, subdomain]
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 255
+        subdomain:
+          type: string
+          description: >
+            Lowercase, alphanumeric + hyphen only. Used as
+            `<subdomain>.platform.com` per BRD FR-6.2 (subdomain-only,
+            no custom customer domains in v1).
+          pattern: '^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$'
+
+    Tenant:
+      type: object
+      required: [id, name, subdomain, status, createdAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        subdomain:
+          type: string
+        status:
+          type: string
+          enum: [ACTIVE, SUSPENDED]
+        createdAt:
+          type: string
+          format: date-time
+
+    ErrorResponse:
+      type: object
+      required: [timestamp, status, error, message, path, correlationId]
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+        status:
+          type: integer
+        error:
+          type: string
+        message:
+          type: string
+        path:
+          type: string
+        correlationId:
+          type: string

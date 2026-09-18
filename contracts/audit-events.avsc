@@ -1,0 +1,27 @@
+{
+  "type": "record",
+  "name": "AuditEvent",
+  "namespace": "com.iamplatform.servicekit.audit",
+  "doc": "Published by every service to the audit-events Kafka topic per BUILD_PLAN.md Section 5. Consumed by iam-audit-svc.",
+  "fields": [
+    { "name": "eventId", "type": "string", "doc": "UUID" },
+    { "name": "correlationId", "type": "string", "doc": "Ties this event to the originating request across all services; propagated via the X-Correlation-Id header." },
+    { "name": "timestamp", "type": { "type": "long", "logicalType": "timestamp-millis" }, "doc": "UTC, millisecond precision" },
+    { "name": "tenantId", "type": "string", "doc": "UUID" },
+    {
+      "name": "actorType",
+      "type": { "type": "enum", "name": "ActorType", "symbols": ["USER", "ADMIN", "SYSTEM", "AGENT"] }
+    },
+    { "name": "actorId", "type": "string" },
+    { "name": "action", "type": "string", "doc": "Machine-readable action name, e.g. auth.login_success, session.terminated" },
+    {
+      "name": "result",
+      "type": { "type": "enum", "name": "AuditResult", "symbols": ["SUCCESS", "FAILURE", "DENIED"] }
+    },
+    { "name": "reason", "type": ["null", "string"], "default": null, "doc": "Especially for failure/denied" },
+    { "name": "sourceIp", "type": ["null", "string"], "default": null },
+    { "name": "geo", "type": ["null", "string"], "default": null },
+    { "name": "deviceId", "type": ["null", "string"], "default": null },
+    { "name": "policyScopeApplied", "type": ["null", "string"], "default": null, "doc": "TENANT / OU / USER, for anything policy-evaluation-related" }
+  ]
+}

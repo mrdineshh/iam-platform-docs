@@ -1,0 +1,118 @@
+openapi: 3.0.3
+info:
+  title: iam-enforcement-svc
+  description: >
+    The Policy Enforcement Point (BUILD_PLAN.md Service 10, AP-2). On every
+    protected request, re-validates the session, current location, and
+    policy fresh -- independent of iam-auth-svc, which only runs at login.
+    Stateless except for a short-lived Valkey cache of policy decisions
+    (bounds per-request overhead, does not weaken enforcement -- session
+    validity itself is never cached). On a confirmed policy violation,
+    terminates the session via iam-session-svc before responding, so the
+    kill is immediate and mid-flight (AP-2), not eventual.
+  version: "1.0"
+
+servers:
+  - url: http://iam-enforcement-svc:8080
+
+paths:
+  /api/v1/enforce:
+    post:
+      operationId: enforce
+      summary: Check whether an active session is still allowed to proceed
+      description: >
+        MVP-TEMPORARY: sourceIp is client-supplied rather than derived
+        server-side from a trusted proxy header -- same gap as
+        iam-auth-svc's LoginRequest.sourceIp (docs/DECISIONS.md, Service 7
+        entry), duplicated here because there is still no gateway/front-door
+        service to extract a real client IP. Must move to a server-derived
+        value in both places when that gateway is built.
+      parameters:
+        - name: X-Session-Token
+          in: header
+          required: true
+          schema:
+            type: string
+        - name: X-Correlation-Id
+          in: header
+          required: false
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/EnforceRequest'
+      responses:
+        '200':
+          description: Allowed. The request may proceed.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EnforceResponse'
+        '400':
+          description: X-Session-Token header missing, or sourceIp missing/malformed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: >
+            Denied. Covers three distinct cases, all "never fail open"
+            (BUILD_PLAN.md Section 4.6): the session is unknown/expired/
+            already terminated; the location could not be resolved/policy
+            could not be evaluated (treated as high-risk, not a free pass);
+            or a confirmed policy violation -- in this last case only, the
+            session is terminated as part of handling this request, before
+            the response is returned.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+components:
+  schemas:
+    EnforceRequest:
+      type: object
+      required: [sourceIp]
+      properties:
+        sourceIp:
+          type: string
+
+    EnforceResponse:
+      type: object
+      required: [allowed, sessionId, tenantId, userId, country]
+      properties:
+        allowed:
+          type: boolean
+          enum: [true]
+        sessionId:
+          type: string
+          format: uuid
+        tenantId:
+          type: string
+          format: uuid
+        userId:
+          type: string
+          format: uuid
+        country:
+          type: string
+
+    ErrorResponse:
+      type: object
+      required: [timestamp, status, error, message, path, correlationId]
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+        status:
+          type: integer
+        error:
+          type: string
+        message:
+          type: string
+        path:
+          type: string
+        correlationId:
+          type: string

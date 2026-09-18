@@ -1,0 +1,283 @@
+openapi: 3.0.3
+info:
+  title: iam-policy-svc
+  description: >
+    Owns the policy model and the merge-with-hard-cap resolver (BUILD_PLAN.md
+    Service 5, AP-4). Pure logic + storage for POST /evaluate (no outbound
+    calls on that hot path). GET/PUT /policies (the admin-facing read/write
+    endpoints) call iam-session-svc + iam-identity-svc to enforce an
+    admin-only check, added for Service 14 (iam-admin-console) -- see
+    docs/DECISIONS.md.
+    MVP-TEMPORARY scope note: only the country allow/block-list attribute is
+    implemented (the one policy dimension the MVP demo flow in BUILD_PLAN.md
+    Section 2 actually exercises via iam-geo-svc). IP-range and device-trust
+    policy attributes (BRD FR-4.1) are deferred -- see docs/DECISIONS.md,
+    Service 5 entry. The merge/hard-cap engine itself is attribute-generic
+    and does not need to change when more attributes are added later.
+  version: "1.0"
+
+servers:
+  - url: http://iam-policy-svc:8080
+
+paths:
+  /api/v1/policies:
+    put:
+      operationId: putPolicy
+      summary: Create or replace the policy at a given scope
+      description: >
+        Retrofitted for Service 14 (iam-admin-console) to require
+        X-Session-Token -- previously unauthenticated. Confirmed with
+        product owner before changing (see docs/DECISIONS.md and
+        docs/specs/iam-admin-console-SPEC.md Section 1.4).
+      parameters:
+        - name: X-Session-Token
+          in: header
+          required: true
+          schema:
+            type: string
+        - name: X-Correlation-Id
+          in: header
+          required: false
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PutPolicyRequest'
+      responses:
+        '200':
+          description: Policy stored
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Policy'
+        '400':
+          description: >
+            Validation error -- e.g. scopeId missing for OU/USER scope, or a
+            hard-cap flag set on a non-TENANT scope (only tenant admins may
+            set hard-caps, so only the TENANT-scope record may carry them).
+            Also covers a missing X-Session-Token header.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: X-Session-Token unknown or expired
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Session does not belong to request.tenantId, or user is not role=ADMIN
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: iam-session-svc or iam-identity-svc unavailable
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+    get:
+      operationId: getPolicy
+      summary: >
+        Fetch the raw stored policy at an exact scope (added for Service 14,
+        iam-admin-console -- not the merged/evaluated result, see
+        POST /evaluate for that). Admin-gated, same rule as PUT.
+      parameters:
+        - name: tenantId
+          in: query
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: scope
+          in: query
+          required: true
+          schema:
+            $ref: '#/components/schemas/PolicyScope'
+        - name: scopeId
+          in: query
+          required: false
+          schema:
+            type: string
+            format: uuid
+          description: Required for OU/USER scope.
+        - name: X-Session-Token
+          in: header
+          required: true
+          schema:
+            type: string
+        - name: X-Correlation-Id
+          in: header
+          required: false
+          schema:
+            type: string
+      responses:
+        '200':
+          description: The stored policy at this exact scope
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Policy'
+        '400':
+          description: scopeId missing for OU/USER scope, or X-Session-Token missing
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: X-Session-Token unknown or expired
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Session does not belong to this tenant, or user is not role=ADMIN
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Nothing stored yet at this exact scope
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: iam-session-svc or iam-identity-svc unavailable
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/v1/evaluate:
+    post:
+      operationId: evaluate
+      summary: >
+        Resolve the effective policy for a tenant/OU/user combination and
+        decide whether a given country is allowed.
+      parameters:
+        - name: X-Correlation-Id
+          in: header
+          required: false
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/EvaluateRequest'
+      responses:
+        '200':
+          description: Evaluation result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EvaluateResponse'
+
+components:
+  schemas:
+    PolicyScope:
+      type: string
+      enum: [TENANT, OU, USER]
+
+    PutPolicyRequest:
+      type: object
+      required: [tenantId, scope]
+      properties:
+        tenantId:
+          type: string
+          format: uuid
+        scope:
+          $ref: '#/components/schemas/PolicyScope'
+        scopeId:
+          type: string
+          format: uuid
+          description: Required for OU/USER scope. Ignored for TENANT scope (tenantId is used).
+        allowedCountries:
+          type: array
+          items:
+            type: string
+          nullable: true
+          description: ISO 3166-1 alpha-2 codes. If set, only listed countries pass.
+        allowedCountriesHardCap:
+          type: boolean
+          default: false
+          description: Only settable when scope=TENANT.
+        blockedCountries:
+          type: array
+          items:
+            type: string
+          nullable: true
+        blockedCountriesHardCap:
+          type: boolean
+          default: false
+
+    Policy:
+      allOf:
+        - $ref: '#/components/schemas/PutPolicyRequest'
+        - type: object
+          required: [id, updatedAt]
+          properties:
+            id:
+              type: string
+              format: uuid
+            updatedAt:
+              type: string
+              format: date-time
+
+    EvaluateRequest:
+      type: object
+      required: [tenantId, country]
+      properties:
+        tenantId:
+          type: string
+          format: uuid
+        ouId:
+          type: string
+          format: uuid
+          nullable: true
+        userId:
+          type: string
+          format: uuid
+          nullable: true
+        country:
+          type: string
+          description: ISO 3166-1 alpha-2 code, typically from iam-geo-svc.
+
+    EvaluateResponse:
+      type: object
+      required: [allowed]
+      properties:
+        allowed:
+          type: boolean
+        reason:
+          type: string
+          nullable: true
+        policyScopeApplied:
+          $ref: '#/components/schemas/PolicyScope'
+          nullable: true
+
+    ErrorResponse:
+      type: object
+      required: [timestamp, status, error, message, path, correlationId]
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+        status:
+          type: integer
+        error:
+          type: string
+        message:
+          type: string
+        path:
+          type: string
+        correlationId:
+          type: string

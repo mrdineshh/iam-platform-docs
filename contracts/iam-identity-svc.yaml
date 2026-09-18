@@ -1,0 +1,366 @@
+openapi: 3.0.3
+info:
+  title: iam-identity-svc
+  description: >
+    Owns user records and JIT provisioning (BUILD_PLAN.md Service 4).
+    Validates tenant existence against iam-tenant-svc (Resilience4j-wrapped)
+    before creating a user. Publishes identity.created,
+    identity.status_changed, and identity.password_set to the audit-events
+    Kafka topic. Also owns password storage/verification (Argon2id + a
+    platform-wide pepper from OpenBao) added 2026-09-13 for Service 7
+    (iam-auth-svc) -- see docs/DECISIONS.md, Service 7 entry, for why this
+    lives here rather than in iam-auth-svc.
+  version: "1.0"
+
+servers:
+  - url: http://iam-identity-svc:8080
+
+paths:
+  /api/v1/users:
+    post:
+      operationId: createUser
+      summary: Create a user under a tenant
+      parameters:
+        - name: X-Correlation-Id
+          in: header
+          required: false
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateUserRequest'
+      responses:
+        '201':
+          description: User created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/User'
+        '404':
+          description: The referenced tenant does not exist
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: Email already in use within this tenant
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '400':
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: iam-tenant-svc unavailable (circuit open or downstream failure)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/v1/users/{id}:
+    get:
+      operationId: getUser
+      summary: Fetch a user by ID
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: X-Correlation-Id
+          in: header
+          required: false
+          schema:
+            type: string
+      responses:
+        '200':
+          description: User found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/User'
+        '404':
+          description: No user with this ID
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/v1/users/{id}/role:
+    patch:
+      operationId: updateUserRole
+      summary: >
+        Promote/demote a user's role (added for Service 14,
+        iam-admin-console -- see docs/DECISIONS.md). Deliberately
+        unauthenticated in this pass -- bootstraps the first ADMIN before
+        any admin session can exist to protect it with; see
+        docs/specs/iam-admin-console-SPEC.md Section 6.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: X-Correlation-Id
+          in: header
+          required: false
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateRoleRequest'
+      responses:
+        '200':
+          description: Role updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/User'
+        '404':
+          description: No user with this ID
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/v1/users/{id}/status:
+    patch:
+      operationId: updateUserStatus
+      summary: Change a user's status (e.g. SCIM suspend/reactivate)
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: X-Correlation-Id
+          in: header
+          required: false
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateStatusRequest'
+      responses:
+        '200':
+          description: Status updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/User'
+        '404':
+          description: No user with this ID
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/v1/users/{id}/password:
+    patch:
+      operationId: setUserPassword
+      summary: Set or change a user's local password
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: X-Correlation-Id
+          in: header
+          required: false
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SetPasswordRequest'
+      responses:
+        '204':
+          description: Password set
+        '400':
+          description: Validation error (e.g. password too short)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: No user with this ID
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/v1/users/verify-password:
+    post:
+      operationId: verifyPassword
+      summary: >
+        Check an email/password pair against a tenant's users. Never returns
+        a distinguishable response for "no such user" vs "wrong password"
+        (user enumeration). Called only by iam-auth-svc (Service 7); never
+        returns the password hash itself.
+      parameters:
+        - name: X-Correlation-Id
+          in: header
+          required: false
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/VerifyPasswordRequest'
+      responses:
+        '200':
+          description: >
+            Always 200. `valid: false` with no `userId`/`status` covers both
+            "no such user" and "wrong password" identically.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/VerifyPasswordResponse'
+
+components:
+  schemas:
+    CreateUserRequest:
+      type: object
+      required: [tenantId, email, displayName]
+      properties:
+        tenantId:
+          type: string
+          format: uuid
+        email:
+          type: string
+          format: email
+        displayName:
+          type: string
+          minLength: 1
+          maxLength: 255
+        password:
+          type: string
+          minLength: 8
+          nullable: true
+          description: >
+            Optional. Omitted for JIT-provisioned users (Service 8), which
+            have no local password at all.
+        role:
+          $ref: '#/components/schemas/UserRole'
+          nullable: true
+          description: Added for Service 14. Defaults to USER if omitted.
+
+    UserRole:
+      type: string
+      enum: [ADMIN, USER]
+
+    UpdateRoleRequest:
+      type: object
+      required: [role]
+      properties:
+        role:
+          $ref: '#/components/schemas/UserRole'
+
+    UpdateStatusRequest:
+      type: object
+      required: [status]
+      properties:
+        status:
+          type: string
+          enum: [ACTIVE, SUSPENDED]
+
+    SetPasswordRequest:
+      type: object
+      required: [password]
+      properties:
+        password:
+          type: string
+          minLength: 8
+
+    VerifyPasswordRequest:
+      type: object
+      required: [tenantId, email, password]
+      properties:
+        tenantId:
+          type: string
+          format: uuid
+        email:
+          type: string
+        password:
+          type: string
+
+    VerifyPasswordResponse:
+      type: object
+      required: [valid]
+      properties:
+        valid:
+          type: boolean
+        userId:
+          type: string
+          format: uuid
+          nullable: true
+        status:
+          type: string
+          enum: [ACTIVE, SUSPENDED]
+          nullable: true
+        role:
+          $ref: '#/components/schemas/UserRole'
+          nullable: true
+
+    User:
+      type: object
+      required: [id, tenantId, email, displayName, status, role, createdAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        tenantId:
+          type: string
+          format: uuid
+        email:
+          type: string
+        displayName:
+          type: string
+        status:
+          type: string
+          enum: [ACTIVE, SUSPENDED]
+        role:
+          $ref: '#/components/schemas/UserRole'
+        createdAt:
+          type: string
+          format: date-time
+
+    ErrorResponse:
+      type: object
+      required: [timestamp, status, error, message, path, correlationId]
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+        status:
+          type: integer
+        error:
+          type: string
+        message:
+          type: string
+        path:
+          type: string
+        correlationId:
+          type: string

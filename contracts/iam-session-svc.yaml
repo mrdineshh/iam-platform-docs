@@ -1,0 +1,234 @@
+openapi: 3.0.3
+info:
+  title: iam-session-svc
+  description: >
+    Owns session lifecycle (BUILD_PLAN.md Service 6). Valkey-backed, opaque
+    tokens -- never JWTs -- so terminating a session mid-flight (AP-2) is a
+    direct delete, not a revocation workaround. No outbound calls to other
+    services. Publishes session.issued and session.terminated to the
+    audit-events Kafka topic. Per AP-1, iam-auth-svc is the only intended
+    caller of POST /api/v1/sessions.
+  version: "1.0"
+
+servers:
+  - url: http://iam-session-svc:8080
+
+paths:
+  /api/v1/sessions:
+    post:
+      operationId: issueSession
+      summary: Issue a new opaque session token
+      parameters:
+        - name: X-Correlation-Id
+          in: header
+          required: false
+          schema:
+            type: string
+        - name: Idempotency-Key
+          in: header
+          required: false
+          schema:
+            type: string
+          description: >
+            BUILD_PLAN.md Section 1. A retried request with the same key (per
+            tenant, within the idempotency window) returns the originally
+            issued session instead of issuing a second one.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/IssueSessionRequest'
+      responses:
+        '201':
+          description: >
+            Session issued. On an idempotent replay, the original session is
+            returned with the same status and an `Idempotent-Replayed: true`
+            response header.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IssuedSession'
+        '400':
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: >
+            Idempotency-Key reused with a different request, or the session
+            it originally issued has since been terminated.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: Session store (Valkey) unavailable
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/v1/sessions:
+    get:
+      operationId: validateSession
+      summary: Validate a session token
+      description: >
+        The token travels only in the X-Session-Token header, never in the
+        URL -- see docs/DECISIONS.md, Service 6 entry (OQ-2): a path
+        parameter risks the raw token being recorded as a trace span
+        attribute by HTTP server instrumentation.
+      parameters:
+        - name: X-Session-Token
+          in: header
+          required: true
+          schema:
+            type: string
+        - name: X-Correlation-Id
+          in: header
+          required: false
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Session is valid
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Session'
+        '400':
+          description: X-Session-Token header missing
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Unknown, expired, or terminated session
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: Session store (Valkey) unavailable
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+    delete:
+      operationId: terminateSession
+      summary: Terminate a session immediately
+      parameters:
+        - name: X-Session-Token
+          in: header
+          required: true
+          schema:
+            type: string
+        - name: reason
+          in: query
+          required: false
+          schema:
+            type: string
+          description: >
+            Why the session is being terminated (e.g. "logout", or a policy
+            violation from iam-enforcement-svc). Recorded on the
+            session.terminated audit event.
+        - name: X-Correlation-Id
+          in: header
+          required: false
+          schema:
+            type: string
+      responses:
+        '204':
+          description: Session terminated
+        '400':
+          description: X-Session-Token header missing
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Unknown, expired, or already-terminated session
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: Session store (Valkey) unavailable
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+components:
+  schemas:
+    IssueSessionRequest:
+      type: object
+      required: [tenantId, userId]
+      properties:
+        tenantId:
+          type: string
+          format: uuid
+        userId:
+          type: string
+          format: uuid
+        sourceIp:
+          type: string
+          nullable: true
+        deviceId:
+          type: string
+          nullable: true
+
+    Session:
+      type: object
+      required: [sessionId, tenantId, userId, issuedAt, expiresAt]
+      properties:
+        sessionId:
+          type: string
+          format: uuid
+        tenantId:
+          type: string
+          format: uuid
+        userId:
+          type: string
+          format: uuid
+        sourceIp:
+          type: string
+          nullable: true
+        deviceId:
+          type: string
+          nullable: true
+        issuedAt:
+          type: string
+          format: date-time
+        expiresAt:
+          type: string
+          format: date-time
+
+    IssuedSession:
+      allOf:
+        - $ref: '#/components/schemas/Session'
+        - type: object
+          required: [token]
+          properties:
+            token:
+              type: string
+              description: Opaque bearer token. Returned only at issuance.
+
+    ErrorResponse:
+      type: object
+      required: [timestamp, status, error, message, path, correlationId]
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+        status:
+          type: integer
+        error:
+          type: string
+        message:
+          type: string
+        path:
+          type: string
+        correlationId:
+          type: string

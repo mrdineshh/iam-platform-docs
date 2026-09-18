@@ -1,0 +1,87 @@
+openapi: 3.0.3
+info:
+  title: iam-geo-svc
+  description: >
+    Stateless IP -> country/region/city resolver (BUILD_PLAN.md Service 3).
+    No database, no outbound calls, no Kafka publishing (see Section 4.1's
+    Kafka role: none). Backed by DB-IP Lite (Country edition), a free
+    MaxMind-DB-format dataset — not MaxMind GeoLite2, see docs/DECISIONS.md,
+    Service 3 entry. Country-only: region/city are always null.
+  version: "1.0"
+
+servers:
+  - url: http://iam-geo-svc:8080
+
+paths:
+  /api/v1/resolve:
+    get:
+      operationId: resolve
+      summary: Resolve an IP address to a country/region/city
+      parameters:
+        - name: ip
+          in: query
+          required: true
+          schema:
+            type: string
+          description: IPv4 dotted-quad address.
+        - name: X-Correlation-Id
+          in: header
+          required: false
+          schema:
+            type: string
+      responses:
+        '200':
+          description: >
+            Lookup performed. `resolved: false` with null fields is a normal,
+            non-error outcome for an IP not covered by the dataset — callers
+            must treat this as unresolved/high-risk (BUILD_PLAN.md Section
+            4.6), never as an automatic pass.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GeoResolution'
+        '400':
+          description: ip parameter missing or not a valid IPv4 address
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+components:
+  schemas:
+    GeoResolution:
+      type: object
+      required: [ip, resolved]
+      properties:
+        ip:
+          type: string
+        resolved:
+          type: boolean
+        country:
+          type: string
+          nullable: true
+          description: ISO 3166-1 alpha-2 country code
+        region:
+          type: string
+          nullable: true
+        city:
+          type: string
+          nullable: true
+
+    ErrorResponse:
+      type: object
+      required: [timestamp, status, error, message, path, correlationId]
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+        status:
+          type: integer
+        error:
+          type: string
+        message:
+          type: string
+        path:
+          type: string
+        correlationId:
+          type: string

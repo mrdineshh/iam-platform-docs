@@ -1,0 +1,287 @@
+openapi: 3.0.3
+info:
+  title: iam-oidcprovider-svc
+  description: >
+    Downstream OIDC provider (BUILD_PLAN.md Service 11) -- lets a third-party
+    app (e.g. Grafana) use this platform as its login. Confirms session
+    validity through iam-session-svc before answering /userinfo (so a
+    session killed by iam-enforcement-svc, AP-2, correctly invalidates the
+    OIDC access token too), and resolves/validates clients through
+    iam-tenant-svc's OIDC client registration (added alongside this
+    service).
+
+    As of Service 13 (iam-login-portal), this service no longer drives the
+    login itself: GET /authorize redirects to iam-login-portal, which
+    authenticates directly against iam-auth-svc (reusing everything built in
+    Service 7, AP-1) and hands back a validated session token to
+    POST /authorize/complete. See docs/specs/iam-login-portal-SPEC.md
+    Section 0 and docs/DECISIONS.md's Service 13 pre-implementation entry.
+    The removed POST /authorize/login (a placeholder inline HTML form,
+    documented as a stand-in when it was built) is gone -- nothing external
+    ever called it.
+
+    /authorize, /token, /userinfo, /.well-known/openid-configuration, and
+    /jwks.json are standardized OIDC/OAuth2 paths (RFC 8414 / OIDC
+    Discovery) and are intentionally NOT under /api/v1 -- generic OIDC
+    client libraries expect them at these exact, fixed locations. This is a
+    deliberate exception to BUILD_PLAN.md Section 4.2's versioning rule,
+    required by the OIDC spec itself. /authorize/complete is an exception to
+    that exception -- it's this platform's own internal handoff, not part of
+    the OIDC spec, but sits alongside /authorize for readability.
+  version: "1.0"
+
+servers:
+  - url: http://iam-oidcprovider-svc:8080
+
+paths:
+  /.well-known/openid-configuration:
+    get:
+      operationId: discovery
+      summary: OIDC discovery document
+      responses:
+        '200':
+          description: Discovery document
+          content:
+            application/json:
+              schema:
+                type: object
+
+  /jwks.json:
+    get:
+      operationId: jwks
+      summary: Public signing key set (RS256)
+      responses:
+        '200':
+          description: JWK Set
+          content:
+            application/json:
+              schema:
+                type: object
+
+  /authorize:
+    get:
+      operationId: authorize
+      summary: >
+        Start an Authorization Code flow. Redirects (302) to iam-login-portal
+        if client_id/redirect_uri/response_type are valid; otherwise a direct
+        HTML error page (never a redirect to an unregistered redirect_uri).
+      parameters:
+        - name: response_type
+          in: query
+          required: true
+          schema:
+            type: string
+            enum: [code]
+        - name: client_id
+          in: query
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: redirect_uri
+          in: query
+          required: true
+          schema:
+            type: string
+        - name: scope
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: state
+          in: query
+          required: false
+          schema:
+            type: string
+      responses:
+        '302':
+          description: >
+            Redirect to iam-login-portal, tenant-scoped (subdomain host in
+            production; a `?tenant=` query param in local dev with no
+            wildcard DNS -- see docs/specs/iam-login-portal-SPEC.md Section
+            3), carrying client_id/redirect_uri/scope/state through as query
+            params.
+        '400':
+          description: Invalid client_id, redirect_uri, or response_type (direct HTML error page)
+
+  /authorize/complete:
+    post:
+      operationId: completeAuthorize
+      summary: >
+        Called server-side by iam-login-portal after it has already
+        authenticated the user directly against iam-auth-svc. Re-validates
+        client_id/redirect_uri (defense in depth), confirms the session
+        token is live and belongs to this client's tenant, and mints a
+        single-use authorization code -- same mechanism/TTL as before, just
+        triggered by a validated session instead of a raw password form
+        post. JSON in, JSON out -- this is a service-to-service call, never
+        a browser request, and never renders HTML.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [sessionToken, clientId, redirectUri, scope, state]
+              properties:
+                sessionToken:
+                  type: string
+                clientId:
+                  type: string
+                  format: uuid
+                redirectUri:
+                  type: string
+                scope:
+                  type: string
+                state:
+                  type: string
+      responses:
+        '200':
+          description: >
+            The full URL (client's redirect_uri + `?code=...&state=...`) for
+            the caller to redirect the browser to.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [redirectUri]
+                properties:
+                  redirectUri:
+                    type: string
+        '400':
+          description: Invalid/unregistered client_id or redirect_uri
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: sessionToken unknown, expired, or not belonging to this client's tenant
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: iam-tenant-svc, iam-session-svc, or iam-identity-svc unavailable
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /token:
+    post:
+      operationId: token
+      summary: Exchange an authorization code for tokens
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              type: object
+              required: [grant_type, code, redirect_uri, client_id, client_secret]
+              properties:
+                grant_type:
+                  type: string
+                  enum: [authorization_code]
+                code:
+                  type: string
+                redirect_uri:
+                  type: string
+                client_id:
+                  type: string
+                client_secret:
+                  type: string
+      responses:
+        '200':
+          description: Tokens issued
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TokenResponse'
+        '400':
+          description: invalid_grant / invalid_client (OAuth2 error shape)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OAuthError'
+
+  /userinfo:
+    get:
+      operationId: userinfo
+      summary: >
+        Resolve the current user from an access token. Re-checks the
+        underlying session with iam-session-svc on every call -- a session
+        terminated by iam-enforcement-svc mid-flight invalidates this
+        immediately, not just at the access token's own expiry.
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: User claims
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserInfo'
+        '401':
+          description: Invalid, expired, or session-terminated access token
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  schemas:
+    TokenResponse:
+      type: object
+      required: [access_token, id_token, token_type, expires_in]
+      properties:
+        access_token:
+          type: string
+        id_token:
+          type: string
+        token_type:
+          type: string
+          enum: [Bearer]
+        expires_in:
+          type: integer
+
+    OAuthError:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: string
+
+    ErrorResponse:
+      type: object
+      required: [timestamp, status, error, message, path, correlationId]
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+        status:
+          type: integer
+        error:
+          type: string
+        message:
+          type: string
+        path:
+          type: string
+        correlationId:
+          type: string
+        error_description:
+          type: string
+
+    UserInfo:
+      type: object
+      required: [sub, tenant_id]
+      properties:
+        sub:
+          type: string
+          format: uuid
+        email:
+          type: string
+        tenant_id:
+          type: string
+          format: uuid
