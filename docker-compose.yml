@@ -370,6 +370,18 @@ services:
       # continuous enforcement against real forwarded traffic. Point
       # this at a real deployed app instead when there is one.
       PROXY_UPSTREAM_URL: http://whoami:80
+      # Gateway cookie-login (docs/DECISIONS.md, gateway cookie-login
+      # entry) -- lets a plain browser with no X-Session-Token go through
+      # the normal login flow instead. Client id/secret are blank until
+      # this gateway is registered as an OIDC client via iam-tenant-svc's
+      # oidc-clients endpoint, same as any real third-party app would be
+      # (see docs/DECISIONS.md for the exact registration call used to
+      # verify this).
+      GATEWAY_OIDC_CLIENT_ID: ${GATEWAY_OIDC_CLIENT_ID:-}
+      GATEWAY_OIDC_CLIENT_SECRET: ${GATEWAY_OIDC_CLIENT_SECRET:-}
+      OIDC_PROVIDER_URL: http://iam-oidcprovider-svc:8080
+      GATEWAY_BASE_URL: http://localhost:8089
+      GATEWAY_COOKIE_SECURE: "false"
     depends_on:
       valkey:
         condition: service_healthy

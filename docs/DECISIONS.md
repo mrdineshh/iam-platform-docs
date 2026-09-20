@@ -1672,11 +1672,101 @@ protected app" shape the architecture describes.
   also failed to compile -- it resolves to Java's two-argument
   `Map.forEach(BiConsumer)`, not Kotlin's single-destructured-param
   `Iterable<Map.Entry>.forEach` -- rewritten as a two-parameter lambda.
-- **Deliberately not built, flagged for real deployment:** session token
-  travels as `X-Session-Token`, matching this platform's convention
-  everywhere else -- not a cookie. A real deployment fronting a
+- **Deliberately not built, flagged for real deployment (at the time):**
+  session token travels as `X-Session-Token`, matching this platform's
+  convention everywhere else -- not a cookie. A real deployment fronting a
   cookie-session'd app (a deployed Pulse, for example) would need a
   translation step (issue/read a cookie, map it to a session token) that
   this MVP gateway does not build. Also not built: TLS termination in
   front of the gateway itself, and routing based on hostname/path to
-  more than one upstream (`upstream-url` is a single fixed target).
+  more than one upstream (`upstream-url` is a single fixed target). **The
+  cookie translation step was built next -- see the following entry.**
+
+### Gateway cookie-login — the gateway as its own OpenID Connect client (2026-09-20)
+
+Closes the cookie-translation gap flagged above. `iam-enforcement-svc`'s
+gateway can now authenticate a plain browser that holds neither an
+`X-Session-Token` header nor a cookie, by acting as its own OpenID Connect
+Relying Party -- the same role a real third-party app (Grafana, or a real
+deployed Pulse) plays today. This is the actual missing piece for putting a
+real cookie-based app behind this gateway.
+
+- **Flow:** an unauthenticated request to any `/proxy/**` path redirects
+  the browser to the OpenID Connect Provider Service's existing
+  `GET /authorize` (registered exactly like any other third-party client,
+  via `iam-tenant-svc`'s `POST /api/v1/oidc-clients` -- no new
+  registration mechanism). The existing, completely unmodified
+  Login Portal flow runs (password + second factor). On success, the
+  browser lands on a new `GET /oauth2/callback` on the gateway itself,
+  which exchanges the authorization code via the OIDC Provider Service's
+  existing `POST /token` (also unmodified), then sets an `HttpOnly`,
+  `SameSite=Lax` cookie containing the OpenID Connect access token, and
+  redirects to the originally requested `/proxy/...` path (round-tripped
+  through the `state` parameter, base64-encoded, restricted on the way
+  back to paths starting with `/proxy` -- an open-redirect guard, since
+  `state` is browser-controlled). Every subsequent request presents that
+  cookie; the gateway calls the existing `GET /userinfo` to confirm
+  liveness and identity, then runs the same geo/policy re-check
+  `EnforcementService.enforce` already does (new method
+  `checkLocationAndPolicy`, added alongside the original, unmodified
+  `enforce` -- same 30s policy cache, same never-fail-open behavior, same
+  terminate-vs-just-deny distinction).
+- **The raw platform session token is still never handed to the gateway**,
+  preserving `AccessTokenLinkStore`'s existing third-party protection
+  (documented at Service 11) -- confirmed as the right call rather than
+  weakening that boundary for convenience. Instead, one small, genuinely
+  internal-only addition to `iam-oidcprovider-svc`:
+  `POST /internal/access-tokens/terminate`, which resolves an access token
+  to its underlying session token server-side (via the existing
+  `AccessTokenLinkStore`) and terminates it, without ever returning the
+  raw token to the caller. Only the gateway calls this, only on an actual
+  policy violation (`GatewayCheckResult.shouldTerminate`) -- an unresolved
+  location or an unreachable policy service still denies the one request
+  without touching the underlying session, same precedent as the original
+  `enforce`.
+- **Cookie built by hand (`Set-Cookie` header string), not
+  `jakarta.servlet.http.Cookie`** -- the Servlet API's `Cookie` class has
+  no `SameSite` attribute, and `SameSite=Lax` matters here (the browser
+  needs to actually send the cookie back after the top-level-navigation
+  redirect chain from the OIDC Provider Service).
+- **Real bug found during verification, not just during writing:** the
+  new `oidc-provider` Resilience4j instance's circuit-breaker/retry config
+  didn't exclude a `401` from `GET /userinfo` (an expired/already-
+  terminated access token -- a legitimate, expected business outcome, not
+  a failure) from being retried and counted as a circuit-breaker failure,
+  unlike every other client's config, which explicitly excludes its own
+  expected 4xx (e.g. `session-svc`'s retry/circuit-breaker excluding
+  `HttpClientErrorException$NotFound`). Five rapid retries against a
+  legitimate 401 tripped the circuit breaker mid-request, and the
+  resulting `CallNotPermittedException` wasn't caught by
+  `GatewayOidcClient.userInfo`'s `catch (ex: HttpClientErrorException)` --
+  it surfaced as an uncaught 503 with a misleading hardcoded message
+  ("iam-session-svc is currently unavailable", from
+  `GlobalExceptionHandler`'s catch-all, unrelated to which downstream
+  actually failed). Fixed by adding
+  `HttpClientErrorException$Unauthorized` to both the circuit-breaker's
+  and retry's `ignore-exceptions` for the `oidc-provider` instance, same
+  pattern as the pre-existing services.
+- **Verified end-to-end, including the negative paths:** no cookie/no
+  header -> redirects to `/authorize` with the correct client id and a
+  correctly base64-encoded `state`; a real login (via the same
+  server-side `POST /authorize/complete` call the Login Portal itself
+  makes) followed by hitting the gateway's own `/oauth2/callback` ->
+  cookie set, redirected to the original `/proxy/` path; the cookie then
+  successfully forwards to `whoami` with the session cookie stripped from
+  what the upstream sees; manually terminating the session (simulating an
+  enforcement-triggered kill) and retrying with the now-dead cookie ->
+  cookie cleared, redirected back to `/authorize` again, not a crash or a
+  silent pass-through; `/oauth2/logout` with no cookie at all is a safe
+  no-op, not an error; the pre-existing `X-Session-Token` header path and
+  the direct `POST /api/v1/enforce` endpoint were both re-verified
+  unchanged afterward.
+- **Deliberately not built:** the upstream app's own cookies are never
+  forwarded at all when the caller authenticated via the gateway's cookie
+  (the whole `Cookie` header is stripped, not just this gateway's own
+  cookie) -- fine for `whoami` (cookie-less), but a real app that sets its
+  own cookies would need finer-grained cookie splitting this MVP doesn't
+  build. Also not built: cookie/token refresh before expiry (the cookie's
+  `Max-Age` matches the OpenID Connect access token's own TTL; once it
+  expires, the next request simply redirects through login again, which
+  is correct but not seamless).
