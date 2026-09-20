@@ -1484,3 +1484,189 @@ though, same honest caveat as Service 13, no literal browser click-through
 was performed in this environment; every constituent piece (the served
 SPA, every API call it makes, the CORS preflight for each) was verified
 independently instead.
+
+### D2 closure — OpenBao hardening + inter-service mTLS rollout (2026-09-19)
+
+Closes MVP deviation D2 (`BUILD_PLAN.md` Section 3) and the "secrets
+hardening" gap: OpenBao moved off `-dev` mode to a real, persistent
+server (`infra/openbao/config.hcl`, raft integrated storage), and
+service-to-service calls now authenticate via mutual TLS backed by
+OpenBao's PKI secrets engine, not an open network with no auth at all.
+
+- **Real OpenBao server mode.** `storage "raft" { path = "/openbao/file" }`
+  -- deliberately reuses the image's pre-owned directory rather than a
+  fresh Docker-created one, which came up root-owned and caused a
+  permission-denied failure the first time. `disable_mlock` was dropped
+  entirely (unrecognized field with `cap_add: IPC_LOCK` already granted).
+  Consequence accepted as correct, not worked around: after any restart of
+  the `openbao` container, OpenBao comes back up **sealed**, and every
+  mTLS-dependent service's entrypoint will fail to authenticate until
+  `infra/openbao/bootstrap.py` is re-run to unseal it. This is standard
+  OpenBao/Vault security behavior (unseal keys are never stored alongside
+  the data they protect) -- not a bug, and not worked around with an
+  auto-unseal shortcut.
+- **`bootstrap.py`** is the single idempotent entry point: init/unseal,
+  generate the root CA (once) and a `internal-services` PKI role, mount a
+  KV v2 engine, create an AppRole (`cert-issuer`) + policy, write
+  `.env` (`BAO_APPROLE_ROLE_ID`/`BAO_APPROLE_SECRET_ID`) and a test-client
+  cert. Bug found and fixed: an early version conflated "PKI mount exists"
+  with "root CA already generated," so a partially-failed prior run would
+  silently skip CA generation forever -- fixed by checking
+  `GET /v1/pki/cert/ca` directly, and every OpenBao API call in the script
+  now hard-fails (`sys.exit(1)`) on a non-2xx instead of continuing
+  silently.
+- **AppRole replaces the shared root token.** Every one of the 9
+  mTLS-participating services now authenticates to OpenBao with its own
+  AppRole login (`role_id` + `secret_id`) at container startup instead of
+  a single root token baked into every container -- the literal thing D2
+  flagged as unsafe ("any service can call any other/OpenBao with no
+  real auth"). `iam-audit-svc` was left alone (no `BAO_TOKEN`/AppRole
+  wiring) since it never reads OpenBao secrets.
+- **PKI role + AppRole TTLs set to 720h (30 days), not a short-lived
+  default.** Confirmed simplification, not an oversight: there is no
+  renewal daemon in this MVP, and some KV-secret code paths only run on
+  a rare event (e.g. TOTP DEK fetch), which could be well after container
+  startup -- a short-lived token/cert would expire before ever being used
+  once. A real production deployment would want short TTLs plus an
+  actual renewal loop; flagged here, not built.
+- **mTLS mesh scoped to actual caller graph, not blanket-applied --
+  course-corrected mid-rollout.** The first pass put mandatory-or-optional
+  mTLS on the inbound listener of all 9 services. Caught before finishing:
+  5 of those 9 (`iam-tenant-svc`, `iam-policy-svc`, `iam-auth-svc`,
+  `iam-enforcement-svc`, `iam-oidcprovider-svc`) are called directly by
+  real browsers or `iam-login-portal`'s Node server, none of which can
+  trust our self-signed internal CA. Reverted their inbound listener back
+  to plain HTTP; they still fetch a client cert at startup (via the shared
+  `mtls-entrypoint.sh`) so they can act as mTLS *clients* when calling the
+  4 purely internal-only services (`iam-session-svc`, `iam-geo-svc`,
+  `iam-identity-svc`, `iam-device-svc`), which now mandate
+  `server.ssl.client-auth: need` on their own inbound listener. Those 4
+  also split off a plain-HTTP `management.server.port` for
+  actuator/health, since Spring Boot's `server.ssl.client-auth: need`
+  would otherwise also demand a client cert from health-check callers
+  that don't have one.
+- **Mechanism:** `mtls-entrypoint.sh` (shared across all 9 Dockerfiles,
+  lives at the workspace root, not inside any one service repo) does the
+  AppRole login, requests a PKI cert for that service's CN, and builds a
+  PKCS12 keystore/truststore via `openssl pkcs12 -export` + `keytool
+  -importcert` -- deliberately no new PEM-parsing library dependency.
+  Server-side TLS is Spring Boot's own `spring.ssl.bundle.jks.*`
+  mechanism; client-side is a new `MtlsSslContext` singleton in
+  `iam-service-kit` that `resilientRestClientBuilder` picks up
+  automatically if `/mtls/*.p12` exists, a no-op otherwise. Bug found and
+  fixed in the entrypoint script: `echo "$VAR" | jq` corrupted JSON
+  containing PEM content, because dash's `echo` interprets backslash
+  escapes and turned JSON-escaped `\n` into real newlines --
+  fixed by switching every occurrence to `printf '%s' | jq`.
+- **Verification:** confirmed the mesh survives a container restart
+  (requires the manual `bootstrap.py` re-run above, by design); performed
+  a real login flow and a full OIDC round trip end-to-end through the
+  mTLS chain, plus re-confirmed the AP-2 session-kill path still works
+  through it. Windows-native curl (Schannel) could not reliably present a
+  client cert in this environment (exit 58, then exit 35 on PKCS12 retry)
+  -- not an mTLS bug, confirmed by running the identical call from a
+  Linux `curlimages/curl` container on the same Docker network instead,
+  which worked; all subsequent mTLS testing used that method.
+- **Not done, flagged for real deployment:** no cert renewal daemon (see
+  TTL note above); no OpenBao auto-unseal (Shamir single-key-share
+  unseal, matching local MVP simplicity, not a production KMS-backed
+  auto-unseal).
+
+### D4a closure — multi-broker Kafka (2026-09-19)
+
+Closes the Kafka-replication half of MVP deviation D4. Single-broker
+Kafka replaced with a real 3-node KRaft cluster (`kafka-1`/`kafka-2`/
+`kafka-3` in `docker-compose.yml`), each a combined broker+controller,
+sharing one fixed `CLUSTER_ID` and `KAFKA_CONTROLLER_QUORUM_VOTERS` for
+multi-node bootstrap. `audit-events` (and every other topic) now created
+with replication factor 3; every producer across all 9 producing
+services sets `acks: all` so a write isn't considered durable until it
+reaches the in-sync replica set, not just the leader.
+
+- YAML anchors (`&kafka-common`, `<<: *kafka-common-env`) were tried
+  first to avoid repeating the 3 near-identical broker blocks, but merge
+  keys collided with an already-present `environment:` key in the same
+  service mapping ("duplicate key"). Abandoned in favor of three full,
+  explicit, non-anchored service blocks -- more verbose, but no merge-key
+  fragility.
+- Two transient Docker networking issues during rollout, neither a
+  configuration bug: an orphaned container from the old single-broker
+  service (`iam_core_platform-kafka-1`, a naming coincidence with the new
+  `kafka-1` service) was still bound to host port 9092 and had to be
+  removed before the new named services could start; separately, one
+  broker came up with no network attached on first boot
+  (`NetworkSettings.Networks: {}`), which a plain `docker restart` didn't
+  fix -- required a full `docker rm -f` + `docker compose up -d` recreate.
+- **Verified:** real 3-broker quorum forms; `audit-events` confirmed at
+  replication factor 3 via the actual topic description; the full
+  producer -> replicated topic -> consumer -> Postgres pipeline re-tested
+  end-to-end afterward.
+
+### D4b — Postgres redundancy documented, not simulated locally (2026-09-19)
+
+The other half of D4 (single Postgres host, no redundancy) is
+deliberately **not** faked in docker-compose. CloudNativePG is a
+Kubernetes operator (it manages failover via a Kubernetes-native
+controller, PodDisruptionBudgets, etc.) -- there is no meaningful way to
+run "a CloudNativePG cluster" under plain Docker Compose; simulating
+redundancy with, say, two independent plain-Postgres containers and a
+hand-rolled replication script would prove nothing about the actual
+target technology and would be thrown away at real deployment time
+anyway. Confirmed with the product owner: document the deployment-time
+shape instead of building a fake stand-in locally.
+
+- **`infra/postgres/cloudnativepg-cluster.yaml`** -- a prepared (not yet
+  applied) Kubernetes manifest for a 3-instance CloudNativePG `Cluster`
+  per BUILD_PLAN.md's per-service-database topology, meant to be applied
+  once a real GKE cluster + the CloudNativePG operator exist. Not
+  runnable today; exists so the deployment step has a concrete starting
+  point instead of a blank page.
+
+### Gateway rollout — `iam-enforcement-svc` as a real reverse proxy (2026-09-19)
+
+Closes the "no real gateway/reverse-proxy wiring in front of protected
+apps" gap. Until now, continuous enforcement (AP-2) was only ever proven
+by calling `POST /api/v1/enforce` directly -- never against real
+forwarded application traffic, which is the actual "PEP fronting a
+protected app" shape the architecture describes.
+
+- **`ProxyController`** in `iam-enforcement-svc`, mapped on the `/proxy`
+  path prefix: forwards every method/path/query/body/header (except
+  `Host` and `X-Session-Token`, both deliberately stripped) to a
+  config-driven `iam.enforcement.proxy.upstream-url`, after running the
+  exact same session+location+policy check `POST /api/v1/enforce`
+  already does. A denied request never reaches the upstream. Built as a
+  hand-rolled servlet-based proxy (`HttpServletRequest`/
+  `HttpServletResponse` + `RestClient`), not Spring Cloud Gateway --
+  confirmed as the right call, since Cloud Gateway is WebFlux-based and
+  would be a bigger paradigm shift than this MVP piece warrants, and
+  this service already reuses `iam-service-kit`'s existing
+  `resilientRestClientBuilder` for the same bounded-timeout guarantee
+  every other outbound call in the platform has.
+- **Proven against `traefik/whoami`, not a placeholder assertion:** a
+  lightweight stand-in "protected app" added to `docker-compose.yml`
+  purely to give the proxy something real to forward to and echo back.
+  Verified all three cases end-to-end: no `X-Session-Token` -> `401`
+  before any upstream call; an invalid/unresolvable token -> `401` via
+  the same `EnforcementDeniedException` path `/api/v1/enforce` uses; a
+  real, live session token -> request actually reaches `whoami` and its
+  echoed response (method, path, query, headers) is returned unchanged,
+  confirming the session token itself never leaks to the upstream.
+  Re-verified `POST /api/v1/enforce` itself still works unchanged
+  alongside the new controller.
+- Two Kotlin compile bugs found and fixed while writing this: a KDoc
+  comment containing the literal text `/proxy/**` broke compilation,
+  because Kotlin block comments nest (unlike C/Java) so a `/*`-shaped
+  substring mid-comment opens an unmatched nested comment -- reworded to
+  avoid the literal pattern. `HttpHeaders.forEach { (name, values) -> }`
+  also failed to compile -- it resolves to Java's two-argument
+  `Map.forEach(BiConsumer)`, not Kotlin's single-destructured-param
+  `Iterable<Map.Entry>.forEach` -- rewritten as a two-parameter lambda.
+- **Deliberately not built, flagged for real deployment:** session token
+  travels as `X-Session-Token`, matching this platform's convention
+  everywhere else -- not a cookie. A real deployment fronting a
+  cookie-session'd app (a deployed Pulse, for example) would need a
+  translation step (issue/read a cookie, map it to a session token) that
+  this MVP gateway does not build. Also not built: TLS termination in
+  front of the gateway itself, and routing based on hostname/path to
+  more than one upstream (`upstream-url` is a single fixed target).

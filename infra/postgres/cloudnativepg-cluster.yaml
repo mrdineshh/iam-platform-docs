@@ -1,0 +1,79 @@
+# Deployment-time readiness manifest for D4b (docs/DECISIONS.md).
+# NOT applied anywhere yet -- CloudNativePG is a Kubernetes operator, so this
+# cannot be meaningfully exercised under docker-compose (see D4b for why it
+# isn't simulated locally). This is the concrete starting point for the real
+# deployment step: install the CloudNativePG operator on the target GKE
+# cluster first (https://cloudnative-pg.io/documentation/ -- Helm chart
+# `cnpg-io/cloudnative-pg`), then `kubectl apply -f` this file.
+#
+# Mirrors infra/postgres-init/01-init-databases.sql's "one shared instance,
+# database per service" topology (BUILD_PLAN.md Section 1), just now with
+# real HA (3 instances, automated failover, continuous WAL archiving) instead
+# of the single local container. Splitting into 5 separate single-database
+# Clusters was considered and rejected for v1: it would 5x the replica count
+# for no isolation benefit these services don't need yet, and moving to
+# one-Cluster-per-service later is a config change, not a re-architecture.
+apiVersion: postgresql.cnpg.io/v1
+kind: Cluster
+metadata:
+  name: iam-postgres
+  namespace: iam-platform
+spec:
+  instances: 3
+  imageName: ghcr.io/cloudnative-pg/postgresql:16
+
+  storage:
+    size: 20Gi
+    storageClass: standard-rwo # GKE default SSD storage class; adjust per target cluster
+
+  # Streaming replication to object storage for PITR -- fill in the real
+  # bucket/credentials at deployment time, not before (no secrets checked in).
+  backup:
+    barmanObjectStore:
+      destinationPath: "s3://REPLACE_ME/iam-postgres-backups"
+      s3Credentials:
+        accessKeyId:
+          name: iam-postgres-backup-creds
+          key: ACCESS_KEY_ID
+        secretAccessKey:
+          name: iam-postgres-backup-creds
+          key: ACCESS_SECRET_KEY
+    retentionPolicy: "30d"
+
+  bootstrap:
+    initdb:
+      database: postgres
+      owner: iam
+      secret:
+        name: iam-postgres-app-credentials
+      postInitSQL:
+        - CREATE DATABASE audit_db OWNER iam
+        - CREATE DATABASE tenant_db OWNER iam
+        - CREATE DATABASE identity_db OWNER iam
+        - CREATE DATABASE policy_db OWNER iam
+        - CREATE DATABASE device_db OWNER iam
+
+  postgresql:
+    parameters:
+      max_connections: "200"
+      shared_buffers: "512MB"
+
+---
+# PgBouncer connection pooler in front of the primary -- CloudNativePG's
+# standard companion resource, fronting the read/write endpoint every
+# service's JDBC url should point at instead of the Cluster service directly.
+apiVersion: postgresql.cnpg.io/v1
+kind: Pooler
+metadata:
+  name: iam-postgres-pooler
+  namespace: iam-platform
+spec:
+  cluster:
+    name: iam-postgres
+  instances: 2
+  type: rw
+  pgbouncer:
+    poolMode: transaction
+    parameters:
+      max_client_conn: "1000"
+      default_pool_size: "25"

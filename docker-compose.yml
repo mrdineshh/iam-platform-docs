@@ -25,33 +25,96 @@ services:
 
   openbao:
     image: openbao/openbao:latest
-    environment:
-      BAO_DEV_ROOT_TOKEN_ID: dev-root-token
-      BAO_DEV_LISTEN_ADDRESS: 0.0.0.0:8200
+    # Real server mode, not "-dev" -- raft storage persists the CA, PKI
+    # roles, AppRole credentials, and KV secrets (password pepper, TOTP
+    # DEKs, OIDC signing key) across restarts. Run
+    # `python infra/openbao/bootstrap.py` once this container is up, before
+    # bringing up the rest of the stack -- see infra/openbao/bootstrap.py's
+    # own docstring and README.md.
+    command: ["bao", "server", "-config=/openbao/config/config.hcl"]
+    volumes:
+      - ./infra/openbao/config.hcl:/openbao/config/config.hcl:ro
+      - openbao-data:/openbao/file
     ports: ["8200:8200"]
     cap_add: ["IPC_LOCK"]
     healthcheck:
-      test: ["CMD", "bao", "status", "-address=http://127.0.0.1:8200"]
+      # Deliberately treats "reachable" as healthy regardless of seal/init
+      # state (exit 2 from `bao status` = sealed, not an outage) -- the
+      # two-phase startup (bootstrap.py runs between bringing up openbao
+      # alone and the rest of the stack) is what guarantees it's actually
+      # unsealed by the time any dependent service starts.
+      test: ["CMD-SHELL", "bao status -address=http://127.0.0.1:8200; test $$? -ne 1"]
       interval: 5s
       timeout: 5s
-      retries: 10
+      retries: 20
 
-  kafka:
+  # Real 3-broker KRaft cluster -- replaces the single-broker MVP deviation
+  # (BUILD_PLAN.md D4). CLUSTER_ID must be identical across all three nodes
+  # (a fixed value, not auto-generated per-container, which is exactly what
+  # the apache/kafka image's entrypoint does by default if this isn't set
+  # explicitly -- each node would otherwise format its own storage with a
+  # different cluster ID and never form one cluster). All three run
+  # combined broker+controller roles (simplest topology for a 3-node dev
+  # cluster; a real production topology would likely separate them).
+  kafka-1:
     image: apache/kafka:latest
     environment:
+      CLUSTER_ID: bz9B54gfSVaY8z9W4L46tg
       KAFKA_NODE_ID: 1
       KAFKA_PROCESS_ROLES: broker,controller
       KAFKA_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093
-      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
-      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka-1:9092
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka-1:9093,2@kafka-2:9093,3@kafka-3:9093
       KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
-      # Single-broker MVP (BUILD_PLAN.md deviation D4) — Kafka's internal
-      # topics default to replication factor 3, which can never be satisfied
-      # with one broker and blocks __consumer_offsets from ever being created.
-      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
-      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
-      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      # Real replication now that there are 3 brokers to spread across.
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 3
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 3
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 2
+      KAFKA_DEFAULT_REPLICATION_FACTOR: 3
+      KAFKA_MIN_INSYNC_REPLICAS: 2
     ports: ["9092:9092"]
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server localhost:9092"]
+      interval: 10s
+      timeout: 10s
+      retries: 10
+
+  kafka-2:
+    image: apache/kafka:latest
+    environment:
+      CLUSTER_ID: bz9B54gfSVaY8z9W4L46tg
+      KAFKA_NODE_ID: 2
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka-2:9092
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka-1:9093,2@kafka-2:9093,3@kafka-3:9093
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 3
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 3
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 2
+      KAFKA_DEFAULT_REPLICATION_FACTOR: 3
+      KAFKA_MIN_INSYNC_REPLICAS: 2
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server localhost:9092"]
+      interval: 10s
+      timeout: 10s
+      retries: 10
+
+  kafka-3:
+    image: apache/kafka:latest
+    environment:
+      CLUSTER_ID: bz9B54gfSVaY8z9W4L46tg
+      KAFKA_NODE_ID: 3
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka-3:9092
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka-1:9093,2@kafka-2:9093,3@kafka-3:9093
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 3
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 3
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 2
+      KAFKA_DEFAULT_REPLICATION_FACTOR: 3
+      KAFKA_MIN_INSYNC_REPLICAS: 2
     healthcheck:
       test: ["CMD-SHELL", "/opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server localhost:9092"]
       interval: 10s
@@ -68,14 +131,20 @@ services:
       dockerfile: iam-audit-svc/Dockerfile
     environment:
       DB_URL: jdbc:postgresql://postgres:5432/audit_db
-      KAFKA_BOOTSTRAP: kafka:9092
+      KAFKA_BOOTSTRAP: kafka-1:9092,kafka-2:9092,kafka-3:9092
       OTEL_EXPORTER_OTLP_ENDPOINT: http://jaeger:4318
       BAO_ADDR: http://openbao:8200
-      BAO_TOKEN: dev-root-token
+      # No BAO_TOKEN -- this service never actually reads/writes any
+      # OpenBao KV secret (Kafka-consumer only, no REST callers of its
+      # own), so it doesn't need mTLS or an AppRole credential either.
     depends_on:
       postgres:
         condition: service_healthy
-      kafka:
+      kafka-1:
+        condition: service_healthy
+      kafka-2:
+        condition: service_healthy
+      kafka-3:
         condition: service_healthy
       openbao:
         condition: service_healthy
@@ -87,17 +156,29 @@ services:
       dockerfile: iam-tenant-svc/Dockerfile
     environment:
       DB_URL: jdbc:postgresql://postgres:5432/tenant_db
-      KAFKA_BOOTSTRAP: kafka:9092
+      KAFKA_BOOTSTRAP: kafka-1:9092,kafka-2:9092,kafka-3:9092
       OTEL_EXPORTER_OTLP_ENDPOINT: http://jaeger:4318
       BAO_ADDR: http://openbao:8200
-      BAO_TOKEN: dev-root-token
+      # BAO_TOKEN is no longer set here -- mtls-entrypoint.sh derives a
+      # short-lived one via AppRole login and exports it before starting
+      # the JVM. This service's own inbound listener stays plain HTTP (a
+      # real browser calls it directly), but it still needs a cert to call
+      # the mandatory-mTLS services below. See docs/DECISIONS.md, mTLS
+      # rollout entry.
+      BAO_APPROLE_ROLE_ID: ${BAO_APPROLE_ROLE_ID}
+      BAO_APPROLE_SECRET_ID: ${BAO_APPROLE_SECRET_ID}
       # Service 14 (iam-admin-console) -- admin-gated endpoints only.
-      SESSION_SVC_URL: http://iam-session-svc:8080
-      IDENTITY_SVC_URL: http://iam-identity-svc:8080
+      # https:// -- both are mandatory-mTLS services now.
+      SESSION_SVC_URL: https://iam-session-svc:8080
+      IDENTITY_SVC_URL: https://iam-identity-svc:8080
     depends_on:
       postgres:
         condition: service_healthy
-      kafka:
+      kafka-1:
+        condition: service_healthy
+      kafka-2:
+        condition: service_healthy
+      kafka-3:
         condition: service_healthy
       openbao:
         condition: service_healthy
@@ -108,16 +189,22 @@ services:
       context: ../workspace
       dockerfile: iam-geo-svc/Dockerfile
     environment:
-      KAFKA_BOOTSTRAP: kafka:9092
+      KAFKA_BOOTSTRAP: kafka-1:9092,kafka-2:9092,kafka-3:9092
       OTEL_EXPORTER_OTLP_ENDPOINT: http://jaeger:4318
       BAO_ADDR: http://openbao:8200
-      BAO_TOKEN: dev-root-token
+      BAO_APPROLE_ROLE_ID: ${BAO_APPROLE_ROLE_ID}
+      BAO_APPROLE_SECRET_ID: ${BAO_APPROLE_SECRET_ID}
+      MANAGEMENT_PORT: 9083
     depends_on:
-      kafka:
+      kafka-1:
+        condition: service_healthy
+      kafka-2:
+        condition: service_healthy
+      kafka-3:
         condition: service_healthy
       openbao:
         condition: service_healthy
-    ports: ["8083:8080"]
+    ports: ["8083:8080", "9083:9083"]
 
   iam-identity-svc:
     build:
@@ -125,19 +212,27 @@ services:
       dockerfile: iam-identity-svc/Dockerfile
     environment:
       DB_URL: jdbc:postgresql://postgres:5432/identity_db
-      KAFKA_BOOTSTRAP: kafka:9092
+      KAFKA_BOOTSTRAP: kafka-1:9092,kafka-2:9092,kafka-3:9092
       OTEL_EXPORTER_OTLP_ENDPOINT: http://jaeger:4318
       BAO_ADDR: http://openbao:8200
-      BAO_TOKEN: dev-root-token
+      BAO_APPROLE_ROLE_ID: ${BAO_APPROLE_ROLE_ID}
+      BAO_APPROLE_SECRET_ID: ${BAO_APPROLE_SECRET_ID}
+      MANAGEMENT_PORT: 9084
+      # tenant-svc's own inbound listener stays plain HTTP -- see that
+      # service's application.yml comment.
       TENANT_SVC_URL: http://iam-tenant-svc:8080
     depends_on:
       postgres:
         condition: service_healthy
-      kafka:
+      kafka-1:
+        condition: service_healthy
+      kafka-2:
+        condition: service_healthy
+      kafka-3:
         condition: service_healthy
       openbao:
         condition: service_healthy
-    ports: ["8084:8080"]
+    ports: ["8084:8080", "9084:9084"]
 
   iam-policy-svc:
     build:
@@ -145,17 +240,23 @@ services:
       dockerfile: iam-policy-svc/Dockerfile
     environment:
       DB_URL: jdbc:postgresql://postgres:5432/policy_db
-      KAFKA_BOOTSTRAP: kafka:9092
+      KAFKA_BOOTSTRAP: kafka-1:9092,kafka-2:9092,kafka-3:9092
       OTEL_EXPORTER_OTLP_ENDPOINT: http://jaeger:4318
       BAO_ADDR: http://openbao:8200
-      BAO_TOKEN: dev-root-token
+      BAO_APPROLE_ROLE_ID: ${BAO_APPROLE_ROLE_ID}
+      BAO_APPROLE_SECRET_ID: ${BAO_APPROLE_SECRET_ID}
       # Service 14 (iam-admin-console) -- admin-gated endpoints only.
-      SESSION_SVC_URL: http://iam-session-svc:8080
-      IDENTITY_SVC_URL: http://iam-identity-svc:8080
+      # https:// -- both are mandatory-mTLS services now.
+      SESSION_SVC_URL: https://iam-session-svc:8080
+      IDENTITY_SVC_URL: https://iam-identity-svc:8080
     depends_on:
       postgres:
         condition: service_healthy
-      kafka:
+      kafka-1:
+        condition: service_healthy
+      kafka-2:
+        condition: service_healthy
+      kafka-3:
         condition: service_healthy
       openbao:
         condition: service_healthy
@@ -167,18 +268,27 @@ services:
       dockerfile: iam-session-svc/Dockerfile
     environment:
       REDIS_HOST: valkey
-      KAFKA_BOOTSTRAP: kafka:9092
+      KAFKA_BOOTSTRAP: kafka-1:9092,kafka-2:9092,kafka-3:9092
       OTEL_EXPORTER_OTLP_ENDPOINT: http://jaeger:4318
       BAO_ADDR: http://openbao:8200
-      BAO_TOKEN: dev-root-token
+      # BAO_TOKEN is no longer set here -- mtls-entrypoint.sh derives a
+      # short-lived one via AppRole login and exports it before starting
+      # the JVM. See docs/DECISIONS.md, mTLS rollout entry.
+      BAO_APPROLE_ROLE_ID: ${BAO_APPROLE_ROLE_ID}
+      BAO_APPROLE_SECRET_ID: ${BAO_APPROLE_SECRET_ID}
+      MANAGEMENT_PORT: 9086
     depends_on:
       valkey:
         condition: service_healthy
-      kafka:
+      kafka-1:
+        condition: service_healthy
+      kafka-2:
+        condition: service_healthy
+      kafka-3:
         condition: service_healthy
       openbao:
         condition: service_healthy
-    ports: ["8086:8080"]
+    ports: ["8086:8080", "9086:9086"]
 
   iam-device-svc:
     build:
@@ -187,35 +297,53 @@ services:
     environment:
       DB_URL: jdbc:postgresql://postgres:5432/device_db
       REDIS_HOST: valkey
-      KAFKA_BOOTSTRAP: kafka:9092
+      KAFKA_BOOTSTRAP: kafka-1:9092,kafka-2:9092,kafka-3:9092
       OTEL_EXPORTER_OTLP_ENDPOINT: http://jaeger:4318
       BAO_ADDR: http://openbao:8200
-      BAO_TOKEN: dev-root-token
-      IDENTITY_SVC_URL: http://iam-identity-svc:8080
+      BAO_APPROLE_ROLE_ID: ${BAO_APPROLE_ROLE_ID}
+      BAO_APPROLE_SECRET_ID: ${BAO_APPROLE_SECRET_ID}
+      MANAGEMENT_PORT: 9088
+      IDENTITY_SVC_URL: https://iam-identity-svc:8080
       FCM_PROJECT_ID: ${FCM_PROJECT_ID:-}
     depends_on:
       postgres:
         condition: service_healthy
       valkey:
         condition: service_healthy
-      kafka:
+      kafka-1:
+        condition: service_healthy
+      kafka-2:
+        condition: service_healthy
+      kafka-3:
         condition: service_healthy
       openbao:
         condition: service_healthy
-    ports: ["8088:8080"]
+    ports: ["8088:8080", "9088:9088"]
 
   iam-auth-svc:
     build:
       context: ../workspace
       dockerfile: iam-auth-svc/Dockerfile
     environment:
-      KAFKA_BOOTSTRAP: kafka:9092
+      KAFKA_BOOTSTRAP: kafka-1:9092,kafka-2:9092,kafka-3:9092
       OTEL_EXPORTER_OTLP_ENDPOINT: http://jaeger:4318
       BAO_ADDR: http://openbao:8200
-      BAO_TOKEN: dev-root-token
-      DEVICE_SVC_URL: http://iam-device-svc:8080
+      BAO_APPROLE_ROLE_ID: ${BAO_APPROLE_ROLE_ID}
+      BAO_APPROLE_SECRET_ID: ${BAO_APPROLE_SECRET_ID}
+      # https:// -- identity/geo/device/session-svc are all mandatory-mTLS
+      # now; policy-svc stays plain HTTP (its own inbound listener isn't
+      # mTLS -- see that service's application.yml comment).
+      IDENTITY_SVC_URL: https://iam-identity-svc:8080
+      GEO_SVC_URL: https://iam-geo-svc:8080
+      POLICY_SVC_URL: http://iam-policy-svc:8080
+      DEVICE_SVC_URL: https://iam-device-svc:8080
+      SESSION_SVC_URL: https://iam-session-svc:8080
     depends_on:
-      kafka:
+      kafka-1:
+        condition: service_healthy
+      kafka-2:
+        condition: service_healthy
+      kafka-3:
         condition: service_healthy
       openbao:
         condition: service_healthy
@@ -227,17 +355,29 @@ services:
       dockerfile: iam-enforcement-svc/Dockerfile
     environment:
       REDIS_HOST: valkey
-      KAFKA_BOOTSTRAP: kafka:9092
+      KAFKA_BOOTSTRAP: kafka-1:9092,kafka-2:9092,kafka-3:9092
       OTEL_EXPORTER_OTLP_ENDPOINT: http://jaeger:4318
       BAO_ADDR: http://openbao:8200
-      BAO_TOKEN: dev-root-token
-      SESSION_SVC_URL: http://iam-session-svc:8080
-      GEO_SVC_URL: http://iam-geo-svc:8080
+      BAO_APPROLE_ROLE_ID: ${BAO_APPROLE_ROLE_ID}
+      BAO_APPROLE_SECRET_ID: ${BAO_APPROLE_SECRET_ID}
+      # https:// -- session/geo-svc are mandatory-mTLS now; policy-svc
+      # stays plain HTTP (its own inbound listener isn't mTLS).
+      SESSION_SVC_URL: https://iam-session-svc:8080
+      GEO_SVC_URL: https://iam-geo-svc:8080
       POLICY_SVC_URL: http://iam-policy-svc:8080
+      # PEP-as-gateway (docs/DECISIONS.md, gateway rollout entry) --
+      # points at the stand-in "whoami" service below to prove
+      # continuous enforcement against real forwarded traffic. Point
+      # this at a real deployed app instead when there is one.
+      PROXY_UPSTREAM_URL: http://whoami:80
     depends_on:
       valkey:
         condition: service_healthy
-      kafka:
+      kafka-1:
+        condition: service_healthy
+      kafka-2:
+        condition: service_healthy
+      kafka-3:
         condition: service_healthy
       openbao:
         condition: service_healthy
@@ -249,16 +389,19 @@ services:
       dockerfile: iam-oidcprovider-svc/Dockerfile
     environment:
       REDIS_HOST: valkey
-      KAFKA_BOOTSTRAP: kafka:9092
+      KAFKA_BOOTSTRAP: kafka-1:9092,kafka-2:9092,kafka-3:9092
       OTEL_EXPORTER_OTLP_ENDPOINT: http://jaeger:4318
       BAO_ADDR: http://openbao:8200
-      BAO_TOKEN: dev-root-token
+      BAO_APPROLE_ROLE_ID: ${BAO_APPROLE_ROLE_ID}
+      BAO_APPROLE_SECRET_ID: ${BAO_APPROLE_SECRET_ID}
+      # tenant-svc's own inbound listener stays plain HTTP; session/identity
+      # are mandatory-mTLS now.
       TENANT_SVC_URL: http://iam-tenant-svc:8080
-      SESSION_SVC_URL: http://iam-session-svc:8080
+      SESSION_SVC_URL: https://iam-session-svc:8080
       # Service 13: auth-svc is no longer called directly by this service --
       # iam-login-portal calls it instead. identity-svc replaces it as a
       # dependency (resolves the email for a validated session's userId).
-      IDENTITY_SVC_URL: http://iam-identity-svc:8080
+      IDENTITY_SVC_URL: https://iam-identity-svc:8080
       OIDC_ISSUER: http://localhost:8090
       # Must be reachable from the browser, not the internal Docker service
       # name -- same reasoning as OIDC_ISSUER above. No "{subdomain}" token
@@ -269,11 +412,25 @@ services:
     depends_on:
       valkey:
         condition: service_healthy
-      kafka:
+      kafka-1:
+        condition: service_healthy
+      kafka-2:
+        condition: service_healthy
+      kafka-3:
         condition: service_healthy
       openbao:
         condition: service_healthy
     ports: ["8090:8080"]
+
+  # Stand-in "protected app" for iam-enforcement-svc's reverse-proxy piece
+  # (docs/DECISIONS.md, gateway rollout entry) -- a tiny Go binary that
+  # just echoes back request details, exactly enough to prove routing +
+  # enforcement work against real forwarded traffic. Point
+  # PROXY_UPSTREAM_URL at a real deployed app instead when there is one;
+  # this container has no other purpose.
+  whoami:
+    image: traefik/whoami:latest
+    ports: ["8091:80"]
 
   iam-login-portal:
     build:
@@ -303,3 +460,4 @@ services:
 
 volumes:
   pgdata:
+  openbao-data:

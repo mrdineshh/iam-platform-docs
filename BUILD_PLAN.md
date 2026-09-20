@@ -89,9 +89,10 @@ Employee opens Grafana
 | # | Deviation | Target state | Why it's safe for now |
 |---|---|---|---|
 | D1 | `iam-enforcement-svc` is Kotlin, not Go | Go, per org tech stack | Separate service/repo already — only the language differs later |
-| D2 | Inter-service auth is a shared static secret header, not mTLS | mTLS via OpenBao PKI | Fine on an isolated docker-compose network; must upgrade before real deployment |
+| D2 | ~~Inter-service auth is a shared static secret header, not mTLS~~ **RESOLVED 2026-09-19** — real mutual TLS via OpenBao PKI + AppRole now enforced on the 4 purely-internal services (`iam-session-svc`, `iam-geo-svc`, `iam-identity-svc`, `iam-device-svc`); the other 5 services fetch a client cert too but keep plain-HTTP inbound listeners since they're reachable directly by browsers/Node that can't trust our self-signed CA | mTLS via OpenBao PKI | See `docs/DECISIONS.md`, mTLS rollout entry, for the full caller-graph analysis and simplifications (30-day cert/token TTL, no renewal daemon) |
 | D3 | Two fixed roles instead of custom RBAC | Granular custom RBAC (FR-7.3) | Centralized in `iam-auth-svc`'s `AuthorizationService` |
-| D4 | Single-broker Kafka (no replication), single Postgres host (separate databases, not separate hosts) | Multi-broker Kafka, CloudNativePG per service | Correct topology, not correct redundancy — acceptable for local MVP, must change before production |
+| D4a | ~~Single-broker Kafka (no replication)~~ **RESOLVED 2026-09-19** — real 3-broker KRaft cluster, replication factor 3, `min.insync.replicas: 2`, producer `acks: all` | Multi-broker Kafka | See `docs/DECISIONS.md`, Kafka multi-broker entry |
+| D4b | Single Postgres host (separate databases, not separate hosts), no redundancy | CloudNativePG per service, on Kubernetes | CloudNativePG is a Kubernetes operator — cannot be meaningfully replicated in docker-compose. Documented, not faked: see `infra/postgres/cloudnativepg-cluster.yaml` (deployment-time manifest, not yet applied) |
 | D5 | SCIM sync is polling, not a real-time webhook | Google Admin SDK push notifications | Push requires a verified domain + public HTTPS endpoint; polling is a reasonable MVP tradeoff |
 
 ---
