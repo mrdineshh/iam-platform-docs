@@ -1770,3 +1770,40 @@ real cookie-based app behind this gateway.
   `Max-Age` matches the OpenID Connect access token's own TTL; once it
   expires, the next request simply redirects through login again, which
   is correct but not seamless).
+
+### Gateway identity headers -- trusted user identity forwarded to the upstream app (2026-09-20)
+
+Answers the question raised while writing up the real Pulse-integration
+setup steps: the gateway forwarded traffic to the upstream app, but never
+told the app *who* was making the request -- fine for an app that doesn't
+need per-user awareness, not fine for anything that does. Confirmed with
+the product owner ("standard practice") that a real third-party app should
+be able to trust an asserted identity from the gateway rather than doing
+any login work itself.
+
+- Every request that passes enforcement -- through **either** auth path
+  (the original `X-Session-Token` header, or the newer gateway cookie) --
+  now gets three headers added before forwarding: `X-Auth-User-Id`,
+  `X-Auth-Tenant-Id`, and (cookie path only) `X-Auth-User-Email`. New
+  `GatewayIdentity` data class in `ProxyController.kt` carries this
+  through both branches of the existing `when` in `proxy()` to the shared
+  `forwardToUpstream`, rather than duplicating the header-building logic
+  per auth path.
+- **Email is only available on the cookie path, not the header path** --
+  the header path's `enforce()`/`EnforceResponse` never carried an email
+  (no `IdentityClient` exists in this service; the cookie path gets it for
+  free from the OpenID Connect Provider Service's `/userinfo`, already
+  called for liveness). Adding an `IdentityClient` purely for this one
+  field was judged out of scope for now -- flagged, not silently done, in
+  case a caller depends on `X-Auth-User-Email` always being present.
+- **Anti-spoofing, not just addition:** any incoming `X-Auth-*` header is
+  stripped before the gateway's own values are set, exactly like the
+  existing `X-Session-Token` treatment -- otherwise a caller could simply
+  set `X-Auth-User-Id: <victim>` on their own request and impersonate
+  anyone, defeating the entire point of the header being "trusted."
+  Verified directly: a request carrying forged `X-Auth-User-Id` and
+  `X-Auth-User-Email` headers reached `whoami` with only the gateway's own
+  real values present, the forged ones gone entirely.
+- **Verified for both auth paths** against `whoami`'s header echo: the
+  `X-Session-Token` path shows the two available fields (no email); the
+  cookie path shows all three.
