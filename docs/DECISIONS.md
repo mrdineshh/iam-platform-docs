@@ -1571,6 +1571,16 @@ OpenBao's PKI secrets engine, not an open network with no auth at all.
   TTL note above); no OpenBao auto-unseal (Shamir single-key-share
   unseal, matching local MVP simplicity, not a production KMS-backed
   auto-unseal).
+- **`mtls-entrypoint.sh` lives in this repo at `infra/mtls-entrypoint.sh`,
+  not inside any one service repo.** Every service's Dockerfile does
+  `COPY mtls-entrypoint.sh /entrypoint.sh`, which resolves against
+  `docker-compose.yml`'s build context (`../workspace`, the shared local
+  checkout directory all 9 service repos + `iam-service-kit` sit
+  alongside) -- it's genuinely shared infrastructure, not any one
+  service's file, matching where `docker-compose.yml` itself already
+  lives. **Local setup requirement:** copy this file to the workspace
+  root (sibling of every service repo) before `docker compose build` --
+  it is not picked up automatically from this repo's checkout location.
 
 ### D4a closure — multi-broker Kafka (2026-09-19)
 
