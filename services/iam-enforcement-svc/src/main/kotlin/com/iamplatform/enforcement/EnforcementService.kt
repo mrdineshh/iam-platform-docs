@@ -2,8 +2,10 @@ package com.iamplatform.enforcement
 
 import com.iamplatform.enforcement.client.EvaluateResponse
 import com.iamplatform.enforcement.client.GeoClient
+import com.iamplatform.enforcement.client.IdentityClient
 import com.iamplatform.enforcement.client.PolicyClient
 import com.iamplatform.enforcement.client.RemoteSession
+import com.iamplatform.enforcement.client.RemoteUserStatus
 import com.iamplatform.enforcement.client.SessionClient
 import com.iamplatform.servicekit.audit.ActorType
 import com.iamplatform.servicekit.audit.AuditEvent
@@ -35,6 +37,7 @@ class EnforcementService(
     private val sessionClient: SessionClient,
     private val geoClient: GeoClient,
     private val policyClient: PolicyClient,
+    private val identityClient: IdentityClient,
     private val policyCache: PolicyDecisionCache,
     private val auditPublisher: AuditPublisher,
 ) {
@@ -42,6 +45,21 @@ class EnforcementService(
     fun enforce(token: String, request: EnforceRequest): EnforceResponse {
         val session = sessionClient.validate(token)
             ?: throw EnforcementDeniedException("session not found, expired, or terminated")
+
+        // Added 2026-10-26: session validity alone isn't enough -- a
+        // deleted/suspended user's existing session was otherwise still
+        // "valid" (Valkey has no idea identity_db changed) and kept
+        // passing every check below indefinitely. Found live: a deleted
+        // user's pre-existing session still returned allowed=true until
+        // this check was added. Any failure here terminates the session,
+        // same as an actual policy violation -- there's no legitimate
+        // reason for a session to outlive the account it belongs to.
+        val user = orNull { identityClient.findUser(session.userId) }
+        if (user == null || user.status != RemoteUserStatus.ACTIVE) {
+            sessionClient.terminate(token, reason = "user no longer exists or is suspended")
+            audit(session, request.sourceIp, "user no longer exists or is suspended", terminate = true)
+            throw EnforcementDeniedException("user no longer exists or is suspended")
+        }
 
         // Section 4.6: never fail open. An unresolved location is
         // high-risk/unknown, not a free pass -- same rule iam-auth-svc
@@ -68,7 +86,7 @@ class EnforcementService(
     }
 
     private fun evaluateAndCache(session: RemoteSession, sourceIp: String, country: String): EvaluateResponse {
-        val evaluated = orNull { policyClient.evaluate(session.tenantId, session.userId, country) }
+        val evaluated = orNull { policyClient.evaluate(session.tenantId, session.userId, country, sourceIp) }
             ?: run {
                 audit(session, sourceIp, "policy could not be evaluated", terminate = false)
                 throw EnforcementDeniedException("policy could not be evaluated")
@@ -93,6 +111,17 @@ class EnforcementService(
      * the session, same precedent as [enforce].
      */
     fun checkLocationAndPolicy(tenantId: UUID, userId: UUID, sourceIp: String): GatewayCheckResult {
+        // Same identity-existence check as enforce() -- see its comment.
+        // shouldTerminate=true here too: the caller (ProxyController) is
+        // expected to kill the underlying session via the OIDC provider's
+        // internal termination endpoint on this result, same as any other
+        // policy violation.
+        val user = orNull { identityClient.findUser(userId) }
+        if (user == null || user.status != RemoteUserStatus.ACTIVE) {
+            auditGateway(tenantId, userId, sourceIp, null, "user no longer exists or is suspended", terminate = true)
+            return GatewayCheckResult(allowed = false, reason = "user no longer exists or is suspended", shouldTerminate = true)
+        }
+
         val geo = orNull { geoClient.resolve(sourceIp) }
         val country = geo?.takeIf { it.resolved }?.country
         if (country == null) {
@@ -101,7 +130,7 @@ class EnforcementService(
         }
 
         val decision = policyCache.get(tenantId, userId, country) ?: run {
-            val evaluated = orNull { policyClient.evaluate(tenantId, userId, country) }
+            val evaluated = orNull { policyClient.evaluate(tenantId, userId, country, sourceIp) }
             if (evaluated == null) {
                 auditGateway(tenantId, userId, sourceIp, country, "policy could not be evaluated", terminate = false)
                 return GatewayCheckResult(allowed = false, reason = "policy could not be evaluated", country = country)

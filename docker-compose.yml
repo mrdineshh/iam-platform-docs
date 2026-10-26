@@ -424,6 +424,7 @@ services:
       SESSION_SVC_URL: https://iam-session-svc:8080
       GEO_SVC_URL: https://iam-geo-svc:8080
       POLICY_SVC_URL: http://iam-policy-svc:8080
+      IDENTITY_SVC_URL: https://iam-identity-svc:8080
       # PEP-as-gateway (docs/DECISIONS.md, gateway rollout entry) --
       # points at the stand-in "whoami" service below to prove
       # continuous enforcement against real forwarded traffic. Point

@@ -39,6 +39,13 @@ iam:
     session-svc: ${SESSION_SVC_URL:http://iam-session-svc:8080}
     geo-svc: ${GEO_SVC_URL:http://iam-geo-svc:8080}
     policy-svc: ${POLICY_SVC_URL:http://iam-policy-svc:8080}
+    # Added 2026-10-26 (docs/DECISIONS.md): continuous enforcement
+    # previously only re-checked session validity + IP/country policy, never
+    # whether the user still exists -- a deleted/suspended user's existing
+    # session kept passing through to connected apps until it naturally
+    # expired. Closes that gap: every enforce() call now also confirms the
+    # identity is real and ACTIVE.
+    identity-svc: ${IDENTITY_SVC_URL:http://iam-identity-svc:8080}
   enforcement:
     policy-cache-ttl-seconds: 30
     proxy:
@@ -97,6 +104,13 @@ resilience4j:
         # precedent as session-svc excluding its own expected NotFound above.
         ignore-exceptions:
           - org.springframework.web.client.HttpClientErrorException$Unauthorized
+      identity-svc:
+        failure-rate-threshold: 50
+        sliding-window-size: 5
+        minimum-number-of-calls: 5
+        wait-duration-in-open-state: 30s
+        ignore-exceptions:
+          - org.springframework.web.client.HttpClientErrorException$NotFound
   retry:
     instances:
       session-svc:
@@ -121,6 +135,12 @@ resilience4j:
         ignore-exceptions:
           - io.github.resilience4j.circuitbreaker.CallNotPermittedException
           - org.springframework.web.client.HttpClientErrorException$Unauthorized
+      identity-svc:
+        max-attempts: 5
+        exponential-backoff-multiplier: 2
+        ignore-exceptions:
+          - io.github.resilience4j.circuitbreaker.CallNotPermittedException
+          - org.springframework.web.client.HttpClientErrorException$NotFound
 
 management:
   tracing:

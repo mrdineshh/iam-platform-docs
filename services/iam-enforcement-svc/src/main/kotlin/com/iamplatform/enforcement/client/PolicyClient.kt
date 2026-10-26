@@ -9,7 +9,7 @@ import org.springframework.stereotype.Component
 import org.springframework.web.client.RestClient
 import java.util.UUID
 
-data class EvaluateRequest(val tenantId: UUID, val userId: UUID? = null, val country: String)
+data class EvaluateRequest(val tenantId: UUID, val userId: UUID? = null, val country: String, val sourceIp: String? = null)
 data class EvaluateResponse(val allowed: Boolean, val reason: String? = null, val policyScopeApplied: String? = null)
 
 @Component
@@ -26,6 +26,12 @@ class PolicyClient(
         "policy-svc",
     )
 
-    fun evaluate(tenantId: UUID, userId: UUID, country: String): EvaluateResponse =
-        client.post("/api/v1/evaluate", EvaluateRequest(tenantId, userId, country), EvaluateResponse::class.java)
+    // sourceIp was missing here until 2026-10-26 (see docs/DECISIONS.md):
+    // iam-policy-svc's own EvaluateRequest.sourceIp fails closed against
+    // any configured allowedCidrs policy when it's absent, so every
+    // continuous enforcement check for a tenant with an IP allowlist was
+    // silently denying regardless of the real request IP -- found via a
+    // live group-access/deletion test, not by code review.
+    fun evaluate(tenantId: UUID, userId: UUID, country: String, sourceIp: String): EvaluateResponse =
+        client.post("/api/v1/evaluate", EvaluateRequest(tenantId, userId, country, sourceIp), EvaluateResponse::class.java)
 }
