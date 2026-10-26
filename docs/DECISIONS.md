@@ -1882,3 +1882,25 @@ any login work itself.
     setup) is now the primary way to browse data, replacing the briefly
     -opened public port 5432 on the self-hosted container (closed again
     once this migration completed).
+
+---
+
+- **[iam-admin-console] 2026-10-26** — Fixed `resolveTenantSubdomain` to
+  check the explicit `?tenant=` override before the Host header, not
+  after. Found live: restoring `ADMIN_CONSOLE_ROOT_DOMAIN` to its real
+  value (same session, same day, see the entry above on CORS/env-var
+  restoration) exposed a dormant bug -- `admin.34-71-129-0.sslip.io`
+  parsed as if "admin" were itself a tenant subdomain, silently ignoring
+  `?tenant=econz` entirely. This console is always one fixed shared
+  hostname for every tenant, never a true per-tenant subdomain, so the
+  override must always win here -- unlike `iam-login-portal`'s own
+  (separate, intentionally different) copy of this function, where
+  Host-header-first is correct by design for real per-tenant DNS
+  subdomains in production.
+  **Dormant risk, not yet fixed**: `iam-login-portal` has the identical
+  code shape, currently harmless only because `LOGIN_PORTAL_ROOT_DOMAIN`
+  is still unset (`platform.example.com` placeholder). If it's ever set
+  to this demo's real shared root domain (`34-71-129-0.sslip.io`) while
+  `iam-login-portal` still uses a single fixed `login.` hostname rather
+  than true per-tenant DNS, the same failure will resurface there too --
+  check this before setting that variable.
