@@ -1,0 +1,13 @@
+# Provisioning-as-code, not click-ops: Grafana reads this on startup and
+# configures the Loki datasource automatically, no manual setup in the UI.
+# This is also the reason it's easy to add Prometheus/Jaeger as datasources
+# later -- same folder, one more entry below, no UI work either time.
+apiVersion: 1
+
+datasources:
+  - name: Loki
+    type: loki
+    access: proxy
+    url: http://loki:3100
+    isDefault: true
+    editable: true

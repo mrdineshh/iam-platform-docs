@@ -1,0 +1,30 @@
+# Auto-discovers every container on this Docker host and ships its logs to
+# Loki -- "each and every thing" without hand-wiring a log shipper per
+# service. New services need zero logging config of their own: as long as
+# they print to stdout/stderr (which every service here already does via
+# Spring Boot's / Next.js's default logging), Promtail picks them up the
+# moment the container starts.
+server:
+  http_listen_port: 9080
+  grpc_listen_port: 0
+
+positions:
+  filename: /tmp/positions.yaml
+
+clients:
+  - url: http://loki:3100/loki/api/v1/push
+
+scrape_configs:
+  - job_name: docker
+    docker_sd_configs:
+      - host: unix:///var/run/docker.sock
+        refresh_interval: 5s
+    relabel_configs:
+      # Container name arrives as "/iam_core_platform-iam-auth-svc-1" (Docker
+      # prefixes a leading slash) -- strip it so the "container" label in
+      # Grafana reads cleanly.
+      - source_labels: ["__meta_docker_container_name"]
+        regex: "/(.*)"
+        target_label: "container"
+      - source_labels: ["__meta_docker_container_log_stream"]
+        target_label: "stream"

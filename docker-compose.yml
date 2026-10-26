@@ -132,6 +132,47 @@ services:
     image: jaegertracing/all-in-one:latest
     ports: ["16686:16686", "4317:4317", "4318:4318"]   # UI on 16686, OTLP gRPC on 4317, OTLP HTTP on 4318
 
+  # Centralized operational/application logging (distinct from audit_db's
+  # security-event trail, see INTERNALS.md Part 1) -- the gap closed
+  # 2026-10-26, see docs/DECISIONS.md. Standard three-pillar observability
+  # shape: Jaeger already covers tracing, this covers logs, Prometheus is
+  # the natural next addition for metrics (same Grafana instance, one more
+  # datasource file in infra/grafana/provisioning/datasources/).
+  loki:
+    restart: unless-stopped
+    image: grafana/loki:latest
+    command: ["-config.file=/etc/loki/local-config.yaml"]
+    volumes:
+      - ./infra/loki/loki-config.yaml:/etc/loki/local-config.yaml:ro
+      - loki-data:/loki
+    ports: ["3100:3100"]
+
+  # Auto-discovers and ships every container's stdout/stderr to Loki --
+  # needs the Docker socket (read-only) to discover containers, and the
+  # host's container log directory (read-only) to actually tail them.
+  promtail:
+    restart: unless-stopped
+    image: grafana/promtail:latest
+    command: ["-config.file=/etc/promtail/config.yaml"]
+    volumes:
+      - ./infra/promtail/promtail-config.yaml:/etc/promtail/config.yaml:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - /var/lib/docker/containers:/var/lib/docker/containers:ro
+    depends_on:
+      - loki
+
+  grafana:
+    restart: unless-stopped
+    image: grafana/grafana:latest
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-GrafanaDemo123!}
+    volumes:
+      - ./infra/grafana/provisioning:/etc/grafana/provisioning:ro
+      - grafana-data:/var/lib/grafana
+    ports: ["3002:3000"]
+    depends_on:
+      - loki
+
   iam-audit-svc:
     restart: unless-stopped
     build:
@@ -503,3 +544,5 @@ services:
 volumes:
   pgdata:
   openbao-data:
+  loki-data:
+  grafana-data:
