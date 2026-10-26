@@ -77,7 +77,7 @@ export default async function AppsPage({
         ) : (
           <div className="app-tiles">
             {apps.map((app) => (
-              <a key={app.id} href={app.launchUrl} className="app-tile">
+              <a key={app.id} href={app.launchUrl} target="_blank" rel="noopener noreferrer" className="app-tile">
                 <span className="app-tile__icon" aria-hidden="true">
                   {app.name.charAt(0).toUpperCase()}
                 </span>

@@ -61,7 +61,13 @@ export function LaunchpadPage() {
       ) : (
         <div className="app-tiles">
           {apps.map((app) => (
-            <form key={app.id} method="POST" action={`${config.loginPortalUrl}/sso-handoff`} className="app-tile-form">
+            <form
+              key={app.id}
+              method="POST"
+              action={`${config.loginPortalUrl}/sso-handoff`}
+              target="_blank"
+              className="app-tile-form"
+            >
               <input type="hidden" name="token" value={session.token} />
               <input type="hidden" name="next" value={app.launchUrl} />
               <button type="submit" className="app-tile">
