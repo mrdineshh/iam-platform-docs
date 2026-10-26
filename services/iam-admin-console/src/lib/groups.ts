@@ -30,3 +30,12 @@ export async function assignUserToGroup(
     { sessionToken },
   );
 }
+
+// Unassigns any members and clears the group's app access first (see
+// iam-tenant-svc's GroupController.deleteGroup), then removes the group.
+export async function deleteGroup(tenantId: string, groupId: string, sessionToken: string): Promise<void> {
+  await http.delete(
+    `${config.tenantSvcUrl}/api/v1/admin/groups/${groupId}?tenantId=${encodeURIComponent(tenantId)}`,
+    { sessionToken },
+  );
+}

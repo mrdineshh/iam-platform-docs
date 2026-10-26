@@ -11,6 +11,9 @@ interface OidcClientGroupRepository : JpaRepository<OidcClientGroupEntity, UUID>
 
     @Transactional
     fun deleteByOidcClientId(oidcClientId: UUID)
+
+    @Transactional
+    fun deleteByGroupId(groupId: UUID)
 }
 
 interface SamlSpGroupRepository : JpaRepository<SamlSpGroupEntity, UUID> {
@@ -20,4 +23,7 @@ interface SamlSpGroupRepository : JpaRepository<SamlSpGroupEntity, UUID> {
 
     @Transactional
     fun deleteBySamlSpId(samlSpId: UUID)
+
+    @Transactional
+    fun deleteByGroupId(groupId: UUID)
 }

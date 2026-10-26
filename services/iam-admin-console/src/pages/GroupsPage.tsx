@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { listGroups, createGroup, assignUserToGroup, type Group } from "@/lib/groups";
+import { listGroups, createGroup, assignUserToGroup, deleteGroup, type Group } from "@/lib/groups";
 import { getPolicy, putPolicy, type Policy } from "@/lib/policy";
 import { listTenantUsers, type AdminUserListEntry } from "@/lib/impersonate";
 import { getAppGroups, setAppGroups, type AppKind } from "@/lib/appGroups";
@@ -86,6 +86,17 @@ export function GroupsPage() {
     }
   }
 
+  async function handleDeleteGroup(group: Group) {
+    if (!window.confirm(`Delete "${group.name}"? Its members will be unassigned and its app access removed.`)) return;
+    setError(null);
+    try {
+      await deleteGroup(session.tenantId, group.id, session.token);
+      await refresh();
+    } catch (err) {
+      setError(errorMessage(err));
+    }
+  }
+
   return (
     <main className="page">
       <h1>Groups</h1>
@@ -119,6 +130,7 @@ export function GroupsPage() {
             tenantId={session.tenantId}
             sessionToken={session.token}
             onAssign={handleAssign}
+            onDelete={handleDeleteGroup}
             onError={setError}
           />
         ))
@@ -167,6 +179,7 @@ function GroupCard({
   tenantId,
   sessionToken,
   onAssign,
+  onDelete,
   onError,
 }: {
   group: Group;
@@ -175,6 +188,7 @@ function GroupCard({
   tenantId: string;
   sessionToken: string;
   onAssign: (userId: string, groupId: string) => void;
+  onDelete: (group: Group) => void;
   onError: (msg: string) => void;
 }) {
   const [policy, setPolicy] = useState<Policy | null>(null);
@@ -269,7 +283,12 @@ function GroupCard({
 
   return (
     <div className="callout">
-      <h3>{group.name}</h3>
+      <h3>
+        {group.name}{" "}
+        <button type="button" onClick={() => onDelete(group)}>
+          Delete group
+        </button>
+      </h3>
       {saved && <p>Saved.</p>}
       <form onSubmit={(e) => void savePolicy(e)} className="policy-form">
         <label className="login-form__field">

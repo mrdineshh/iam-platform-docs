@@ -14,7 +14,7 @@ import org.springframework.web.client.ResourceAccessException
 @RestControllerAdvice
 class GlobalExceptionHandler {
 
-    @ExceptionHandler(UserNotFoundException::class, TenantNotFoundException::class)
+    @ExceptionHandler(UserNotFoundException::class, TenantNotFoundException::class, GroupNotFoundException::class)
     fun handleNotFound(ex: RuntimeException, request: HttpServletRequest): ResponseEntity<ErrorResponse> =
         ResponseEntity.status(HttpStatus.NOT_FOUND).body(
             ErrorResponse.of(HttpStatus.NOT_FOUND.value(), "Not Found", ex.message ?: "", request.requestURI),

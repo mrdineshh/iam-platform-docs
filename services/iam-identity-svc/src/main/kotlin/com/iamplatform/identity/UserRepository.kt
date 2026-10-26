@@ -9,4 +9,7 @@ interface UserRepository : JpaRepository<UserEntity, UUID> {
 
     // Added for the admin-console "Switch to user" picker.
     fun findByTenantId(tenantId: UUID): List<UserEntity>
+
+    // Added so deleting a group can unassign its members first (2026-10-27).
+    fun findByGroupId(groupId: UUID): List<UserEntity>
 }

@@ -40,4 +40,6 @@ class GroupClient(
 
     fun assignGroup(userId: UUID, groupId: UUID?): RemoteUser =
         client.patch("/api/v1/users/$userId/group", AssignRemoteGroupRequest(groupId), RemoteUser::class.java)
+
+    fun deleteGroup(id: UUID): Unit = client.delete("/api/v1/groups/$id")
 }

@@ -5,6 +5,7 @@ import jakarta.validation.constraints.NotBlank
 import jakarta.validation.constraints.NotNull
 import org.springframework.http.HttpStatus
 import org.springframework.http.ResponseEntity
+import org.springframework.web.bind.annotation.DeleteMapping
 import org.springframework.web.bind.annotation.GetMapping
 import org.springframework.web.bind.annotation.PatchMapping
 import org.springframework.web.bind.annotation.PathVariable
@@ -42,6 +43,8 @@ data class AssignGroupAdminRequest(
 class GroupController(
     private val groupClient: GroupClient,
     private val adminAccessGuard: AdminAccessGuard,
+    private val oidcClientGroupRepository: OidcClientGroupRepository,
+    private val samlSpGroupRepository: SamlSpGroupRepository,
 ) {
     @PostMapping
     fun createGroup(
@@ -70,5 +73,21 @@ class GroupController(
     ): ResponseEntity<RemoteUser> {
         adminAccessGuard.requireTenantAdmin(sessionToken, tenantId)
         return ResponseEntity.ok(groupClient.assignGroup(userId, request.groupId))
+    }
+
+    // Also drops this group's oidc_client_groups / saml_sp_groups rows --
+    // those live in this service's own tenant_db, so iam-identity-svc's
+    // deleteGroup (which only unassigns members) can't reach them.
+    @DeleteMapping("/{id}")
+    fun deleteGroup(
+        @PathVariable id: UUID,
+        @RequestParam tenantId: UUID,
+        @RequestHeader("X-Session-Token") sessionToken: String,
+    ): ResponseEntity<Void> {
+        adminAccessGuard.requireTenantAdmin(sessionToken, tenantId)
+        groupClient.deleteGroup(id)
+        oidcClientGroupRepository.deleteByGroupId(id)
+        samlSpGroupRepository.deleteByGroupId(id)
+        return ResponseEntity.noContent().build()
     }
 }
