@@ -89,7 +89,10 @@ class GoogleWorkspaceConfigService(
     }
 
     private fun extractField(json: String, field: String): String? {
-        val pattern = Regex("\"$field\"\\s*:\\s*\"((?:[^\"\\\\]|\\\\.)*)\"")
+        // Unrolled-loop form: the usual (?:[^"\\]|\\.)* alternation recurses
+        // once per character in Java's regex engine and overflows the stack
+        // on a ~1.7KB private_key value.
+        val pattern = Regex("\"$field\"\\s*:\\s*\"([^\"\\\\]*+(?:\\\\.[^\"\\\\]*+)*+)\"")
         return pattern.find(json)?.groupValues?.get(1)
     }
 }
