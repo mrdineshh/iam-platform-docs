@@ -4,7 +4,13 @@ services:
     image: postgres:16
     environment:
       POSTGRES_USER: iam
-      POSTGRES_PASSWORD: localdev
+      # Only takes effect on first-ever initialization of an empty volume
+      # (the official postgres image's own behavior) -- the real running
+      # password was changed via ALTER USER 2026-10-26 (docs/DECISIONS.md,
+      # exposing this port publicly for GUI DB access), this value is kept
+      # in sync here only so a brand-new deployment matches what every
+      # service below actually connects with.
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
     ports: ["5432:5432"]
     volumes:
       - pgdata:/var/lib/postgresql/data
@@ -180,6 +186,7 @@ services:
       dockerfile: iam-audit-svc/Dockerfile
     environment:
       DB_URL: jdbc:postgresql://postgres:5432/audit_db
+      DB_PASSWORD: ${DB_PASSWORD}
       KAFKA_BOOTSTRAP: kafka-1:9092,kafka-2:9092,kafka-3:9092
       OTEL_EXPORTER_OTLP_ENDPOINT: http://jaeger:4318
       BAO_ADDR: http://openbao:8200
@@ -206,6 +213,7 @@ services:
       dockerfile: iam-tenant-svc/Dockerfile
     environment:
       DB_URL: jdbc:postgresql://postgres:5432/tenant_db
+      DB_PASSWORD: ${DB_PASSWORD}
       KAFKA_BOOTSTRAP: kafka-1:9092,kafka-2:9092,kafka-3:9092
       OTEL_EXPORTER_OTLP_ENDPOINT: http://jaeger:4318
       BAO_ADDR: http://openbao:8200
@@ -271,6 +279,7 @@ services:
       dockerfile: iam-identity-svc/Dockerfile
     environment:
       DB_URL: jdbc:postgresql://postgres:5432/identity_db
+      DB_PASSWORD: ${DB_PASSWORD}
       KAFKA_BOOTSTRAP: kafka-1:9092,kafka-2:9092,kafka-3:9092
       OTEL_EXPORTER_OTLP_ENDPOINT: http://jaeger:4318
       BAO_ADDR: http://openbao:8200
@@ -300,6 +309,7 @@ services:
       dockerfile: iam-policy-svc/Dockerfile
     environment:
       DB_URL: jdbc:postgresql://postgres:5432/policy_db
+      DB_PASSWORD: ${DB_PASSWORD}
       KAFKA_BOOTSTRAP: kafka-1:9092,kafka-2:9092,kafka-3:9092
       OTEL_EXPORTER_OTLP_ENDPOINT: http://jaeger:4318
       BAO_ADDR: http://openbao:8200
@@ -359,6 +369,7 @@ services:
       dockerfile: iam-device-svc/Dockerfile
     environment:
       DB_URL: jdbc:postgresql://postgres:5432/device_db
+      DB_PASSWORD: ${DB_PASSWORD}
       REDIS_HOST: valkey
       KAFKA_BOOTSTRAP: kafka-1:9092,kafka-2:9092,kafka-3:9092
       OTEL_EXPORTER_OTLP_ENDPOINT: http://jaeger:4318
