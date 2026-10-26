@@ -34,6 +34,12 @@ data class CreatedUserResponse(
     // user right now (screen share, printout, etc.), not store them.
     val totpSecret: String,
     val provisioningUri: String,
+    // Whether this tenant has Google Workspace auto-provisioning
+    // configured and it succeeded. Deliberately never fails user creation
+    // itself -- see AdminUserController's comment on why this is
+    // best-effort, not a hard dependency of the core flow.
+    val googleWorkspaceProvisioned: Boolean = false,
+    val googleWorkspaceError: String? = null,
 )
 
 data class Enroll2faResponse(

@@ -9,6 +9,8 @@ export interface CreatedUser {
   role: "ADMIN" | "USER";
   totpSecret: string;
   provisioningUri: string;
+  googleWorkspaceProvisioned: boolean;
+  googleWorkspaceError: string | null;
 }
 
 /**

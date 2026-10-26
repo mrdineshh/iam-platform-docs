@@ -139,6 +139,14 @@ export function UsersPage() {
             Can't scan right now? Manual key (time-based): <code>{justCreated.totpSecret}</code>
           </p>
           <p>They can enroll additional/replacement devices themselves later on the "My Security" page.</p>
+          {justCreated.googleWorkspaceProvisioned && (
+            <p className="hint">Also created in Google Workspace — no separate Google password needed to sign in.</p>
+          )}
+          {justCreated.googleWorkspaceError && (
+            <p role="alert" className="login-form__error">
+              Google Workspace account creation failed: {justCreated.googleWorkspaceError}
+            </p>
+          )}
         </div>
       )}
 

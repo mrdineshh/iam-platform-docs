@@ -10,6 +10,7 @@ import { MySecurityPage } from "@/pages/MySecurityPage";
 import { LaunchpadPage } from "@/pages/LaunchpadPage";
 import { SwitchUserPage } from "@/pages/SwitchUserPage";
 import { GroupsPage } from "@/pages/GroupsPage";
+import { GoogleWorkspaceSettingsPage } from "@/pages/GoogleWorkspaceSettingsPage";
 import { ProtectedRoute } from "@/components/ProtectedRoute";
 import { SessionRoute } from "@/components/SessionRoute";
 import { ImpersonationBanner } from "@/components/ImpersonationBanner";
@@ -90,6 +91,14 @@ export function App() {
           element={
             <ProtectedRoute>
               <GroupsPage />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/google-workspace"
+          element={
+            <ProtectedRoute>
+              <GoogleWorkspaceSettingsPage />
             </ProtectedRoute>
           }
         />

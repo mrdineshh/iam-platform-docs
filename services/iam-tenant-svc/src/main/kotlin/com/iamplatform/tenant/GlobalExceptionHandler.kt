@@ -18,6 +18,7 @@ class GlobalExceptionHandler {
     @ExceptionHandler(
         TenantNotFoundException::class, TenantSubdomainNotFoundException::class,
         OidcClientNotFoundException::class, SamlSpNotFoundException::class,
+        GoogleWorkspaceConfigNotFoundException::class,
     )
     fun handleNotFound(ex: RuntimeException, request: HttpServletRequest): ResponseEntity<ErrorResponse> =
         ResponseEntity.status(HttpStatus.NOT_FOUND).body(
@@ -28,6 +29,12 @@ class GlobalExceptionHandler {
     fun handleConflict(ex: RuntimeException, request: HttpServletRequest): ResponseEntity<ErrorResponse> =
         ResponseEntity.status(HttpStatus.CONFLICT).body(
             ErrorResponse.of(HttpStatus.CONFLICT.value(), "Conflict", ex.message ?: "", request.requestURI),
+        )
+
+    @ExceptionHandler(InvalidServiceAccountJsonException::class)
+    fun handleInvalidServiceAccountJson(ex: InvalidServiceAccountJsonException, request: HttpServletRequest): ResponseEntity<ErrorResponse> =
+        ResponseEntity.status(HttpStatus.BAD_REQUEST).body(
+            ErrorResponse.of(HttpStatus.BAD_REQUEST.value(), "Bad Request", ex.message ?: "", request.requestURI),
         )
 
     @ExceptionHandler(MethodArgumentNotValidException::class)

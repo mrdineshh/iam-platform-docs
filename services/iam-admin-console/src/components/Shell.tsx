@@ -50,7 +50,8 @@ export function Shell({ children }: { children: ReactNode }) {
     location.pathname === "/groups" ||
     location.pathname === "/switch-user" ||
     location.pathname.startsWith("/clients") ||
-    location.pathname === "/policy";
+    location.pathname === "/policy" ||
+    location.pathname === "/google-workspace";
 
   if (collapsed) {
     return (
@@ -113,6 +114,11 @@ export function Shell({ children }: { children: ReactNode }) {
                   <NavLink to="/switch-user" label="Switch to user" active={location.pathname === "/switch-user"} />
                   <NavLink to="/clients" label="Applications" active={location.pathname.startsWith("/clients")} />
                   <NavLink to="/policy" label="Access policy" active={location.pathname === "/policy"} />
+                  <NavLink
+                    to="/google-workspace"
+                    label="Google Workspace"
+                    active={location.pathname === "/google-workspace"}
+                  />
                 </div>
               )}
             </div>

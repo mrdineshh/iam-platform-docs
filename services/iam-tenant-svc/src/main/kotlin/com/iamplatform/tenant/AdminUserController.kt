@@ -1,5 +1,10 @@
 package com.iamplatform.tenant
 
+import com.iamplatform.servicekit.audit.ActorType
+import com.iamplatform.servicekit.audit.AuditEvent
+import com.iamplatform.servicekit.audit.AuditPublisher
+import com.iamplatform.servicekit.audit.AuditResult
+import com.iamplatform.servicekit.correlation.CorrelationId
 import jakarta.validation.Valid
 import org.springframework.http.HttpStatus
 import org.springframework.http.ResponseEntity
@@ -32,6 +37,9 @@ class AdminUserController(
     private val identityClient: IdentityClient,
     private val deviceClient: DeviceClient,
     private val adminAccessGuard: AdminAccessGuard,
+    private val googleWorkspaceConfigService: GoogleWorkspaceConfigService,
+    private val googleWorkspaceDirectoryClient: GoogleWorkspaceDirectoryClient,
+    private val auditPublisher: AuditPublisher,
 ) {
     @PostMapping
     fun createUser(
@@ -49,6 +57,41 @@ class AdminUserController(
             ),
         )
         val device = deviceClient.enroll(created.tenantId, created.id)
+
+        // Best-effort, never blocking: this platform's own account is the
+        // real identity (AP-3, we never let an upstream/downstream system's
+        // state gate our own session issuance), so a Google-side failure
+        // here must not undo or fail the user creation that already
+        // succeeded. See GoogleWorkspaceDirectoryClient's doc comment for
+        // why the generated Google password is never surfaced anywhere --
+        // only our platform's password ever matters for sign-in once SSO
+        // redirect mode is set on the account's OU.
+        var googleProvisioned = false
+        var googleError: String? = null
+        val googleConfig = googleWorkspaceConfigService.loadProvisioningConfig(request.tenantId)
+        if (googleConfig != null) {
+            try {
+                val (givenName, familyName) = splitDisplayName(request.displayName)
+                googleWorkspaceDirectoryClient.provisionUser(
+                    googleConfig.copy(primaryEmail = request.email, givenName = givenName, familyName = familyName),
+                )
+                googleProvisioned = true
+            } catch (ex: GoogleProvisioningException) {
+                googleError = ex.message
+            }
+            auditPublisher.publish(
+                AuditEvent(
+                    correlationId = CorrelationId.get(),
+                    tenantId = request.tenantId,
+                    actorType = ActorType.SYSTEM,
+                    actorId = "iam-tenant-svc",
+                    action = "google_workspace_user.provisioned",
+                    result = if (googleProvisioned) AuditResult.SUCCESS else AuditResult.FAILURE,
+                    reason = googleError,
+                ),
+            )
+        }
+
         return ResponseEntity.status(HttpStatus.CREATED).body(
             CreatedUserResponse(
                 id = created.id,
@@ -58,7 +101,14 @@ class AdminUserController(
                 role = created.role,
                 totpSecret = device.totpSecret,
                 provisioningUri = device.provisioningUri,
+                googleWorkspaceProvisioned = googleProvisioned,
+                googleWorkspaceError = googleError,
             ),
         )
+    }
+
+    private fun splitDisplayName(displayName: String): Pair<String, String> {
+        val parts = displayName.trim().split(Regex("\\s+"), limit = 2)
+        return if (parts.size == 2) parts[0] to parts[1] else parts[0] to parts[0]
     }
 }

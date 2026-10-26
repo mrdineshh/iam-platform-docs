@@ -203,6 +203,9 @@ path "secret/data/break-glass-token/*" {
 path "secret/data/saml-signing-key" {
   capabilities = ["read", "create", "update"]
 }
+path "secret/data/google-workspace/*" {
+  capabilities = ["read", "create", "update"]
+}
 """
 
 
