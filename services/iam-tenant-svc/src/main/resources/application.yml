@@ -6,6 +6,15 @@ spring:
     url: ${DB_URL:jdbc:postgresql://localhost:5432/tenant_db}
     username: ${DB_USER:iam}
     password: ${DB_PASSWORD:localdev}
+    hikari:
+      # Added 2026-10-26 (docs/DECISIONS.md, Cloud SQL migration): the
+      # default pool size (10) across 5 services could exceed db-f1-micro's
+      # low max_connections ceiling when they all start up together --
+      # found live (two services crash-looped on "remaining connection
+      # slots are reserved" during cutover). 3 per service x 5 services
+      # stays well under the cap with room for Flyway's own transient
+      # connections.
+      maximum-pool-size: ${DB_POOL_SIZE:3}
 
   jpa:
     hibernate:

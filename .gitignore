@@ -4,6 +4,13 @@
 .env
 infra/openbao/secrets/
 
+# OpenTofu state holds the generated Cloud SQL password in plain text --
+# never committed, same reasoning as every other secret in this repo.
+infra/opentofu/.terraform/
+infra/opentofu/*.tfstate
+infra/opentofu/*.tfstate.*
+infra/opentofu/*.tfvars
+
 # Set-aside pre-monorepo git history (see docs/DECISIONS.md) -- kept on
 # disk for reference, never tracked by the new combined repo.
 services/*/.git.old-history-backup/
@@ -20,3 +27,4 @@ services/*/.git.old-history-backup/
 **/target/
 **/*.class
 **/.DS_Store
+infra/opentofu/tfplan

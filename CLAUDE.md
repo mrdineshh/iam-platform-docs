@@ -168,7 +168,7 @@ everything here is chosen to be portable to on-prem later).
 | Mobile Authenticator app | Swift (iOS) + Kotlin (Android) — native, not React Native |
 | Admin Console (tenant admin: policy config, RBAC, dashboards) | React + Vite, SPA |
 | Login / Self-Service Portal (public-facing, branded per tenant) | Next.js, SSR |
-| Primary datastore (tenants, users, policies, RBAC) | PostgreSQL — self-hosted on GKE via CloudNativePG operator (NOT Cloud SQL) |
+| Primary datastore (tenants, users, policies, RBAC) | PostgreSQL. **Demo deployment uses Cloud SQL** (db-f1-micro, via OpenTofu in infra/opentofu/) -- an explicit, logged override of the original self-hosted-not-Cloud-SQL decision, made 2026-10-26 for managed-service convenience on this single-VM demo; see docs/DECISIONS.md. The AP-5 portability goal that motivated the original choice still applies to the real GKE/CloudNativePG target in infra/postgres/cloudnativepg-cluster.yaml -- revisit this override before any on-prem/dedicated-tenant deployment. |
 | Cache / session / PEP policy lookups | **Valkey** — self-hosted on GKE (NOT Redis — see Licensing note below) |
 | Audit log store (Section 5.11 — full user/admin/security event logging) | OpenSearch — self-hosted on GKE |
 | Event streaming (SCIM sync, webhook delivery, audit ingestion, posture signals) | Kafka — via Strimzi operator on GKE |
