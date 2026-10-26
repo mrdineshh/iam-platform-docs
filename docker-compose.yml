@@ -223,6 +223,11 @@ services:
       IDENTITY_SVC_URL: https://iam-identity-svc:8080
       # Added for the admin-console "create user" / "My Security" 2FA pages.
       DEVICE_SVC_URL: https://iam-device-svc:8080
+      # CORS: the admin console SPA's own real origin. Restored 2026-10-26
+      # after being accidentally dropped in the monorepo migration (see
+      # docs/DECISIONS.md) -- this file's own local copy had quietly
+      # diverged from the VM's live-patched one before the migration.
+      ADMIN_CONSOLE_ORIGIN: https://admin.34-71-129-0.sslip.io
     depends_on:
       postgres:
         condition: service_healthy
@@ -304,6 +309,7 @@ services:
       # https:// -- both are mandatory-mTLS services now.
       SESSION_SVC_URL: https://iam-session-svc:8080
       IDENTITY_SVC_URL: https://iam-identity-svc:8080
+      ADMIN_CONSOLE_ORIGIN: https://admin.34-71-129-0.sslip.io
     depends_on:
       postgres:
         condition: service_healthy
@@ -396,6 +402,7 @@ services:
       POLICY_SVC_URL: http://iam-policy-svc:8080
       DEVICE_SVC_URL: https://iam-device-svc:8080
       SESSION_SVC_URL: https://iam-session-svc:8080
+      ADMIN_CONSOLE_ORIGIN: https://admin.34-71-129-0.sslip.io
     depends_on:
       kafka-1:
         condition: service_healthy
