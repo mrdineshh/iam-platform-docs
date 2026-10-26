@@ -1,0 +1,64 @@
+spring:
+  application:
+    name: iam-geo-svc
+  kafka:
+    bootstrap-servers: ${KAFKA_BOOTSTRAP:kafka-1:9092,kafka-2:9092,kafka-3:9092}
+  ssl:
+    bundle:
+      jks:
+        mtls:
+          keystore:
+            location: file:/mtls/keystore.p12
+            password: changeit
+            type: PKCS12
+          truststore:
+            location: file:/mtls/truststore.p12
+            password: changeit
+            type: PKCS12
+
+server:
+  port: ${SERVER_PORT:8080}
+  ssl:
+    bundle: mtls
+    # Mandatory -- iam-geo-svc is called only by other backend services
+    # (iam-auth-svc, iam-enforcement-svc), never by a browser or Node
+    # frontend directly. See docs/DECISIONS.md, mTLS rollout entry.
+    client-auth: need
+
+iam:
+  openbao:
+    address: ${BAO_ADDR:http://openbao:8200}
+    token: ${BAO_TOKEN:}
+
+management:
+  server:
+    port: ${MANAGEMENT_PORT:9083}
+    ssl:
+      enabled: false
+  tracing:
+    sampling:
+      # 100% for local MVP dev/demo -- the point of tracing here is to see
+      # every request's full trace, not sample it (BUILD_PLAN.md Section 4.4).
+      # Spring Boot's own default (10%) would drop most single test
+      # requests, discovered while verifying the OQ-1 endpoint fix.
+      probability: 1.0
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+  endpoint:
+    health:
+      probes:
+        enabled: true
+  otlp:
+    metrics:
+      export:
+        enabled: false
+  opentelemetry:
+    tracing:
+      export:
+        otlp:
+          # Jaeger's OTLP receiver only accepts gRPC on 4317; Spring Boot 4's
+          # tracing exporter defaults to HTTP (docs/OPEN_QUESTIONS.md OQ-1,
+          # found in Service 6). 4318 is Jaeger's OTLP/HTTP port.
+          endpoint: ${OTEL_EXPORTER_OTLP_ENDPOINT:http://jaeger:4318}

@@ -1,5 +1,6 @@
 services:
   postgres:
+    restart: unless-stopped
     image: postgres:16
     environment:
       POSTGRES_USER: iam
@@ -15,6 +16,7 @@ services:
       retries: 10
 
   valkey:
+    restart: unless-stopped
     image: valkey/valkey:latest
     ports: ["6379:6379"]
     healthcheck:
@@ -24,6 +26,7 @@ services:
       retries: 10
 
   openbao:
+    restart: unless-stopped
     image: openbao/openbao:latest
     # Real server mode, not "-dev" -- raft storage persists the CA, PKI
     # roles, AppRole credentials, and KV secrets (password pepper, TOTP
@@ -57,6 +60,7 @@ services:
   # combined broker+controller roles (simplest topology for a 3-node dev
   # cluster; a real production topology would likely separate them).
   kafka-1:
+    restart: unless-stopped
     image: apache/kafka:latest
     environment:
       CLUSTER_ID: bz9B54gfSVaY8z9W4L46tg
@@ -80,6 +84,7 @@ services:
       retries: 10
 
   kafka-2:
+    restart: unless-stopped
     image: apache/kafka:latest
     environment:
       CLUSTER_ID: bz9B54gfSVaY8z9W4L46tg
@@ -101,6 +106,7 @@ services:
       retries: 10
 
   kafka-3:
+    restart: unless-stopped
     image: apache/kafka:latest
     environment:
       CLUSTER_ID: bz9B54gfSVaY8z9W4L46tg
@@ -122,12 +128,14 @@ services:
       retries: 10
 
   jaeger:
+    restart: unless-stopped
     image: jaegertracing/all-in-one:latest
     ports: ["16686:16686", "4317:4317", "4318:4318"]   # UI on 16686, OTLP gRPC on 4317, OTLP HTTP on 4318
 
   iam-audit-svc:
+    restart: unless-stopped
     build:
-      context: ../workspace
+      context: ./services
       dockerfile: iam-audit-svc/Dockerfile
     environment:
       DB_URL: jdbc:postgresql://postgres:5432/audit_db
@@ -151,8 +159,9 @@ services:
     ports: ["8081:8081"]
 
   iam-tenant-svc:
+    restart: unless-stopped
     build:
-      context: ../workspace
+      context: ./services
       dockerfile: iam-tenant-svc/Dockerfile
     environment:
       DB_URL: jdbc:postgresql://postgres:5432/tenant_db
@@ -168,9 +177,11 @@ services:
       BAO_APPROLE_ROLE_ID: ${BAO_APPROLE_ROLE_ID}
       BAO_APPROLE_SECRET_ID: ${BAO_APPROLE_SECRET_ID}
       # Service 14 (iam-admin-console) -- admin-gated endpoints only.
-      # https:// -- both are mandatory-mTLS services now.
+      # https:// -- all three are mandatory-mTLS services now.
       SESSION_SVC_URL: https://iam-session-svc:8080
       IDENTITY_SVC_URL: https://iam-identity-svc:8080
+      # Added for the admin-console "create user" / "My Security" 2FA pages.
+      DEVICE_SVC_URL: https://iam-device-svc:8080
     depends_on:
       postgres:
         condition: service_healthy
@@ -185,8 +196,9 @@ services:
     ports: ["8082:8080"]
 
   iam-geo-svc:
+    restart: unless-stopped
     build:
-      context: ../workspace
+      context: ./services
       dockerfile: iam-geo-svc/Dockerfile
     environment:
       KAFKA_BOOTSTRAP: kafka-1:9092,kafka-2:9092,kafka-3:9092
@@ -207,8 +219,9 @@ services:
     ports: ["8083:8080", "9083:9083"]
 
   iam-identity-svc:
+    restart: unless-stopped
     build:
-      context: ../workspace
+      context: ./services
       dockerfile: iam-identity-svc/Dockerfile
     environment:
       DB_URL: jdbc:postgresql://postgres:5432/identity_db
@@ -235,8 +248,9 @@ services:
     ports: ["8084:8080", "9084:9084"]
 
   iam-policy-svc:
+    restart: unless-stopped
     build:
-      context: ../workspace
+      context: ./services
       dockerfile: iam-policy-svc/Dockerfile
     environment:
       DB_URL: jdbc:postgresql://postgres:5432/policy_db
@@ -263,8 +277,9 @@ services:
     ports: ["8085:8080"]
 
   iam-session-svc:
+    restart: unless-stopped
     build:
-      context: ../workspace
+      context: ./services
       dockerfile: iam-session-svc/Dockerfile
     environment:
       REDIS_HOST: valkey
@@ -291,8 +306,9 @@ services:
     ports: ["8086:8080", "9086:9086"]
 
   iam-device-svc:
+    restart: unless-stopped
     build:
-      context: ../workspace
+      context: ./services
       dockerfile: iam-device-svc/Dockerfile
     environment:
       DB_URL: jdbc:postgresql://postgres:5432/device_db
@@ -321,8 +337,9 @@ services:
     ports: ["8088:8080", "9088:9088"]
 
   iam-auth-svc:
+    restart: unless-stopped
     build:
-      context: ../workspace
+      context: ./services
       dockerfile: iam-auth-svc/Dockerfile
     environment:
       KAFKA_BOOTSTRAP: kafka-1:9092,kafka-2:9092,kafka-3:9092
@@ -350,8 +367,9 @@ services:
     ports: ["8087:8080"]
 
   iam-enforcement-svc:
+    restart: unless-stopped
     build:
-      context: ../workspace
+      context: ./services
       dockerfile: iam-enforcement-svc/Dockerfile
     environment:
       REDIS_HOST: valkey
@@ -396,8 +414,9 @@ services:
     ports: ["8089:8080"]
 
   iam-oidcprovider-svc:
+    restart: unless-stopped
     build:
-      context: ../workspace
+      context: ./services
       dockerfile: iam-oidcprovider-svc/Dockerfile
     environment:
       REDIS_HOST: valkey
@@ -441,12 +460,14 @@ services:
   # PROXY_UPSTREAM_URL at a real deployed app instead when there is one;
   # this container has no other purpose.
   whoami:
+    restart: unless-stopped
     image: traefik/whoami:latest
     ports: ["8091:80"]
 
   iam-login-portal:
+    restart: unless-stopped
     build:
-      context: ../workspace
+      context: ./services
       dockerfile: iam-login-portal/Dockerfile
     environment:
       AUTH_SVC_URL: http://iam-auth-svc:8080
@@ -462,12 +483,21 @@ services:
     ports: ["3001:3000"]
 
   iam-admin-console:
+    restart: unless-stopped
     build:
-      context: ../workspace
+      context: ./services
       dockerfile: iam-admin-console/Dockerfile
-    # Pure static SPA (nginx) -- VITE_*_SVC_URL defaults in config.ts
-    # already point at these same host-mapped ports, so no build args
-    # needed for local dev.
+      # Pure static SPA (nginx) -- VITE_*_SVC_URL defaults in config.ts
+      # only work when the browser loading this SPA is on the same machine
+      # as the backend services. Override with build args pointing at
+      # wherever this is actually being accessed from (see Dockerfile).
+      args:
+        VITE_AUTH_SVC_URL: ${ADMIN_CONSOLE_AUTH_SVC_URL:-http://localhost:8087}
+        VITE_TENANT_SVC_URL: ${ADMIN_CONSOLE_TENANT_SVC_URL:-http://localhost:8082}
+        VITE_POLICY_SVC_URL: ${ADMIN_CONSOLE_POLICY_SVC_URL:-http://localhost:8085}
+        VITE_ROOT_DOMAIN: ${ADMIN_CONSOLE_ROOT_DOMAIN:-platform.example.com}
+        VITE_OIDC_ISSUER_URL: ${ADMIN_CONSOLE_OIDC_ISSUER_URL:-http://localhost:8090}
+        VITE_LOGIN_PORTAL_URL: ${ADMIN_CONSOLE_LOGIN_PORTAL_URL:-http://localhost:3001}
     ports: ["5173:80"]
 
 volumes:

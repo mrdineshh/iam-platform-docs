@@ -1,0 +1,115 @@
+spring:
+  application:
+    name: iam-policy-svc
+
+  datasource:
+    url: ${DB_URL:jdbc:postgresql://localhost:5432/policy_db}
+    username: ${DB_USER:iam}
+    password: ${DB_PASSWORD:localdev}
+
+  jpa:
+    hibernate:
+      ddl-auto: validate
+    open-in-view: false
+
+  flyway:
+    locations: classpath:db/migration
+
+  kafka:
+    bootstrap-servers: ${KAFKA_BOOTSTRAP:kafka-1:9092,kafka-2:9092,kafka-3:9092}
+    producer:
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: org.apache.kafka.common.serialization.StringSerializer
+      retries: 5
+      # Real replication now (3 brokers, min-insync-replicas: 2) -- wait
+      # for the write to actually reach the in-sync replica set before
+      # considering an audit event durably published, not just leader-local.
+      acks: all
+
+server:
+  port: ${SERVER_PORT:8080}
+  # Deliberately still plain HTTP -- iam-policy-svc is called directly by
+  # a real browser (iam-admin-console's policy view/edit pages), which
+  # can't trust our self-signed internal CA. It still fetches a cert at
+  # startup (see Dockerfile/mtls-entrypoint.sh) purely to act as an mTLS
+  # *client* when calling the mandatory-mTLS services (session/identity-svc,
+  # for the AdminAccessGuard checks). See docs/DECISIONS.md, mTLS rollout
+  # entry, for the full caller-graph analysis.
+
+iam:
+  audit:
+    topic: audit-events
+  openbao:
+    address: ${BAO_ADDR:http://openbao:8200}
+    token: ${BAO_TOKEN:}
+  # Added for Service 14 (iam-admin-console) -- this service's first
+  # outbound HTTP dependencies, used only by the admin-gated endpoints
+  # (GET/PUT /api/v1/policies). POST /api/v1/evaluate, the hot-path
+  # service-to-service call, is unaffected and calls neither.
+  dependencies:
+    session-svc: ${SESSION_SVC_URL:http://iam-session-svc:8080}
+    identity-svc: ${IDENTITY_SVC_URL:http://iam-identity-svc:8080}
+  # Added for Service 14 (iam-admin-console) -- see CorsConfig.kt.
+  cors:
+    allowed-origins: ${ADMIN_CONSOLE_ORIGIN:http://localhost:5173}
+
+resilience4j:
+  circuitbreaker:
+    instances:
+      session-svc:
+        failure-rate-threshold: 50
+        sliding-window-size: 5
+        minimum-number-of-calls: 5
+        wait-duration-in-open-state: 30s
+        ignore-exceptions:
+          - org.springframework.web.client.HttpClientErrorException$NotFound
+      identity-svc:
+        failure-rate-threshold: 50
+        sliding-window-size: 5
+        minimum-number-of-calls: 5
+        wait-duration-in-open-state: 30s
+        ignore-exceptions:
+          - org.springframework.web.client.HttpClientErrorException$NotFound
+  retry:
+    instances:
+      session-svc:
+        max-attempts: 5
+        exponential-backoff-multiplier: 2
+        ignore-exceptions:
+          - org.springframework.web.client.HttpClientErrorException$NotFound
+          - io.github.resilience4j.circuitbreaker.CallNotPermittedException
+      identity-svc:
+        max-attempts: 5
+        exponential-backoff-multiplier: 2
+        ignore-exceptions:
+          - org.springframework.web.client.HttpClientErrorException$NotFound
+          - io.github.resilience4j.circuitbreaker.CallNotPermittedException
+
+management:
+  tracing:
+    sampling:
+      # 100% for local MVP dev/demo -- the point of tracing here is to see
+      # every request's full trace, not sample it (BUILD_PLAN.md Section 4.4).
+      # Spring Boot's own default (10%) would drop most single test
+      # requests, discovered while verifying the OQ-1 endpoint fix.
+      probability: 1.0
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+  endpoint:
+    health:
+      probes:
+        enabled: true
+  otlp:
+    metrics:
+      export:
+        enabled: false
+  opentelemetry:
+    tracing:
+      export:
+        otlp:
+          # Jaeger's OTLP receiver only accepts gRPC on 4317; Spring Boot 4's
+          # tracing exporter defaults to HTTP (docs/OPEN_QUESTIONS.md OQ-1,
+          # found in Service 6). 4318 is Jaeger's OTLP/HTTP port.
+          endpoint: ${OTEL_EXPORTER_OTLP_ENDPOINT:http://jaeger:4318}

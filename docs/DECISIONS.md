@@ -1807,3 +1807,28 @@ any login work itself.
 - **Verified for both auth paths** against `whoami`'s header echo: the
   `X-Session-Token` path shows the two available fields (no email); the
   cookie path shows all three.
+
+---
+
+- **[repo structure] 2026-10-26** — Switched from polyrepo to monorepo:
+  all 13 service repos (`iam-tenant-svc`, `iam-identity-svc`, `iam-auth-svc`,
+  `iam-policy-svc`, `iam-session-svc`, `iam-device-svc`, `iam-geo-svc`,
+  `iam-enforcement-svc`, `iam-oidcprovider-svc`, `iam-audit-svc`,
+  `iam-service-kit`, `iam-admin-console`, `iam-login-portal`) plus
+  `service-template` moved from a separate `C:\workspace\` into this repo's
+  `services/` folder. Reason: a single developer builds every service here,
+  and the polyrepo's actual day-to-day cost (one feature routinely spans
+  3-5 services, each needing its own clone/commit/PR) was outweighing its
+  benefit (team-boundary isolation, independent release cadence) — benefits
+  that mainly matter with multiple teams, which this project doesn't have.
+  Purely a source-control change: `docker-compose.yml`'s build `context`
+  moved from `../workspace` to `./services`, each service's Dockerfile
+  still only `COPY`s its own subfolder, so nothing about how services build
+  or deploy changed. Applied to both the local machine and the GCE demo VM
+  (`/opt/iam/workspace` + `/opt/iam/Iam_core_Platform` consolidated the same
+  way). Each service's own git history was set aside on disk
+  (`services/<name>/.git.old-history-backup/`, gitignored) rather than
+  merged in or deleted — a fresh single history starts from this commit.
+  AP-5 (on-prem portability / a service shipping independently later) is
+  unaffected: a folder can still be pulled back out into its own repo
+  whenever that's actually needed; nothing about the monorepo precludes it.

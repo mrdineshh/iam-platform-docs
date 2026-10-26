@@ -452,6 +452,26 @@ decision (`TENANT`, `OU` or `USER`). This ends up in the audit record, so
 months later you can tell not just that someone was denied but *which rule
 did it*.
 
+### Other merged attributes, same mechanism
+
+`allowedCountries`/`blockedCountries` are the attributes walked through
+above, but the identical merge-with-hard-cap machinery resolves two more,
+independently, per level:
+
+- **`mfaRequired`** (default `true` if nothing is configured anywhere — never
+  silently skips 2FA just because nobody set a policy row).
+- **`totpReenrollEveryLogin`** (default `false`) — when resolved `true`, the
+  Device Service's `resetAndEnroll` is used instead of the normal
+  `ensurePending`: it **deletes the user's current device outright and
+  issues a brand-new one on every single login**, no matter whether the old
+  one was already `ACTIVE`. This is a real, intentional feature (some
+  organisations want a fresh secret every session rather than a persistent
+  one) — but it means a previously-saved authenticator-app entry is
+  guaranteed to go stale by the *next* login, which looks indistinguishable
+  from "2FA is broken" if nobody remembers the policy is on. Worth
+  double-checking this flag first whenever 2FA "stops working" for no
+  apparent reason.
+
 **Design note:** the evaluator is a pure function with no database or
 framework dependencies — it takes three policy records and a country and
 returns an answer. That's why it can be tested exhaustively without starting
@@ -584,6 +604,36 @@ On enrolment:
 The device starts `PENDING` and only becomes `ACTIVE` when the user
 successfully verifies a code for the first time — proving the secret actually
 made it onto the phone rather than the QR scan having silently failed.
+
+**A self-service variant, `ensurePending`, added later:** the very first
+login a user ever makes has nowhere to get a QR code from — there's no
+session yet to reach a "my devices" settings page. So `POST /login` (no
+`totpCode` supplied, no `ACTIVE` device on file yet) calls this instead of
+failing closed: it finds-or-creates a `PENDING` device for that user and
+hands the QR straight back as part of the login response itself. Calling it
+twice for the same not-yet-activated user is safe and idempotent — it
+re-reveals the *same* secret rather than minting a second one, specifically
+so reloading the enrollment page doesn't invalidate the QR the user already
+scanned.
+
+**A real race condition found and fixed during live testing:** "find-or-create"
+is two steps — look, then act — and two near-simultaneous calls (e.g. a
+double form submit, or two tabs) could both see "nothing yet" and both
+create a device, leaving two different secrets for one user with no way to
+tell which one the QR on screen actually matched. The fix is a database-level
+partial unique index — `one PENDING device per (tenant, user)` — so the
+second concurrent insert fails outright instead of silently succeeding, and
+the losing request now re-reads and reveals whichever device actually won,
+so every concurrent caller converges on one secret instead of racing.
+
+**The QR's label matters more than it looks.** The `otpauth://` link encodes
+a human-readable label shown inside the authenticator app. It must be the
+user's **email**, not an internal ID — using the email is what lets two
+entries for two different people (an admin account and a test user, say)
+look obviously different in the list instead of both reading as an
+indistinguishable "IAM Platform" with no way to tell them apart, which is a
+real source of "my code doesn't work" reports that are actually "I read the
+code from the wrong entry."
 
 ### How the secret is encrypted
 
@@ -1000,6 +1050,173 @@ leading broker.
 
 ---
 
+## 2.10a SAML — the second way to connect an app (added later, same service)
+
+Everything in §2.9 above is **OpenID Connect** (OIDC): a modern, JSON-based
+protocol. But a lot of enterprise software — Google Workspace is the running
+example in this system — only speaks an older, XML-based protocol called
+**SAML 2.0** (Security Assertion Markup Language). To let the platform be the
+login provider for a Google Workspace domain, SAML support was added
+**inside the same `iam-oidcprovider-svc`**, not as a new service: it's the
+same job (prove who the user is, hand that proof to another application),
+just a second protocol dialect for doing it. The service was effectively
+renamed in spirit, if not in code, to "the Identity Provider Service."
+
+### OIDC vs SAML — same job, different paperwork
+
+| | OIDC | SAML |
+|---|---|---|
+| Data format | JSON | XML |
+| Proof of identity | A signed JWT ("ID token") | A signed XML document (an "Assertion") |
+| How the app is identified | `client_id` + `client_secret` | an "Entity ID" (just a URL-shaped string) |
+| Where the user lands first | this platform's `/authorize` | this platform's `/saml/sso` |
+| Where the proof is delivered | the app fetches it with a `code` | the browser **POSTs** the signed XML to the app directly |
+| Registered in | `tenant_db.oidc_clients` | `tenant_db.saml_sps` |
+
+Both ultimately do the same three things in the same order: (1) figure out
+which app and which company, (2) send the browser to the Login Portal to
+actually authenticate through the one real Authentication Service (AP-1 — no
+exceptions for SAML either), (3) hand back a signed proof of identity. SAML
+is just older and more ceremonial about step 3.
+
+### The new storage: `tenant_db.saml_sps`
+
+One row per third-party app that uses SAML instead of OIDC to talk to this
+platform ("SP" = Service Provider, SAML's term for "the app relying on us"):
+```
+id            UUID
+tenant_id     UUID
+name          VARCHAR    -- e.g. "Google Workspace"
+sp_entity_id  VARCHAR    -- the app's self-declared identity, e.g.
+                          -- https://accounts.google.com/samlrp/0406k8732wd4hds
+acs_url       VARCHAR    -- "Assertion Consumer Service" URL -- literally
+                          -- "the address to POST the signed proof to"
+launch_url    VARCHAR    -- nullable, for the app-launcher tile only
+created_at    TIMESTAMPTZ
+```
+`sp_entity_id` has a **global** unique index, not scoped to a tenant. This is
+a direct consequence of how SAML's opening move works (next section): the
+very first message arrives with *only* an entity ID and no other way to say
+"which company does this belong to," so entity ids must be unique across the
+whole platform, the same way `tenant_db.tenants.subdomain` must be.
+
+**A real debugging lesson, worth recording plainly:** the entity ID is
+**whatever the other side says it is** — not something this platform gets to
+choose. For Google Workspace specifically, it's a long opaque string Google
+generates per SSO profile (`https://accounts.google.com/samlrp/<id>`), shown
+on Google's own setup screen — not simply `"google.com"`. Registering the
+wrong value here is a completely silent failure right up until the real
+redirect arrives: the signed response generation, the certificate, the
+whole pipeline can be cryptographically perfect, and the very first real
+request still bounces with "No SAML SP registered for entity ID '...'."
+There's no way to guess this value; it must be copied from the other side's
+own setup screen.
+
+### The SP-initiated login flow, step by step
+
+SAML in this system only supports the **SP-initiated** pattern: the user
+starts at the third-party app (e.g. types `mail.google.com`), and that app
+kicks things off — never the other way around.
+
+1. **The app redirects the browser here**, to `GET /saml/sso`, carrying one
+   query parameter: `SAMLRequest`. This isn't plain XML — it's DEFLATE
+   compressed, then base64-encoded, a SAML-specific encoding called the
+   HTTP-Redirect binding (binding = "which transport mechanism carries the
+   message"). `SamlAuthnRequestParser` reverses this: base64-decode, inflate,
+   parse as XML, and pull out two things — the request's own `ID` (so the
+   final answer can reference "this is a reply to that specific question")
+   and the `Issuer` (the entity ID — *this* app's self-declared identity).
+2. **Look up the SP** by that entity id in `tenant_db.saml_sps`. Unknown
+   entity id → error page, same "never redirect somewhere unvalidated"
+   discipline as the OIDC flow's `redirect_uri` check.
+3. **Stash the request and redirect to the Login Portal** — `SamlRequestStore`
+   writes a `PendingSamlRequest` to Valkey (key `saml:request:<uuid>`, 10
+   minute expiry, single-use via GETDEL — exactly the same pattern as OIDC's
+   authorization codes) holding the SP's id, its ACS URL, the original
+   request's ID, and any `RelayState` (an opaque value the app asked to get
+   back unchanged — Google uses it to remember which Google service the user
+   was originally trying to reach).
+4. **The Login Portal authenticates the user for real**, through the exact
+   same `/login` call every other flow uses — same password check, same
+   policy evaluation, same 2FA. SAML never gets to skip any of that.
+5. **`POST /saml/complete`** — server-to-server, portal to this service, the
+   same way OIDC's `/authorize/complete` works. Consumes the stashed request
+   (GETDEL — single use again), confirms the now-logged-in session's tenant
+   matches the SP's tenant, and builds the signed response.
+6. **The signed Assertion is handed back as an auto-submitting HTML form**,
+   not a redirect. SAML's HTTP-POST binding genuinely requires the browser to
+   submit a real `<form method="POST">` with the XML (base64-encoded) in a
+   hidden field — there is no URL-based equivalent for an XML payload this
+   size. `SamlAutoPostForm` on the Login Portal renders exactly that form and
+   submits it via `formRef.current.submit()` the instant it's on the page, so
+   to the user it looks like a redirect even though mechanically it's a form
+   post.
+
+### Building and signing the Assertion — the part worth understanding slowly
+
+This is the most technically demanding code in the whole platform, so it's
+worth walking through why each piece exists.
+
+**The shape of the document.** A `<Response>` wraps one `<Assertion>`, which
+contains: who the user is (`<Subject><NameID>`, the user's email), which
+company's Login Portal vouched for them, conditions on who's allowed to trust
+it (`<AudienceRestriction>` — "this proof is only valid for this specific
+app's entity id," stopping one app from replaying a proof meant for another),
+and a validity window (`NotBefore` / `NotOnOrAfter`, 5 minutes by default).
+
+**Signing, not encrypting.** The XML is **signed**, not secret — anyone can
+read it, but nobody can forge or silently alter it without the signature
+breaking. This uses **XML-DSig** (XML Digital Signature), a W3C standard,
+through Java's own built-in `javax.xml.crypto.dsig` API — deliberately *not*
+a popular third-party library called OpenSAML, because that library is only
+published on an external Maven repository the build wouldn't reliably reach,
+not the usual Maven Central. The signing key is a **2048-bit RSA key pair**
+with a self-signed certificate, generated once and kept forever in OpenBao
+(platform-wide, not per-tenant, the same "get or create" pattern as every
+other OpenBao-held key in this system) — the other side (Google) is given the
+matching public certificate once, during setup, and checks every future
+signature against it.
+
+**The single hardest bug in this entire build**, worth recording because it's
+a genuinely subtle, real-world XML gotcha: signing an XML document requires
+*canonicalizing* it first — converting it to one single, unambiguous byte
+sequence, because the same logical XML can be written as many different byte
+sequences (attribute order, whitespace, how namespaces are declared) and a
+signature is computed over exact bytes. The bug: `response.setAttribute
+("xmlns:samlp", ...)` *looks* like it declares an XML namespace, but it only
+sets a plain attribute that happens to be named `xmlns:samlp` — it does not
+register as a true namespace node in the live, in-memory document. The
+canonicalizer, working from the live document at signing time, therefore saw
+a different namespace picture than any real XML parser would see when it
+later re-parses the exact same text from scratch. Signing and verifying
+disagreed about the document's own canonical bytes — not a cryptography bug
+at all, a DOM-construction bug. The fix was one method call:
+`setAttributeNS("http://www.w3.org/2000/xmlns/", "xmlns:samlp", ...)`, which
+creates a real namespace node. Caught by writing a self-check that re-parsed
+the service's own output and re-verified it in the same process — proving the
+mismatch existed even *before* comparing against any other implementation —
+then independently confirmed fixed using `xmlsec1` (a C reference
+implementation most real-world SAML software is built on) and a second,
+unrelated Python library, specifically so the fix wasn't just "looks right to
+our own code."
+
+**Why this matters to explain to someone else:** it's a good illustration
+that security-critical code can be subtly, silently wrong in a way that has
+nothing to do with the cryptography itself — the keys and algorithm were
+correct the whole time; the bug was in how the XML tree was built in memory.
+
+### The platform's own metadata
+
+`GET /saml/metadata` returns an unsigned XML document describing *this
+platform* as an identity provider — its own entity id, its SSO URL, and its
+public certificate — in the standard format any SAML-speaking app can import
+directly instead of an admin typing those three values in by hand. It's
+built from a plain string template rather than the signing machinery above,
+deliberately: no user-controlled input ever flows into it, so there's nothing
+to inject and nothing that needs signing.
+
+---
+
 ## 2.11 The Shared Toolkit (`iam-service-kit`)
 
 Not a running service — a library every backend service includes. It is
@@ -1140,6 +1357,37 @@ The app       → OIDC Provider : POST /token
                                 ← {access_token, id_token}
 ```
 
+If the app being logged into speaks **SAML** instead (e.g. Google Workspace),
+the hops are structurally the same idea with SAML's own ceremony:
+```
+Google        → OIDC/SAML Provider : GET /saml/sso?SAMLRequest=<deflated+base64 XML>
+                                     → inflate + parse, pull Issuer + ID
+                                     → look up tenant_db.saml_sps by entity id
+                                     → writes saml:request:<uuid> to Valkey, 10m expiry
+                                     ← redirect to Login Portal's /saml page
+
+Browser       → Login Portal        : normal /login authentication
+                                      (identical Auth Service sequence as above)
+
+Login Portal  → OIDC/SAML Provider : POST /saml/complete (server-to-server)
+                                     → GETDEL the pending request (single use)
+                                     → confirms session's tenant == SP's tenant
+                                     → builds + signs the Assertion
+                                       (RSA-2048 key from OpenBao, XML-DSig,
+                                       Exclusive C14N)
+                                     → publishes saml.assertion_issued → Kafka
+                                     ← {acsUrl, base64 signed XML, relayState}
+
+Browser       → Google (ACS URL)    : auto-submitting HTML form, POST
+                                      (HTTP-POST binding — not a redirect)
+                                     ← Google verifies the signature against
+                                       the certificate it was given at setup,
+                                       signs the user into Workspace
+```
+Same underlying guarantee as OIDC: the actual authentication decision — 2FA,
+IP/country policy, all of it — happens exactly once, in the Authentication
+Service, regardless of which protocol the app on the other end speaks.
+
 ---
 
 # Part 4 — Continuous Enforcement, Traced
@@ -1261,6 +1509,18 @@ The exhaustive list of edge cases and how each is handled.
 | Wrong client secret | Rejected |
 | Session belongs to a different company than the app | Rejected |
 | Underlying session killed | Access token stops working immediately at `/userinfo` |
+
+## SAML
+
+| Situation | Result |
+|---|---|
+| Incoming `Issuer` (entity id) not registered in `saml_sps` | Error page — "No SAML SP registered for entity ID '...'", no redirect |
+| Registered entity id doesn't exactly match what the real app sends | **Same error as "unregistered"** — SAML entity ids are exact strings, not patterns; this is the single most common real-world setup mistake, see §2.10a |
+| Pending SAML request reused or expired (>10 min) | Rejected, `SamlRequestNotFoundException` |
+| Session's tenant ≠ the SP's tenant | Rejected — same cross-company protection as OIDC |
+| Account is a Google Workspace **Super Admin** | Google exempts super admins from third-party SSO entirely, by Google's own design — this platform never even receives a request; cannot be configured around, only worked around by testing with a non-admin account |
+| Brand-new Workspace account, never completed a first direct Google sign-in | Google refuses the SSO redirect itself ("Couldn't sign you in") before this platform is ever contacted; the account must complete one normal Google password sign-in first |
+| `totpReenrollEveryLogin` policy enabled | Not SAML-specific, but hits hardest here: a fresh 2FA secret is issued on *every* login attempt (OIDC and SAML both), so a previously-saved authenticator entry goes stale before it can ever be reused — see Device Service, §2.6 |
 
 ## Infrastructure
 

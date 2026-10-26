@@ -1,0 +1,145 @@
+spring:
+  application:
+    name: iam-enforcement-svc
+
+  data:
+    redis:
+      host: ${REDIS_HOST:valkey}
+      port: 6379
+
+  kafka:
+    bootstrap-servers: ${KAFKA_BOOTSTRAP:kafka-1:9092,kafka-2:9092,kafka-3:9092}
+    producer:
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: org.apache.kafka.common.serialization.StringSerializer
+      retries: 5
+      # Real replication now (3 brokers, min-insync-replicas: 2) -- wait
+      # for the write to actually reach the in-sync replica set before
+      # considering an audit event durably published, not just leader-local.
+      acks: all
+
+server:
+  port: ${SERVER_PORT:8080}
+  # Deliberately still plain HTTP -- the reverse-proxy piece added to this
+  # service (docs/DECISIONS.md, gateway rollout entry) is a public-facing
+  # entry point for whatever app it fronts (e.g. Pulse), which can't trust
+  # our self-signed internal CA. It still fetches a cert at startup (see
+  # Dockerfile/mtls-entrypoint.sh) purely to act as an mTLS *client* when
+  # calling the mandatory-mTLS services (session-svc, geo-svc). See
+  # docs/DECISIONS.md, mTLS rollout entry, for the full caller-graph
+  # analysis.
+
+iam:
+  audit:
+    topic: audit-events
+  openbao:
+    address: ${BAO_ADDR:http://openbao:8200}
+    token: ${BAO_TOKEN:}
+  dependencies:
+    session-svc: ${SESSION_SVC_URL:http://iam-session-svc:8080}
+    geo-svc: ${GEO_SVC_URL:http://iam-geo-svc:8080}
+    policy-svc: ${POLICY_SVC_URL:http://iam-policy-svc:8080}
+  enforcement:
+    policy-cache-ttl-seconds: 30
+    proxy:
+      # Config-driven PEP-as-gateway (docs/DECISIONS.md, gateway rollout
+      # entry) -- blank by default (ProxyController answers 503 until
+      # this is set). Point at any app's base URL to prove continuous
+      # enforcement against real forwarded traffic, not just direct calls
+      # to /api/v1/enforce.
+      upstream-url: ${PROXY_UPSTREAM_URL:}
+      gateway:
+        # Lets this service act as its own OpenID Connect Relying Party so a
+        # plain browser with no X-Session-Token can be sent through the
+        # normal login flow instead (docs/DECISIONS.md, gateway cookie-login
+        # entry). Blank client-id/secret -- ProxyController's redirect falls
+        # back to a plain 401 (matching the pre-existing behavior) until a
+        # real client is registered via iam-tenant-svc's oidc-clients
+        # endpoint, the same way any third-party app would be.
+        client-id: ${GATEWAY_OIDC_CLIENT_ID:}
+        client-secret: ${GATEWAY_OIDC_CLIENT_SECRET:}
+        oidc-provider-url: ${OIDC_PROVIDER_URL:http://iam-oidcprovider-svc:8080}
+        base-url: ${GATEWAY_BASE_URL:http://localhost:8089}
+        cookie-name: ${GATEWAY_COOKIE_NAME:iam_gw_session}
+        # false for local plain-HTTP testing; must be true once this
+        # service sits behind real TLS termination, or browsers silently
+        # refuse to ever send the cookie back.
+        cookie-secure: ${GATEWAY_COOKIE_SECURE:false}
+
+resilience4j:
+  circuitbreaker:
+    instances:
+      session-svc:
+        failure-rate-threshold: 50
+        sliding-window-size: 5
+        minimum-number-of-calls: 5
+        wait-duration-in-open-state: 30s
+        ignore-exceptions:
+          - org.springframework.web.client.HttpClientErrorException$NotFound
+      geo-svc:
+        failure-rate-threshold: 50
+        sliding-window-size: 5
+        minimum-number-of-calls: 5
+        wait-duration-in-open-state: 30s
+      policy-svc:
+        failure-rate-threshold: 50
+        sliding-window-size: 5
+        minimum-number-of-calls: 5
+        wait-duration-in-open-state: 30s
+      oidc-provider:
+        failure-rate-threshold: 50
+        sliding-window-size: 5
+        minimum-number-of-calls: 5
+        wait-duration-in-open-state: 30s
+        # /userinfo answering 401 for an expired/already-terminated access
+        # token is a legitimate, expected business outcome (GatewayOidcClient
+        # treats it as "not logged in", not a service failure) -- same
+        # precedent as session-svc excluding its own expected NotFound above.
+        ignore-exceptions:
+          - org.springframework.web.client.HttpClientErrorException$Unauthorized
+  retry:
+    instances:
+      session-svc:
+        max-attempts: 5
+        exponential-backoff-multiplier: 2
+        ignore-exceptions:
+          - io.github.resilience4j.circuitbreaker.CallNotPermittedException
+          - org.springframework.web.client.HttpClientErrorException$NotFound
+      geo-svc:
+        max-attempts: 5
+        exponential-backoff-multiplier: 2
+        ignore-exceptions:
+          - io.github.resilience4j.circuitbreaker.CallNotPermittedException
+      policy-svc:
+        max-attempts: 5
+        exponential-backoff-multiplier: 2
+        ignore-exceptions:
+          - io.github.resilience4j.circuitbreaker.CallNotPermittedException
+      oidc-provider:
+        max-attempts: 5
+        exponential-backoff-multiplier: 2
+        ignore-exceptions:
+          - io.github.resilience4j.circuitbreaker.CallNotPermittedException
+          - org.springframework.web.client.HttpClientErrorException$Unauthorized
+
+management:
+  tracing:
+    sampling:
+      probability: 1.0
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+  endpoint:
+    health:
+      probes:
+        enabled: true
+  otlp:
+    metrics:
+      export:
+        enabled: false
+  opentelemetry:
+    tracing:
+      export:
+        otlp:
+          endpoint: ${OTEL_EXPORTER_OTLP_ENDPOINT:http://jaeger:4318}

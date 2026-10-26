@@ -1,0 +1,94 @@
+spring:
+  application:
+    name: iam-audit-svc
+
+  datasource:
+    url: ${DB_URL:jdbc:postgresql://localhost:5432/audit_db}
+    username: ${DB_USER:iam}
+    password: ${DB_PASSWORD:localdev}
+
+  jpa:
+    hibernate:
+      ddl-auto: validate
+    open-in-view: false
+
+  flyway:
+    locations: classpath:db/migration
+
+  kafka:
+    bootstrap-servers: ${KAFKA_BOOTSTRAP:kafka-1:9092,kafka-2:9092,kafka-3:9092}
+    consumer:
+      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      value-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      auto-offset-reset: earliest
+      enable-auto-commit: false
+    listener:
+      ack-mode: RECORD
+    producer:
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: org.apache.kafka.common.serialization.StringSerializer
+      retries: 5
+      # Real replication now (3 brokers, min-insync-replicas: 2) -- wait
+      # for the write to actually reach the in-sync replica set before
+      # considering an audit event durably published, not just leader-local.
+      acks: all
+
+server:
+  port: ${SERVER_PORT:8081}
+
+iam:
+  audit:
+    topic: audit-events
+    dlq-topic: audit-events-dlq
+    max-attempts: 5
+  openbao:
+    address: ${BAO_ADDR:http://openbao:8200}
+    token: ${BAO_TOKEN:}
+
+resilience4j:
+  circuitbreaker:
+    instances:
+      default:
+        failure-rate-threshold: 50
+        sliding-window-size: 5
+        wait-duration-in-open-state: 30s
+  retry:
+    instances:
+      default:
+        max-attempts: 5
+        exponential-backoff-multiplier: 2
+
+management:
+  tracing:
+    sampling:
+      # 100% for local MVP dev/demo -- the point of tracing here is to see
+      # every request's full trace, not sample it (BUILD_PLAN.md Section 4.4).
+      # Spring Boot's own default (10%) would drop most single test
+      # requests, discovered while verifying the OQ-1 endpoint fix.
+      probability: 1.0
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+  endpoint:
+    health:
+      probes:
+        enabled: true
+  # Jaeger's all-in-one OTLP receiver on 4317 is gRPC-only; Micrometer's
+  # OtlpMeterRegistry defaults to HTTP, which just fails on every push
+  # cycle. MVP only requires tracing (BUILD_PLAN.md Section 4.4) —
+  # metrics/Prometheus is a later concern, so disable the mismatched
+  # exporter instead of leaving it retrying and failing forever.
+  otlp:
+    metrics:
+      export:
+        enabled: false
+  opentelemetry:
+    tracing:
+      export:
+        otlp:
+          # Jaeger's all-in-one OTLP receiver only accepts gRPC on 4317;
+          # Spring Boot 4's tracing exporter defaults to HTTP, which was
+          # silently failing on every span (docs/OPEN_QUESTIONS.md OQ-1,
+          # found in Service 6). 4318 is Jaeger's OTLP/HTTP port.
+          endpoint: ${OTEL_EXPORTER_OTLP_ENDPOINT:http://jaeger:4318}

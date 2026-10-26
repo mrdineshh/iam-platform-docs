@@ -197,6 +197,12 @@ path "secret/data/fcm-service-account" {
 path "secret/data/oidc-signing-key" {
   capabilities = ["read", "create", "update"]
 }
+path "secret/data/break-glass-token/*" {
+  capabilities = ["read", "create", "update"]
+}
+path "secret/data/saml-signing-key" {
+  capabilities = ["read", "create", "update"]
+}
 """
 
 

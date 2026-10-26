@@ -1,0 +1,74 @@
+spring:
+  application:
+    name: service-template
+  kafka:
+    bootstrap-servers: ${KAFKA_BOOTSTRAP:kafka:9092}
+    producer:
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: org.apache.kafka.common.serialization.StringSerializer
+      retries: 5
+
+server:
+  port: ${SERVER_PORT:8080}
+
+iam:
+  service-token: ${INTERNAL_SERVICE_TOKEN:}
+  audit:
+    topic: audit-events
+  openbao:
+    address: ${BAO_ADDR:http://openbao:8200}
+    token: ${BAO_TOKEN:}
+  dependencies:
+    tenant-svc: ${TENANT_SVC_URL:http://iam-tenant-svc:8080}
+    policy-svc: ${POLICY_SVC_URL:http://iam-policy-svc:8080}
+    geo-svc: ${GEO_SVC_URL:http://iam-geo-svc:8080}
+    session-svc: ${SESSION_SVC_URL:http://iam-session-svc:8080}
+
+# Bound by io.github.resilience4j:resilience4j-spring-boot3's own
+# auto-configuration — must stay top-level, not nested under iam:.
+resilience4j:
+  circuitbreaker:
+    instances:
+      default:
+        failure-rate-threshold: 50
+        sliding-window-size: 5
+        wait-duration-in-open-state: 30s
+  retry:
+    instances:
+      default:
+        max-attempts: 5
+        exponential-backoff-multiplier: 2
+
+management:
+  tracing:
+    sampling:
+      # 100% for local MVP dev/demo -- the point of tracing here is to see
+      # every request's full trace, not sample it (BUILD_PLAN.md Section 4.4).
+      # Spring Boot's own default (10%) would drop most single test
+      # requests, discovered while verifying the OQ-1 endpoint fix.
+      probability: 1.0
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+  endpoint:
+    health:
+      probes:
+        enabled: true
+  # Jaeger's all-in-one OTLP receiver on 4317 is gRPC-only; Micrometer's
+  # OtlpMeterRegistry defaults to HTTP, which just fails on every push
+  # cycle. MVP only requires tracing (BUILD_PLAN.md Section 4.4) —
+  # metrics/Prometheus is a later concern, so disable the mismatched
+  # exporter instead of leaving it retrying and failing forever.
+  otlp:
+    metrics:
+      export:
+        enabled: false
+  opentelemetry:
+    tracing:
+      export:
+        otlp:
+          # Jaeger's OTLP receiver only accepts gRPC on 4317; Spring Boot 4's
+          # tracing exporter defaults to HTTP (docs/OPEN_QUESTIONS.md OQ-1,
+          # found in Service 6). 4318 is Jaeger's OTLP/HTTP port.
+          endpoint: ${OTEL_EXPORTER_OTLP_ENDPOINT:http://jaeger:4318}

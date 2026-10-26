@@ -1,0 +1,134 @@
+spring:
+  application:
+    name: iam-device-svc
+
+  datasource:
+    url: ${DB_URL:jdbc:postgresql://localhost:5432/device_db}
+    username: ${DB_USER:iam}
+    password: ${DB_PASSWORD:localdev}
+
+  jpa:
+    hibernate:
+      ddl-auto: validate
+    open-in-view: false
+
+  flyway:
+    locations: classpath:db/migration
+
+  data:
+    redis:
+      host: ${REDIS_HOST:valkey}
+      port: 6379
+
+  kafka:
+    bootstrap-servers: ${KAFKA_BOOTSTRAP:kafka-1:9092,kafka-2:9092,kafka-3:9092}
+    producer:
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: org.apache.kafka.common.serialization.StringSerializer
+      retries: 5
+      # Real replication now (3 brokers, min-insync-replicas: 2) -- wait
+      # for the write to actually reach the in-sync replica set before
+      # considering an audit event durably published, not just leader-local.
+      acks: all
+
+  ssl:
+    bundle:
+      jks:
+        mtls:
+          keystore:
+            location: file:/mtls/keystore.p12
+            password: changeit
+            type: PKCS12
+          truststore:
+            location: file:/mtls/truststore.p12
+            password: changeit
+            type: PKCS12
+
+server:
+  port: ${SERVER_PORT:8080}
+  ssl:
+    bundle: mtls
+    # Mandatory -- iam-device-svc is called only by iam-auth-svc, never by
+    # a browser or Node frontend directly (enrollment/QR display is
+    # curl-only for now -- see docs/specs/iam-login-portal-SPEC.md's
+    # deferred FR-2.14). See docs/DECISIONS.md, mTLS rollout entry.
+    client-auth: need
+
+iam:
+  audit:
+    topic: audit-events
+  openbao:
+    address: ${BAO_ADDR:http://openbao:8200}
+    token: ${BAO_TOKEN:}
+  dependencies:
+    identity-svc: ${IDENTITY_SVC_URL:http://iam-identity-svc:8080}
+  device:
+    totp:
+      max-failed-attempts: 5
+      lock-duration: 5m
+      # RFC 6238 defaults: 30s step, 6 digits, +-1 step window for clock drift.
+      step-seconds: 30
+      digits: 6
+      drift-window-steps: 1
+    push:
+      wait-timeout-seconds: 60
+      # Buffer over wait-timeout-seconds so a challenge doesn't expire in
+      # Valkey mid-poll on the very last iteration.
+      challenge-ttl-seconds: 90
+  fcm:
+    project-id: ${FCM_PROJECT_ID:}
+
+resilience4j:
+  circuitbreaker:
+    instances:
+      identity-svc:
+        failure-rate-threshold: 50
+        sliding-window-size: 5
+        minimum-number-of-calls: 5
+        wait-duration-in-open-state: 30s
+        ignore-exceptions:
+          - org.springframework.web.client.HttpClientErrorException$NotFound
+      fcm:
+        failure-rate-threshold: 50
+        sliding-window-size: 5
+        minimum-number-of-calls: 5
+        wait-duration-in-open-state: 30s
+  retry:
+    instances:
+      identity-svc:
+        max-attempts: 5
+        exponential-backoff-multiplier: 2
+        ignore-exceptions:
+          - org.springframework.web.client.HttpClientErrorException$NotFound
+          - io.github.resilience4j.circuitbreaker.CallNotPermittedException
+      fcm:
+        max-attempts: 3
+        exponential-backoff-multiplier: 2
+        ignore-exceptions:
+          - io.github.resilience4j.circuitbreaker.CallNotPermittedException
+
+management:
+  server:
+    port: ${MANAGEMENT_PORT:9088}
+    ssl:
+      enabled: false
+  tracing:
+    sampling:
+      probability: 1.0
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+  endpoint:
+    health:
+      probes:
+        enabled: true
+  otlp:
+    metrics:
+      export:
+        enabled: false
+  opentelemetry:
+    tracing:
+      export:
+        otlp:
+          endpoint: ${OTEL_EXPORTER_OTLP_ENDPOINT:http://jaeger:4318}

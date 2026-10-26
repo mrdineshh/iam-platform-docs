@@ -77,43 +77,64 @@ using the interview-then-spec pattern below:
 
 ## Repository & Module Structure
 
-Given the deliberately polyglot stack (Kotlin, Go, Rust, Swift, Kotlin/Android,
-React, Next.js — each with different build tooling), use a **polyrepo**
-structure, not a single monorepo: independent build/CI/deploy per service is
-simpler than forcing five toolchains into one repo, and it matches AP-5
-(dedicated-tenant/on-prem phases will want to version and ship these
-independently anyway).
+**Monorepo (changed 2026-10-26 — see `docs/DECISIONS.md`).** The original plan
+here was a polyrepo (independent build/CI/deploy per service, matching AP-5's
+on-prem-portability reasoning). That tradeoff mainly pays off with multiple
+teams working independently; with a single developer building every service,
+the daily cost of a polyrepo (one feature routinely touches 3-5 services at
+once — e.g. the SAML IdP build, the group-based app-access feature — each
+needing its own clone/commit/PR) outweighed the isolation benefit. Switched to
+one repo, all service code under `services/`. **This did not change how
+anything deploys**: each service still builds its own independent Docker
+image from its own folder (`docker-compose.yml`'s build `context` points at
+`./services`, each Dockerfile `COPY`s only its own subfolder) — a monorepo is
+a source-control decision, not a deployment one. AP-5 (on-prem portability,
+a service being extracted to ship independently later) is unaffected: nothing
+stops pulling a folder back out into its own repo when that's actually needed.
 
 ```
-iam-platform/                    (this repo — umbrella/docs only, no app code)
+Iam_core_Platform/                (this repo — monorepo root)
 ├── CLAUDE.md
 ├── docs/
 │   ├── BRD.md
 │   ├── ENGINEERING_GUARDRAILS.md
-│   ├── DECISIONS.md             (Tier-2 decision log — created on first use)
+│   ├── DECISIONS.md             (Tier-2 decision log)
 │   ├── OPEN_QUESTIONS.md        (Tier-3 flags awaiting human input)
+│   ├── INTERNALS.md             (deep technical walkthrough, every service)
 │   └── specs/                   (one <module>-SPEC.md per module, see below)
 ├── infra/                       (Helm charts, OpenTofu configs — portable, no app code)
-└── (links/references to the service repos below, not the code itself)
-
-iam-core-platform/               (Kotlin + Spring Boot — directory sync, auth
-                                   policy engine, admin APIs, RBAC, SCIM)
-iam-adfs-ldap-connector/         (Go — customer-premises connector for
-                                   on-prem AD without ADFS, FR-2.4. Outbound-
-                                   only mTLS gRPC to iam-core-platform; no
-                                   inbound port on customer network. Added
-                                   2026-08-03 — see DECISIONS.md.)
-iam-pep-gateway/                 (Go — policy enforcement point)
-iam-endpoint-agent/              (Rust — Windows/macOS/Linux agent)
-iam-mobile-ios/                  (Swift — Mobile Authenticator, iOS)
-iam-mobile-android/              (Kotlin — Mobile Authenticator, Android)
-iam-admin-console/                (React + Vite — tenant admin SPA)
-iam-login-portal/                (Next.js — public login/self-service, SSR)
+├── docker-compose.yml           (local/demo orchestration — build context: ./services)
+└── services/
+    ├── iam-tenant-svc/          (Kotlin + Spring Boot — tenants, OIDC clients,
+    │                              SAML SPs, groups, admin proxy endpoints)
+    ├── iam-identity-svc/        (Kotlin + Spring Boot — users, passwords, groups)
+    ├── iam-auth-svc/            (Kotlin + Spring Boot — the one login orchestrator, AP-1)
+    ├── iam-policy-svc/          (Kotlin + Spring Boot — merge-with-hard-cap policy engine)
+    ├── iam-session-svc/         (Kotlin + Spring Boot — Valkey-backed sessions)
+    ├── iam-device-svc/          (Kotlin + Spring Boot — TOTP/push second factor)
+    ├── iam-geo-svc/             (Kotlin + Spring Boot — offline IP → country lookup)
+    ├── iam-enforcement-svc/     (Kotlin + Spring Boot — the PEP: continuous
+    │                              enforcement + reverse-proxy gateway for
+    │                              connected apps, AP-2)
+    ├── iam-oidcprovider-svc/    (Kotlin + Spring Boot — OIDC + SAML 2.0 IdP:
+    │                              both protocols other apps use for SSO)
+    ├── iam-audit-svc/           (Kotlin + Spring Boot — Kafka consumer, audit_db)
+    ├── iam-service-kit/         (Kotlin — shared technical plumbing library only,
+    │                              no domain concepts, see Section 2.11 INTERNALS.md)
+    ├── iam-admin-console/       (React + Vite — tenant admin SPA)
+    ├── iam-login-portal/        (Next.js — public login/self-service, SSR)
+    └── service-template/        (scaffold for the next new service)
 ```
 
-Each service repo gets its own `CLAUDE.md` (inheriting the same AP-1–AP-8
-principles, scoped to what's relevant for that service) once that module's
-build begins.
+**Not yet built** (future phases — do not build now, see BRD Section 9):
+`iam-adfs-ldap-connector` (Go, on-prem AD connector, FR-2.4), `iam-endpoint-agent`
+(Rust), `iam-mobile-ios` (Swift), `iam-mobile-android` (Kotlin). When these
+start, they land in `services/` the same way — the monorepo decision applies
+to the whole project, not just what exists today.
+
+Each service's own `CLAUDE.md` (inheriting the same AP-1–AP-8 principles,
+scoped to what's relevant for that service) lives inside its own
+`services/<name>/` folder once that module's build begins.
 
 ## Workflow For Each Module
 

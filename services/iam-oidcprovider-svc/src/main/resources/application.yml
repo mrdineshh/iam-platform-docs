@@ -1,0 +1,127 @@
+spring:
+  application:
+    name: iam-oidcprovider-svc
+
+  data:
+    redis:
+      host: ${REDIS_HOST:valkey}
+      port: ${REDIS_PORT:6379}
+      timeout: 2s
+      connect-timeout: 2s
+
+  kafka:
+    bootstrap-servers: ${KAFKA_BOOTSTRAP:kafka-1:9092,kafka-2:9092,kafka-3:9092}
+    producer:
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: org.apache.kafka.common.serialization.StringSerializer
+      retries: 5
+      # Real replication now (3 brokers, min-insync-replicas: 2) -- wait
+      # for the write to actually reach the in-sync replica set before
+      # considering an audit event durably published, not just leader-local.
+      acks: all
+
+server:
+  port: ${SERVER_PORT:8080}
+  # Deliberately still plain HTTP -- this is a standards-compliant public
+  # OIDC provider (/authorize, /token, /userinfo, discovery, JWKS) reached
+  # directly by real browsers and third-party app backends (e.g. Pulse).
+  # Serving it from our self-signed internal CA would show every real
+  # browser an untrusted-certificate warning for no real security gain --
+  # this service's actual protection is OIDC's own code/token/session
+  # security, not transport-level client certs. It still fetches a cert at
+  # startup (see Dockerfile/mtls-entrypoint.sh) purely to act as an mTLS
+  # *client* when calling the mandatory-mTLS services (session/identity/
+  # tenant-svc). See docs/DECISIONS.md, mTLS rollout entry, for the full
+  # caller-graph analysis.
+
+iam:
+  audit:
+    topic: audit-events
+  openbao:
+    address: ${BAO_ADDR:http://openbao:8200}
+    token: ${BAO_TOKEN:}
+  dependencies:
+    tenant-svc: ${TENANT_SVC_URL:http://iam-tenant-svc:8080}
+    session-svc: ${SESSION_SVC_URL:http://iam-session-svc:8080}
+    # Added for Service 13 (iam-login-portal) -- resolves the email for a
+    # validated session's userId. auth-svc is no longer called directly by
+    # this service at all (the portal calls it instead).
+    identity-svc: ${IDENTITY_SVC_URL:http://iam-identity-svc:8080}
+  oidc:
+    # Must be the URL a real external client (browser + server-to-server
+    # /token call) can actually reach -- the host-mapped port for local
+    # testing, never the internal Docker service name.
+    issuer: ${OIDC_ISSUER:http://localhost:8090}
+    access-token-ttl: 10m
+    id-token-ttl: 10m
+    # See OidcProperties.loginPortalBaseUrl -- local dev default is the
+    # host-mapped login-portal port; production sets a real
+    # "https://{subdomain}.login.platform.com"-shaped value.
+    login-portal-base-url: ${LOGIN_PORTAL_BASE_URL:http://localhost:3001}
+
+resilience4j:
+  circuitbreaker:
+    instances:
+      tenant-svc:
+        failure-rate-threshold: 50
+        sliding-window-size: 5
+        minimum-number-of-calls: 5
+        wait-duration-in-open-state: 30s
+        ignore-exceptions:
+          - org.springframework.web.client.HttpClientErrorException$NotFound
+      identity-svc:
+        failure-rate-threshold: 50
+        sliding-window-size: 5
+        minimum-number-of-calls: 5
+        wait-duration-in-open-state: 30s
+        ignore-exceptions:
+          - org.springframework.web.client.HttpClientErrorException$NotFound
+      session-svc:
+        failure-rate-threshold: 50
+        sliding-window-size: 5
+        minimum-number-of-calls: 5
+        wait-duration-in-open-state: 30s
+        ignore-exceptions:
+          - org.springframework.web.client.HttpClientErrorException$NotFound
+  retry:
+    instances:
+      tenant-svc:
+        max-attempts: 5
+        exponential-backoff-multiplier: 2
+        ignore-exceptions:
+          - org.springframework.web.client.HttpClientErrorException$NotFound
+          - io.github.resilience4j.circuitbreaker.CallNotPermittedException
+      identity-svc:
+        max-attempts: 5
+        exponential-backoff-multiplier: 2
+        ignore-exceptions:
+          - org.springframework.web.client.HttpClientErrorException$NotFound
+          - io.github.resilience4j.circuitbreaker.CallNotPermittedException
+      session-svc:
+        max-attempts: 5
+        exponential-backoff-multiplier: 2
+        ignore-exceptions:
+          - org.springframework.web.client.HttpClientErrorException$NotFound
+          - io.github.resilience4j.circuitbreaker.CallNotPermittedException
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+  endpoint:
+    health:
+      probes:
+        enabled: true
+  otlp:
+    metrics:
+      export:
+        enabled: false
+  tracing:
+    sampling:
+      probability: 1.0
+  opentelemetry:
+    tracing:
+      export:
+        otlp:
+          endpoint: ${OTEL_EXPORTER_OTLP_ENDPOINT:http://jaeger:4318}
