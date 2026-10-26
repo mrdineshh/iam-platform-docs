@@ -2,10 +2,18 @@ import { useEffect, useState } from "react";
 import QRCode from "qrcode";
 import { createUser, deleteUser, type CreatedUser } from "@/lib/identity";
 import { listTenantUsers, type AdminUserListEntry } from "@/lib/impersonate";
-import { getPolicy, putPolicy } from "@/lib/policy";
+import { getPolicy, putPolicy, type Policy } from "@/lib/policy";
+import { listGroups, assignUserToGroup, type Group } from "@/lib/groups";
 import { getGoogleWorkspaceConfig } from "@/lib/googleWorkspace";
 import { loadSession } from "@/lib/session";
 import { UpstreamError } from "@/lib/http";
+
+// "" / "true" / "false" rather than boolean | null directly -- an HTML
+// <select> only ever carries a string value, and this third state
+// ("" = inherit from group/tenant policy, AP-4's merge) is a real,
+// meaningfully different choice from an explicit true or false, not an
+// unset default to collapse away.
+type TriState = "" | "true" | "false";
 
 // A real CIDR that matches every IPv4 address -- not "no opinion" (which
 // a null/absent value already means and would just inherit the tenant's
@@ -30,23 +38,37 @@ export function UsersPage() {
   const [qrDataUrl, setQrDataUrl] = useState<string | null>(null);
 
   const [users, setUsers] = useState<AdminUserListEntry[]>([]);
-  const [anyIpUserIds, setAnyIpUserIds] = useState<Set<string>>(new Set());
+  const [groups, setGroups] = useState<Group[]>([]);
+  // The full policy per user, not just derived flags -- putPolicy fully
+  // overwrites a policy row rather than merging (confirmed in
+  // iam-policy-svc's PolicyService.putPolicy: every field is assigned
+  // unconditionally from the request). Two independent controls on this
+  // page (2FA, "allow any IP") both write to the same USER-scope row, so
+  // each write has to carry the other's current value forward or it
+  // silently wipes it -- keeping the whole object here is what makes
+  // that possible.
+  const [userPolicies, setUserPolicies] = useState<Map<string, Policy | null>>(new Map());
   const [loadingUsers, setLoadingUsers] = useState(true);
   const [togglingUserId, setTogglingUserId] = useState<string | null>(null);
   const [deletingUserId, setDeletingUserId] = useState<string | null>(null);
+  const [savingGroupUserId, setSavingGroupUserId] = useState<string | null>(null);
+  const [savingMfaUserId, setSavingMfaUserId] = useState<string | null>(null);
 
   async function refreshUsers() {
     setLoadingUsers(true);
     try {
-      const list = await listTenantUsers(session.tenantId, session.token);
+      const [list, groupList] = await Promise.all([
+        listTenantUsers(session.tenantId, session.token),
+        listGroups(session.tenantId, session.token),
+      ]);
       setUsers(list);
-      const flagged = await Promise.all(
-        list.map(async (u) => {
-          const policy = await getPolicy(session.tenantId, "USER", u.id, session.token);
-          return policy?.allowedCidrs?.includes(ALLOW_ANY_IP) ? u.id : null;
-        }),
+      setGroups(groupList);
+      const policies = await Promise.all(
+        list.map((u) => getPolicy(session.tenantId, "USER", u.id, session.token)),
       );
-      setAnyIpUserIds(new Set(flagged.filter((id): id is string => id !== null)));
+      const policyMap = new Map<string, Policy | null>();
+      list.forEach((u, i) => policyMap.set(u.id, policies[i]));
+      setUserPolicies(policyMap);
     } catch {
       // Non-fatal -- the create-user form above still works even if this
       // management list can't load.
@@ -85,10 +107,57 @@ export function UsersPage() {
     }
   }
 
+  // Consolidated per-user management (2026-10-26): group, 2FA override,
+  // and "allow any IP" all settable right here on the user they apply to,
+  // instead of needing a separate trip to the Groups page to set a group,
+  // which previously had no per-user 2FA control of its own at all --
+  // only the group-level one existed. Both routes (here, and the Groups
+  // page's own assignUserToGroup) write to the exact same backend field,
+  // so either one keeps the other in sync.
+  async function handleGroupChange(userId: string, groupId: string) {
+    setSavingGroupUserId(userId);
+    setError(null);
+    try {
+      await assignUserToGroup(session.tenantId, userId, groupId || null, session.token);
+      setUsers((prev) => prev.map((u) => (u.id === userId ? { ...u, groupId: groupId || null } : u)));
+    } catch (err) {
+      setError(errorMessage(err));
+    } finally {
+      setSavingGroupUserId(null);
+    }
+  }
+
+  async function handleMfaChange(userId: string, value: TriState) {
+    setSavingMfaUserId(userId);
+    setError(null);
+    try {
+      const existing = userPolicies.get(userId);
+      const updated = await putPolicy(
+        {
+          tenantId: session.tenantId,
+          scope: "USER",
+          scopeId: userId,
+          allowedCidrs: existing?.allowedCidrs ?? null,
+          blockedCidrs: existing?.blockedCidrs ?? null,
+          allowedCountries: existing?.allowedCountries ?? null,
+          blockedCountries: existing?.blockedCountries ?? null,
+          mfaRequired: value === "" ? null : value === "true",
+        },
+        session.token,
+      );
+      setUserPolicies((prev) => new Map(prev).set(userId, updated));
+    } catch (err) {
+      setError(errorMessage(err));
+    } finally {
+      setSavingMfaUserId(null);
+    }
+  }
+
   async function toggleAllowAnyIp(userId: string, allow: boolean) {
     setTogglingUserId(userId);
     try {
-      await putPolicy(
+      const existing = userPolicies.get(userId);
+      const updated = await putPolicy(
         {
           tenantId: session.tenantId,
           scope: "USER",
@@ -99,15 +168,14 @@ export function UsersPage() {
           // than permanently pinning an empty allow-list (which would
           // mean "allow nothing" and lock them out completely).
           allowedCidrs: allow ? [ALLOW_ANY_IP] : null,
+          blockedCidrs: existing?.blockedCidrs ?? null,
+          allowedCountries: existing?.allowedCountries ?? null,
+          blockedCountries: existing?.blockedCountries ?? null,
+          mfaRequired: existing?.mfaRequired ?? null,
         },
         session.token,
       );
-      setAnyIpUserIds((prev) => {
-        const next = new Set(prev);
-        if (allow) next.add(userId);
-        else next.delete(userId);
-        return next;
-      });
+      setUserPolicies((prev) => new Map(prev).set(userId, updated));
     } catch (err) {
       setError(errorMessage(err));
     } finally {
@@ -234,10 +302,11 @@ export function UsersPage() {
 
       <h2>Manage users</h2>
       <p className="hint">
-        "Allow sign-in from any IP" exempts a specific user from every IP restriction (tenant or group policy) --
-        use it to unblock someone who's locked out, or for an account that needs to sign in from anywhere (e.g. a
-        traveling admin). It doesn't apply if the tenant policy marks IP restrictions as a hard cap, which is
-        designed to allow no exceptions at all.
+        Set each user's group (controls which apps they can launch — see Applications and Groups), their own 2FA
+        override, and IP access, all right here. "Allow sign-in from any IP" exempts a user from every IP
+        restriction (tenant or group policy) — use it to unblock someone locked out, or for an account that needs
+        to sign in from anywhere. Neither override applies if the tenant policy marks that setting as a hard cap,
+        which is designed to allow no exceptions at all.
       </p>
       {loadingUsers ? (
         <p>Loading…</p>
@@ -250,39 +319,75 @@ export function UsersPage() {
               <th>Name</th>
               <th>Email</th>
               <th>Role</th>
+              <th>Group</th>
+              <th>2FA</th>
               <th>Allow sign-in from any IP</th>
               <th></th>
             </tr>
           </thead>
           <tbody>
-            {users.map((u) => (
-              <tr key={u.id}>
-                <td>{u.displayName}</td>
-                <td>{u.email}</td>
-                <td>{u.role}</td>
-                <td>
-                  <label className="checkbox-field">
-                    <input
-                      type="checkbox"
-                      checked={anyIpUserIds.has(u.id)}
-                      disabled={togglingUserId === u.id}
-                      onChange={(e) => void toggleAllowAnyIp(u.id, e.target.checked)}
-                    />
-                    {anyIpUserIds.has(u.id) ? "Allowed from anywhere" : "Restricted"}
-                  </label>
-                </td>
-                <td>
-                  <button
-                    type="button"
-                    className="login-form__button--secondary"
-                    disabled={deletingUserId === u.id}
-                    onClick={() => void handleDelete(u.id, `${u.displayName} (${u.email})`)}
-                  >
-                    {deletingUserId === u.id ? "Deleting…" : "Delete"}
-                  </button>
-                </td>
-              </tr>
-            ))}
+            {users.map((u) => {
+              const mfaValue: TriState =
+                userPolicies.get(u.id)?.mfaRequired === null || userPolicies.get(u.id)?.mfaRequired === undefined
+                  ? ""
+                  : userPolicies.get(u.id)!.mfaRequired
+                    ? "true"
+                    : "false";
+              const anyIpAllowed = userPolicies.get(u.id)?.allowedCidrs?.includes(ALLOW_ANY_IP) ?? false;
+              return (
+                <tr key={u.id}>
+                  <td>{u.displayName}</td>
+                  <td>{u.email}</td>
+                  <td>{u.role}</td>
+                  <td>
+                    <select
+                      value={u.groupId ?? ""}
+                      disabled={savingGroupUserId === u.id}
+                      onChange={(e) => void handleGroupChange(u.id, e.target.value)}
+                    >
+                      <option value="">No group</option>
+                      {groups.map((g) => (
+                        <option key={g.id} value={g.id}>
+                          {g.name}
+                        </option>
+                      ))}
+                    </select>
+                  </td>
+                  <td>
+                    <select
+                      value={mfaValue}
+                      disabled={savingMfaUserId === u.id}
+                      onChange={(e) => void handleMfaChange(u.id, e.target.value as TriState)}
+                    >
+                      <option value="">Inherit from group/tenant</option>
+                      <option value="true">Required</option>
+                      <option value="false">Not required</option>
+                    </select>
+                  </td>
+                  <td>
+                    <label className="checkbox-field">
+                      <input
+                        type="checkbox"
+                        checked={anyIpAllowed}
+                        disabled={togglingUserId === u.id}
+                        onChange={(e) => void toggleAllowAnyIp(u.id, e.target.checked)}
+                      />
+                      {anyIpAllowed ? "Allowed from anywhere" : "Restricted"}
+                    </label>
+                  </td>
+                  <td>
+                    <button
+                      type="button"
+                      className="login-form__button--secondary"
+                      disabled={deletingUserId === u.id}
+                      onClick={() => void handleDelete(u.id, `${u.displayName} (${u.email})`)}
+                    >
+                      {deletingUserId === u.id ? "Deleting…" : "Delete"}
+                    </button>
+                  </td>
+                </tr>
+              );
+            })}
           </tbody>
         </table>
       )}
