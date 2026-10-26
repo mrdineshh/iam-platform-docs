@@ -21,6 +21,12 @@ data class CreateUserRequest(
     val password: String? = null,
 
     val role: RemoteUserRole? = null,
+
+    // Added 2026-10-26 (docs/DECISIONS.md) so this is a visible, per-user
+    // choice rather than silent automatic behavior whenever Google
+    // Workspace happens to be configured for the tenant. Default true so
+    // existing callers (and the common case) keep working unchanged.
+    val createInGoogleWorkspace: Boolean = true,
 )
 
 data class CreatedUserResponse(
@@ -56,3 +62,11 @@ data class Verify2faRequest(
 )
 
 data class Verify2faResponse(val valid: Boolean, val status: String)
+
+data class DeletedUserResponse(
+    val id: UUID,
+    val googleWorkspaceDeleted: Boolean = false,
+    val googleWorkspaceError: String? = null,
+)
+
+class UserNotFoundForDeletionException(id: UUID) : RuntimeException("No user '$id' found for this tenant")

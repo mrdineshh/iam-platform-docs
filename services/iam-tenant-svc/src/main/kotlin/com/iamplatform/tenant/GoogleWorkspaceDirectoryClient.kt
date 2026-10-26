@@ -89,6 +89,29 @@ class GoogleWorkspaceDirectoryClient {
         return password
     }
 
+    /**
+     * Added 2026-10-26 (docs/DECISIONS.md) so "delete user" actually means
+     * deleted everywhere, not just on this platform -- the explicit ask
+     * that surfaced this gap. Deletes outright (Directory API's
+     * users.delete), not a suspend -- matches this platform's own
+     * deleteUser semantics (hard delete, not a status flag). Best-effort
+     * from the caller's point of view (AdminUserController never fails
+     * the platform-side deletion over this), same reasoning as
+     * provisionUser not blocking creation.
+     */
+    fun deleteUser(adminEmail: String, serviceAccountKey: GoogleServiceAccountKey, primaryEmail: String) {
+        val accessToken = fetchAccessToken(adminEmail, serviceAccountKey)
+        try {
+            directoryClient.delete()
+                .uri("/admin/directory/v1/users/{email}", primaryEmail)
+                .header("Authorization", "Bearer $accessToken")
+                .retrieve()
+                .toBodilessEntity()
+        } catch (ex: Exception) {
+            throw GoogleProvisioningException("Google Workspace user deletion failed: ${ex.message}")
+        }
+    }
+
     private fun fetchAccessToken(adminEmail: String, key: GoogleServiceAccountKey): String {
         val jwt = signedAssertionJwt(adminEmail, key)
         val response = tokenClient.post()

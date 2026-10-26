@@ -13,7 +13,7 @@ import java.util.UUID
 enum class RemoteUserRole { ADMIN, USER }
 enum class RemoteUserStatus { ACTIVE, SUSPENDED }
 
-data class RemoteUser(val id: UUID, val tenantId: UUID, val role: RemoteUserRole, val groupId: UUID? = null)
+data class RemoteUser(val id: UUID, val tenantId: UUID, val role: RemoteUserRole, val groupId: UUID? = null, val email: String? = null)
 
 data class RemoteUserListEntry(
     val id: UUID,
@@ -74,4 +74,7 @@ class IdentityClient(
     // generic List<T> target), converted to a list below.
     fun listUsers(tenantId: UUID): List<RemoteUserListEntry> =
         client.get("/api/v1/users?tenantId=$tenantId", Array<RemoteUserListEntry>::class.java).toList()
+
+    // Hard delete -- "deleted from everywhere" (2026-10-26, docs/DECISIONS.md).
+    fun deleteUser(userId: UUID): Unit = client.delete("/api/v1/users/$userId")
 }

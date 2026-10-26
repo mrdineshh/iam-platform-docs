@@ -1,8 +1,9 @@
 import { useEffect, useState } from "react";
 import QRCode from "qrcode";
-import { createUser, type CreatedUser } from "@/lib/identity";
+import { createUser, deleteUser, type CreatedUser } from "@/lib/identity";
 import { listTenantUsers, type AdminUserListEntry } from "@/lib/impersonate";
 import { getPolicy, putPolicy } from "@/lib/policy";
+import { getGoogleWorkspaceConfig } from "@/lib/googleWorkspace";
 import { loadSession } from "@/lib/session";
 import { UpstreamError } from "@/lib/http";
 
@@ -21,6 +22,8 @@ export function UsersPage() {
   const [displayName, setDisplayName] = useState("");
   const [password, setPassword] = useState("");
   const [role, setRole] = useState<"ADMIN" | "USER">("USER");
+  const [createInGoogleWorkspace, setCreateInGoogleWorkspace] = useState(true);
+  const [googleWorkspaceConfigured, setGoogleWorkspaceConfigured] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
   const [justCreated, setJustCreated] = useState<CreatedUser | null>(null);
@@ -30,6 +33,7 @@ export function UsersPage() {
   const [anyIpUserIds, setAnyIpUserIds] = useState<Set<string>>(new Set());
   const [loadingUsers, setLoadingUsers] = useState(true);
   const [togglingUserId, setTogglingUserId] = useState<string | null>(null);
+  const [deletingUserId, setDeletingUserId] = useState<string | null>(null);
 
   async function refreshUsers() {
     setLoadingUsers(true);
@@ -53,8 +57,33 @@ export function UsersPage() {
 
   useEffect(() => {
     void refreshUsers();
+    // Only offer the checkbox at all if this tenant actually has Google
+    // Workspace configured -- otherwise it's a confusing option that can
+    // never do anything (see Settings -> Google Workspace).
+    void getGoogleWorkspaceConfig(session.tenantId, session.token)
+      .then((config) => setGoogleWorkspaceConfigured(config !== null))
+      .catch(() => setGoogleWorkspaceConfigured(false));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  async function handleDelete(userId: string, label: string) {
+    if (!window.confirm(`Delete ${label}? This removes them from this platform and, if configured, Google Workspace too. This cannot be undone.`)) {
+      return;
+    }
+    setDeletingUserId(userId);
+    setError(null);
+    try {
+      const result = await deleteUser(session.tenantId, userId, session.token);
+      if (result.googleWorkspaceError) {
+        setError(`User deleted here, but Google Workspace deletion failed: ${result.googleWorkspaceError}`);
+      }
+      await refreshUsers();
+    } catch (err) {
+      setError(errorMessage(err));
+    } finally {
+      setDeletingUserId(null);
+    }
+  }
 
   async function toggleAllowAnyIp(userId: string, allow: boolean) {
     setTogglingUserId(userId);
@@ -95,13 +124,17 @@ export function UsersPage() {
     }
     setPending(true);
     try {
-      const created = await createUser(session.tenantId, email, displayName, password, role, session.token);
+      const created = await createUser(
+        session.tenantId, email, displayName, password, role, session.token,
+        googleWorkspaceConfigured && createInGoogleWorkspace,
+      );
       setJustCreated(created);
       setQrDataUrl(await QRCode.toDataURL(created.provisioningUri));
       setEmail("");
       setDisplayName("");
       setPassword("");
       setRole("USER");
+      setCreateInGoogleWorkspace(true);
       await refreshUsers();
     } catch (err) {
       if (err instanceof UpstreamError && err.status === 409) {
@@ -181,6 +214,17 @@ export function UsersPage() {
           </select>
         </label>
 
+        {googleWorkspaceConfigured && (
+          <label className="checkbox-field">
+            <input
+              type="checkbox"
+              checked={createInGoogleWorkspace}
+              onChange={(e) => setCreateInGoogleWorkspace(e.target.checked)}
+            />
+            Also create this user in Google Workspace
+          </label>
+        )}
+
         <div className="login-form__buttons">
           <button type="submit" disabled={pending}>
             {pending ? "Creating…" : "Create user"}
@@ -207,6 +251,7 @@ export function UsersPage() {
               <th>Email</th>
               <th>Role</th>
               <th>Allow sign-in from any IP</th>
+              <th></th>
             </tr>
           </thead>
           <tbody>
@@ -225,6 +270,16 @@ export function UsersPage() {
                     />
                     {anyIpUserIds.has(u.id) ? "Allowed from anywhere" : "Restricted"}
                   </label>
+                </td>
+                <td>
+                  <button
+                    type="button"
+                    className="login-form__button--secondary"
+                    disabled={deletingUserId === u.id}
+                    onClick={() => void handleDelete(u.id, `${u.displayName} (${u.email})`)}
+                  >
+                    {deletingUserId === u.id ? "Deleting…" : "Delete"}
+                  </button>
                 </td>
               </tr>
             ))}

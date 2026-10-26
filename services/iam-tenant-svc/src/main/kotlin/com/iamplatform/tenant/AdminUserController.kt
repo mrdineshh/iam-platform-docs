@@ -8,11 +8,15 @@ import com.iamplatform.servicekit.correlation.CorrelationId
 import jakarta.validation.Valid
 import org.springframework.http.HttpStatus
 import org.springframework.http.ResponseEntity
+import org.springframework.web.bind.annotation.DeleteMapping
+import org.springframework.web.bind.annotation.PathVariable
 import org.springframework.web.bind.annotation.PostMapping
 import org.springframework.web.bind.annotation.RequestBody
 import org.springframework.web.bind.annotation.RequestHeader
 import org.springframework.web.bind.annotation.RequestMapping
+import org.springframework.web.bind.annotation.RequestParam
 import org.springframework.web.bind.annotation.RestController
+import java.util.UUID
 
 /**
  * Admin-console "create user" self-service page. Admin-gated (same
@@ -68,7 +72,11 @@ class AdminUserController(
         // redirect mode is set on the account's OU.
         var googleProvisioned = false
         var googleError: String? = null
-        val googleConfig = googleWorkspaceConfigService.loadProvisioningConfig(request.tenantId)
+        val googleConfig = if (request.createInGoogleWorkspace) {
+            googleWorkspaceConfigService.loadProvisioningConfig(request.tenantId)
+        } else {
+            null
+        }
         if (googleConfig != null) {
             try {
                 val (givenName, familyName) = splitDisplayName(request.displayName)
@@ -105,6 +113,53 @@ class AdminUserController(
                 googleWorkspaceError = googleError,
             ),
         )
+    }
+
+    // "Deleted from everywhere" (2026-10-26, docs/DECISIONS.md, the
+    // explicit ask that surfaced this gap): deletes the platform account
+    // outright, then best-effort deletes the matching Google Workspace
+    // account too, if one exists. Connected-app access for any session
+    // this user already held is cut off by iam-enforcement-svc's own
+    // identity-existence check (added the same day) on that session's
+    // very next request -- nothing extra needed here for that part.
+    @DeleteMapping("/{id}")
+    fun deleteUser(
+        @PathVariable id: UUID,
+        @RequestParam tenantId: UUID,
+        @RequestHeader("X-Session-Token") sessionToken: String,
+    ): ResponseEntity<DeletedUserResponse> {
+        adminAccessGuard.requireTenantAdmin(sessionToken, tenantId)
+        val user = identityClient.findUser(id)
+        if (user == null || user.tenantId != tenantId) {
+            throw UserNotFoundForDeletionException(id)
+        }
+
+        identityClient.deleteUser(id)
+
+        var googleDeleted = false
+        var googleError: String? = null
+        val googleConfig = googleWorkspaceConfigService.loadProvisioningConfig(tenantId)
+        if (googleConfig != null && user.email != null) {
+            try {
+                googleWorkspaceDirectoryClient.deleteUser(googleConfig.adminEmail, googleConfig.serviceAccountKey, user.email)
+                googleDeleted = true
+            } catch (ex: GoogleProvisioningException) {
+                googleError = ex.message
+            }
+            auditPublisher.publish(
+                AuditEvent(
+                    correlationId = CorrelationId.get(),
+                    tenantId = tenantId,
+                    actorType = ActorType.SYSTEM,
+                    actorId = "iam-tenant-svc",
+                    action = "google_workspace_user.deleted",
+                    result = if (googleDeleted) AuditResult.SUCCESS else AuditResult.FAILURE,
+                    reason = googleError,
+                ),
+            )
+        }
+
+        return ResponseEntity.ok(DeletedUserResponse(id = id, googleWorkspaceDeleted = googleDeleted, googleWorkspaceError = googleError))
     }
 
     private fun splitDisplayName(displayName: String): Pair<String, String> {

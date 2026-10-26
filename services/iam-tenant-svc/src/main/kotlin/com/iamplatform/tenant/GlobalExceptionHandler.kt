@@ -18,7 +18,7 @@ class GlobalExceptionHandler {
     @ExceptionHandler(
         TenantNotFoundException::class, TenantSubdomainNotFoundException::class,
         OidcClientNotFoundException::class, SamlSpNotFoundException::class,
-        GoogleWorkspaceConfigNotFoundException::class,
+        GoogleWorkspaceConfigNotFoundException::class, UserNotFoundForDeletionException::class,
     )
     fun handleNotFound(ex: RuntimeException, request: HttpServletRequest): ResponseEntity<ErrorResponse> =
         ResponseEntity.status(HttpStatus.NOT_FOUND).body(

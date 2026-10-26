@@ -23,7 +23,7 @@ function correlationId(): string {
 }
 
 async function request<T>(
-  method: "GET" | "POST" | "PUT" | "PATCH",
+  method: "GET" | "POST" | "PUT" | "PATCH" | "DELETE",
   url: string,
   opts: { body?: unknown; sessionToken?: string; timeoutMs?: number } = {},
 ): Promise<T> {
@@ -68,6 +68,7 @@ export const http = {
     request<T>("PUT", url, { ...opts, body }),
   patch: <T>(url: string, body: unknown, opts?: { sessionToken?: string; timeoutMs?: number }) =>
     request<T>("PATCH", url, { ...opts, body }),
+  delete: <T>(url: string, opts?: { sessionToken?: string; timeoutMs?: number }) => request<T>("DELETE", url, opts),
 };
 
 async function safeParseError(res: Response): Promise<BackendErrorBody> {

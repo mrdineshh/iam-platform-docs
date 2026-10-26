@@ -25,10 +25,27 @@ export async function createUser(
   password: string,
   role: "ADMIN" | "USER",
   sessionToken: string,
+  createInGoogleWorkspace: boolean = true,
 ): Promise<CreatedUser> {
   return http.post<CreatedUser>(
     `${config.tenantSvcUrl}/api/v1/admin/users`,
-    { tenantId, email, displayName, password, role },
+    { tenantId, email, displayName, password, role, createInGoogleWorkspace },
+    { sessionToken },
+  );
+}
+
+export interface DeletedUser {
+  id: string;
+  googleWorkspaceDeleted: boolean;
+  googleWorkspaceError: string | null;
+}
+
+// "Deleted from everywhere" (2026-10-26) -- also deletes the matching
+// Google Workspace account if one exists; connected-app access is cut off
+// separately by iam-enforcement-svc's own identity check.
+export async function deleteUser(tenantId: string, userId: string, sessionToken: string): Promise<DeletedUser> {
+  return http.delete<DeletedUser>(
+    `${config.tenantSvcUrl}/api/v1/admin/users/${userId}?tenantId=${encodeURIComponent(tenantId)}`,
     { sessionToken },
   );
 }

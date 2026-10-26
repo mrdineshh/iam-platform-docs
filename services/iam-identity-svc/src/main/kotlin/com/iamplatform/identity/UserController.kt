@@ -3,6 +3,7 @@ package com.iamplatform.identity
 import jakarta.validation.Valid
 import org.springframework.http.HttpStatus
 import org.springframework.http.ResponseEntity
+import org.springframework.web.bind.annotation.DeleteMapping
 import org.springframework.web.bind.annotation.GetMapping
 import org.springframework.web.bind.annotation.PathVariable
 import org.springframework.web.bind.annotation.PatchMapping
@@ -66,6 +67,14 @@ class UserController(
         userService.setPassword(id, request)
         return ResponseEntity.noContent().build()
     }
+
+    // Returns the deleted user's own data (including email) -- the caller
+    // (iam-tenant-svc) needs the email to also delete the matching Google
+    // Workspace account, and there's no point making it fetch the user
+    // separately first just to learn what it's about to delete.
+    @DeleteMapping("/{id}")
+    fun deleteUser(@PathVariable id: UUID): ResponseEntity<UserResponse> =
+        ResponseEntity.ok(userService.deleteUser(id).toResponse())
 
     @PostMapping("/verify-password")
     fun verifyPassword(@Valid @RequestBody request: VerifyPasswordRequest): ResponseEntity<VerifyPasswordResponse> =

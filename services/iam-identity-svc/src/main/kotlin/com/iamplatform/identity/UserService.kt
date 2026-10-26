@@ -121,6 +121,34 @@ class UserService(
         return user
     }
 
+    // Hard delete, not a status flag -- "deleted from everywhere" means
+    // gone, not just disabled (SUSPENDED already covers "disabled but
+    // recoverable"). Existing audit_events referencing this user's id as
+    // actorId are untouched -- that history stays readable by id even
+    // after the row backing it is gone, same as any other foreign
+    // reference in this system (cross-service, logical only, no DB-level
+    // FK). Returns the entity as it was immediately before deletion so
+    // the caller (iam-tenant-svc, which also needs the email to delete
+    // the matching Google Workspace account) doesn't need a second call.
+    fun deleteUser(id: UUID): UserEntity {
+        val user = getUser(id)
+        repository.delete(user)
+
+        auditPublisher.publish(
+            AuditEvent(
+                correlationId = CorrelationId.get(),
+                tenantId = user.tenantId,
+                actorType = ActorType.SYSTEM,
+                actorId = "iam-identity-svc",
+                action = "identity.deleted",
+                result = AuditResult.SUCCESS,
+                reason = "email=${user.email}",
+            ),
+        )
+
+        return user
+    }
+
     fun setPassword(id: UUID, request: SetPasswordRequest) {
         val user = getUser(id)
         user.passwordHash = passwordService.hash(request.password)
