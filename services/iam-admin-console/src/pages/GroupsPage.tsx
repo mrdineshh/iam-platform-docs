@@ -2,8 +2,19 @@ import { useEffect, useState } from "react";
 import { listGroups, createGroup, assignUserToGroup, type Group } from "@/lib/groups";
 import { getPolicy, putPolicy, type Policy } from "@/lib/policy";
 import { listTenantUsers, type AdminUserListEntry } from "@/lib/impersonate";
+import { getAppGroups, setAppGroups, type AppKind } from "@/lib/appGroups";
+import { listClients } from "@/lib/oidcClients";
+import { listSamlSps } from "@/lib/samlSps";
 import { loadSession } from "@/lib/session";
 import { UpstreamError } from "@/lib/http";
+
+// Same "connected app" shape ClientsPage builds, just the minimum this page
+// needs: id/name/kind to drive the per-group app checkboxes below.
+interface GroupApp {
+  id: string;
+  name: string;
+  kind: AppKind;
+}
 
 /**
  * Admin-only. A group IS an OU for policy purposes (iam-policy-svc's
@@ -16,6 +27,7 @@ export function GroupsPage() {
   const session = loadSession()!;
   const [groups, setGroups] = useState<Group[]>([]);
   const [users, setUsers] = useState<AdminUserListEntry[]>([]);
+  const [apps, setApps] = useState<GroupApp[]>([]);
   const [newGroupName, setNewGroupName] = useState("");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -24,12 +36,18 @@ export function GroupsPage() {
     setLoading(true);
     setError(null);
     try {
-      const [g, u] = await Promise.all([
+      const [g, u, oidcClients, samlSps] = await Promise.all([
         listGroups(session.tenantId, session.token),
         listTenantUsers(session.tenantId, session.token),
+        listClients(session.tenantId, session.token),
+        listSamlSps(session.tenantId, session.token),
       ]);
       setGroups(g);
       setUsers(u);
+      setApps([
+        ...oidcClients.map((c) => ({ id: c.clientId, name: c.name, kind: "oidc-clients" as const })),
+        ...samlSps.map((s) => ({ id: s.id, name: s.name, kind: "saml-sps" as const })),
+      ]);
     } catch (err) {
       setError(errorMessage(err));
     } finally {
@@ -97,6 +115,7 @@ export function GroupsPage() {
             key={g.id}
             group={g}
             users={users}
+            apps={apps}
             tenantId={session.tenantId}
             sessionToken={session.token}
             onAssign={handleAssign}
@@ -144,6 +163,7 @@ export function GroupsPage() {
 function GroupCard({
   group,
   users,
+  apps,
   tenantId,
   sessionToken,
   onAssign,
@@ -151,6 +171,7 @@ function GroupCard({
 }: {
   group: Group;
   users: AdminUserListEntry[];
+  apps: GroupApp[];
   tenantId: string;
   sessionToken: string;
   onAssign: (userId: string, groupId: string) => void;
@@ -161,6 +182,14 @@ function GroupCard({
   const [allowedCidrs, setAllowedCidrs] = useState("");
   const [blockedCidrs, setBlockedCidrs] = useState("");
   const [saved, setSaved] = useState(false);
+
+  // Per-app "is this app assigned to this group" state, keyed by app id.
+  // Loaded from the same getAppGroups/setAppGroups endpoints ClientsPage
+  // uses -- this is just the inverse view (pick apps for a group, instead
+  // of picking groups for an app), same underlying many-to-many data.
+  const [appAssigned, setAppAssigned] = useState<Map<string, boolean> | null>(null);
+  const [appError, setAppError] = useState<string | null>(null);
+  const [savingApp, setSavingApp] = useState<string | null>(null);
 
   useEffect(() => {
     (async () => {
@@ -174,6 +203,45 @@ function GroupCard({
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [group.id]);
+
+  useEffect(() => {
+    (async () => {
+      setAppError(null);
+      try {
+        const entries = await Promise.all(
+          apps.map(async (app) => {
+            const groupIds = await getAppGroups(app.kind, app.id, tenantId, sessionToken);
+            return [app.id, groupIds.includes(group.id)] as const;
+          }),
+        );
+        setAppAssigned(new Map(entries));
+      } catch (err) {
+        setAppError(errorMessage(err));
+      }
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [group.id, apps]);
+
+  async function toggleApp(app: GroupApp, checked: boolean) {
+    setAppError(null);
+    setSavingApp(app.id);
+    try {
+      const currentGroupIds = await getAppGroups(app.kind, app.id, tenantId, sessionToken);
+      const nextGroupIds = checked
+        ? Array.from(new Set([...currentGroupIds, group.id]))
+        : currentGroupIds.filter((id) => id !== group.id);
+      await setAppGroups(app.kind, app.id, tenantId, nextGroupIds, sessionToken);
+      setAppAssigned((prev) => {
+        const next = new Map(prev ?? []);
+        next.set(app.id, checked);
+        return next;
+      });
+    } catch (err) {
+      setAppError(errorMessage(err));
+    } finally {
+      setSavingApp(null);
+    }
+  }
 
   async function savePolicy(e: React.FormEvent) {
     e.preventDefault();
@@ -222,6 +290,32 @@ function GroupCard({
         </label>
         <button type="submit">Save group policy</button>
       </form>
+
+      <p className="hint">Apps this group can access:</p>
+      {appError && (
+        <p role="alert" className="login-form__error">
+          {appError}
+        </p>
+      )}
+      {appAssigned === null ? (
+        <p className="hint">Loading…</p>
+      ) : apps.length === 0 ? (
+        <p className="hint">No apps connected yet — add one on the Applications page first.</p>
+      ) : (
+        <div className="checkbox-list">
+          {apps.map((app) => (
+            <label key={app.id} className="checkbox-list__item">
+              <input
+                type="checkbox"
+                checked={appAssigned.get(app.id) ?? false}
+                disabled={savingApp === app.id}
+                onChange={(e) => void toggleApp(app, e.target.checked)}
+              />
+              {app.name}
+            </label>
+          ))}
+        </div>
+      )}
 
       <p className="hint">Members:</p>
       {members.length === 0 ? (
