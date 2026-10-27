@@ -2,6 +2,7 @@ import { cookies, headers } from "next/headers";
 import { redirect } from "next/navigation";
 import { randomUUID } from "node:crypto";
 import { SamlLoginForm } from "./SamlLoginForm";
+import { SplitShell } from "../SplitShell";
 import { SamlAutoPostForm } from "./SamlAutoPostForm";
 import { config } from "@/lib/config";
 import { completeSamlAuthorization } from "@/lib/samlClient";
@@ -70,7 +71,7 @@ export default async function SamlLoginPage({
   }
 
   return (
-    <main className="login-page" style={brandStyle(tenant.branding)}>
+    <SplitShell style={brandStyle(tenant.branding)}>
       <SamlLoginForm
         samlRequestId={samlRequestId}
         tenantOverride={tenantOverride}
@@ -78,6 +79,6 @@ export default async function SamlLoginPage({
         logoUrl={safeLogoUrl(tenant.branding)}
         headline={tenant.branding?.headline}
       />
-    </main>
+    </SplitShell>
   );
 }

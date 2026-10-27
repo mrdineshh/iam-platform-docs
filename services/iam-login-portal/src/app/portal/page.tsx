@@ -2,6 +2,7 @@ import { cookies, headers } from "next/headers";
 import { redirect } from "next/navigation";
 import { randomUUID } from "node:crypto";
 import { LoginForm } from "../login/LoginForm";
+import { SplitShell } from "../SplitShell";
 import { config } from "@/lib/config";
 import { findTenantBySubdomain, resolveTenantSubdomain } from "@/lib/tenant";
 import { brandStyle, safeLogoUrl } from "@/lib/branding";
@@ -51,7 +52,7 @@ export default async function PortalLoginPage({
   }
 
   return (
-    <main className="login-page" style={brandStyle(tenant.branding)}>
+    <SplitShell style={brandStyle(tenant.branding)}>
       <LoginForm
         clientId=""
         redirectUri=""
@@ -62,7 +63,7 @@ export default async function PortalLoginPage({
         logoUrl={safeLogoUrl(tenant.branding)}
         headline={tenant.branding?.headline}
       />
-    </main>
+    </SplitShell>
   );
 }
 

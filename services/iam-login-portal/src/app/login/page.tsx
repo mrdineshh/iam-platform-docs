@@ -2,6 +2,7 @@ import { cookies, headers } from "next/headers";
 import { redirect } from "next/navigation";
 import { randomUUID } from "node:crypto";
 import { LoginForm } from "./LoginForm";
+import { SplitShell } from "../SplitShell";
 import { config } from "@/lib/config";
 import { completeAuthorization } from "@/lib/oidcClient";
 import { findTenantBySubdomain, resolveTenantSubdomain } from "@/lib/tenant";
@@ -86,7 +87,7 @@ export default async function LoginPage({
   }
 
   return (
-    <main className="login-page" style={brandStyle(tenant.branding)}>
+    <SplitShell style={brandStyle(tenant.branding)}>
       <LoginForm
         clientId={clientId}
         redirectUri={redirectUri}
@@ -97,6 +98,6 @@ export default async function LoginPage({
         logoUrl={safeLogoUrl(tenant.branding)}
         headline={tenant.branding?.headline}
       />
-    </main>
+    </SplitShell>
   );
 }
