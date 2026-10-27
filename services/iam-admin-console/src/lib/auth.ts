@@ -51,6 +51,19 @@ export async function login(request: LoginRequest, intent: "totp" | "push" | "no
 }
 
 /**
+ * Ends a session on the server, which also records the sign-out in the audit
+ * log. Best-effort: signing out in this browser must never be blocked by it
+ * (the session may already be gone, or the service briefly unreachable).
+ */
+export async function logout(sessionToken: string): Promise<void> {
+  try {
+    await http.post<void>(`${config.authSvcUrl}/api/v1/logout`, {}, { sessionToken, timeoutMs: 4000 });
+  } catch {
+    // Already ended, expired, or unreachable: the local sign-out still proceeds.
+  }
+}
+
+/**
  * Read-only preflight, mirrors iam-login-portal's precheckAction -- lets
  * this page find out whether a code screen is needed at all, and if so
  * whether it's a first-time enrollment, without ever touching /login's

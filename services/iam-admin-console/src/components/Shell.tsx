@@ -1,6 +1,7 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
-import { clearSession, isAdmin, loadSession } from "@/lib/session";
+import { clearSession, isAdmin, loadImpersonationOriginal, loadSession } from "@/lib/session";
+import { logout } from "@/lib/auth";
 import { ThemeToggle } from "@/components/ThemeToggle";
 import { loadStoredBranding } from "@/lib/branding";
 
@@ -40,7 +41,12 @@ export function Shell({ children }: { children: ReactNode }) {
     localStorage.setItem(ADMIN_SECTION_OPEN_KEY, adminOpen ? "1" : "0");
   }, [adminOpen]);
 
-  function handleSignOut() {
+  // Ends the session(s) on the server first so the sign-out is real and audited,
+  // not just forgotten by this browser. Includes the admin's own session if they
+  // are currently "switched to" another user.
+  async function handleSignOut() {
+    const original = loadImpersonationOriginal();
+    await Promise.all([session ? logout(session.token) : undefined, original ? logout(original.token) : undefined]);
     clearSession();
     navigate("/login");
   }
@@ -147,7 +153,7 @@ export function Shell({ children }: { children: ReactNode }) {
               </span>
             </span>
           </div>
-          <button type="button" className="shell__signout" onClick={handleSignOut}>
+          <button type="button" className="shell__signout" onClick={() => void handleSignOut()}>
             Sign out
           </button>
         </div>

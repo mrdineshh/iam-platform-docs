@@ -51,6 +51,17 @@ export function startImpersonation(targetSession: AdminSession): void {
   saveSession(targetSession);
 }
 
+/** The admin's own stashed session while "Switch to user" is active, if any. */
+export function loadImpersonationOriginal(): AdminSession | null {
+  const raw = sessionStorage.getItem(IMPERSONATION_ORIGINAL_KEY);
+  if (!raw) return null;
+  try {
+    return JSON.parse(raw) as AdminSession;
+  } catch {
+    return null;
+  }
+}
+
 export function isImpersonating(): boolean {
   return sessionStorage.getItem(IMPERSONATION_ORIGINAL_KEY) !== null;
 }
