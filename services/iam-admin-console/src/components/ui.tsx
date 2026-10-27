@@ -131,3 +131,27 @@ export function Avatar({ name }: { name: string }) {
     </span>
   );
 }
+
+// Logos for known apps, matched by name (case-insensitive). Anything else
+// falls back to the first-letter badge, so newly connected apps still render.
+const APP_LOGOS: Array<{ match: string; src: string; chip: boolean }> = [
+  { match: "pulse", src: "/app-logos/pulse.svg", chip: false },
+  { match: "google", src: "/app-logos/google.png", chip: true },
+];
+
+export function AppIcon({ name, size = 52 }: { name: string; size?: number }) {
+  const logo = APP_LOGOS.find((l) => name.toLowerCase().includes(l.match));
+  const style = { width: size, height: size, fontSize: size * 0.45 };
+  if (!logo) {
+    return (
+      <span className="app-icon app-icon--letter" style={style} aria-hidden="true">
+        {name.charAt(0).toUpperCase()}
+      </span>
+    );
+  }
+  return (
+    <span className={logo.chip ? "app-icon app-icon--chip" : "app-icon"} style={style} aria-hidden="true">
+      <img src={logo.src} alt="" width={size} height={size} />
+    </span>
+  );
+}

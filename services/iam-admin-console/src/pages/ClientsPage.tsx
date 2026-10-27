@@ -6,7 +6,7 @@ import { getAppGroups, setAppGroups, type AppKind } from "@/lib/appGroups";
 import { listGroups, type Group } from "@/lib/groups";
 import { loadSession } from "@/lib/session";
 import { UpstreamError } from "@/lib/http";
-import { Alert, EmptyState, PageHeader, PendingLabel, SkeletonRows, StatusBadge } from "@/components/ui";
+import { Alert, AppIcon, EmptyState, PageHeader, PendingLabel, SkeletonRows, StatusBadge } from "@/components/ui";
 
 // A few enterprise/dev tools that plausibly support a custom OIDC login
 // (unlike consumer services like real Gmail, which don't let a third party
@@ -153,7 +153,12 @@ export function ClientsPage() {
               return (
                 <Fragment key={app.id}>
                   <tr>
-                    <td>{app.name}</td>
+                    <td>
+                      <div className="cell-app">
+                        <AppIcon name={app.name} size={30} />
+                        {app.name}
+                      </div>
+                    </td>
                     <td>
                       <StatusBadge tone={app.type === "SAML" ? "info" : "neutral"}>{app.type}</StatusBadge>
                     </td>

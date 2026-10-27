@@ -3,7 +3,7 @@ import { listMyApps, type MyAppTile } from "@/lib/myApps";
 import { loadSession } from "@/lib/session";
 import { UpstreamError } from "@/lib/http";
 import { config } from "@/lib/config";
-import { Alert, EmptyState, PageHeader, SkeletonTiles } from "@/components/ui";
+import { Alert, AppIcon, EmptyState, PageHeader, SkeletonTiles } from "@/components/ui";
 
 /**
  * "Click the app icon, you're in" -- lists every app this user is allowed
@@ -68,9 +68,7 @@ export function LaunchpadPage() {
               <input type="hidden" name="token" value={session.token} />
               <input type="hidden" name="next" value={app.launchUrl} />
               <button type="submit" className="app-tile">
-                <span className="app-tile__icon" aria-hidden="true">
-                  {app.name.charAt(0).toUpperCase()}
-                </span>
+                <AppIcon name={app.name} size={52} />
                 <span className="app-tile__name">{app.name}</span>
               </button>
             </form>

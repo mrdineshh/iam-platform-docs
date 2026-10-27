@@ -7,7 +7,7 @@ import { listClients } from "@/lib/oidcClients";
 import { listSamlSps } from "@/lib/samlSps";
 import { loadSession } from "@/lib/session";
 import { UpstreamError } from "@/lib/http";
-import { Alert, Avatar, EmptyState, PageHeader, PendingLabel, SkeletonRows, StatusBadge } from "@/components/ui";
+import { Alert, AppIcon, Avatar, EmptyState, PageHeader, PendingLabel, SkeletonRows, StatusBadge } from "@/components/ui";
 
 // Same "connected app" shape ClientsPage builds, just the minimum this page
 // needs: id/name/kind to drive the per-group app checkboxes below.
@@ -326,6 +326,7 @@ function GroupCard({
                   disabled={savingApp === app.id}
                   onChange={(e) => void toggleApp(app, e.target.checked)}
                 />
+                <AppIcon name={app.name} size={22} />
                 {app.name}
               </label>
             ))}
