@@ -20,6 +20,7 @@ data class RemoteUser(
     val groupId: UUID? = null,
     val email: String? = null,
     val displayName: String? = null,
+    val status: RemoteUserStatus? = null,
 )
 
 data class RemoteUserListEntry(
@@ -40,6 +41,8 @@ data class UpstreamErrorBody(val message: String? = null, val errorCode: String?
 
 /** A 400 from a downstream service whose message is meant for the admin (e.g. a weak password). */
 class UpstreamBadRequestException(message: String, val errorCode: String?) : RuntimeException(message)
+
+data class UpdateRemoteStatusRequest(val status: RemoteUserStatus)
 
 data class CreateRemoteUserRequest(
     val tenantId: UUID,
@@ -103,6 +106,12 @@ class IdentityClient(
     // generic List<T> target), converted to a list below.
     fun listUsers(tenantId: UUID): List<RemoteUserListEntry> =
         client.get("/api/v1/users?tenantId=$tenantId", Array<RemoteUserListEntry>::class.java).toList()
+
+    // Suspend or reactivate (iam-identity-svc enforces the status at sign-in; the
+    // enforcement gateway blocks a suspended user's next request).
+    fun updateStatus(userId: UUID, status: RemoteUserStatus) {
+        client.patch("/api/v1/users/$userId/status", UpdateRemoteStatusRequest(status), RemoteUserListEntry::class.java)
+    }
 
     // Hard delete -- "deleted from everywhere" (2026-10-26, docs/DECISIONS.md).
     fun deleteUser(userId: UUID): Unit = client.delete("/api/v1/users/$userId")

@@ -63,6 +63,11 @@ iam:
     # Added for the SAML IdP info proxy (admin-console can't reach
     # iam-oidcprovider-svc directly -- no CORS there -- see SamlIdpInfoController).
     oidcprovider-svc: ${OIDCPROVIDER_SVC_URL:http://iam-oidcprovider-svc:8080}
+  # Outbound user provisioning (SCIM) to integrated apps -- see OutboundUrlGuard.
+  # Must stay false in any real deployment: true lets an admin point a SCIM
+  # connection at http:// and internal addresses. For local development and tests only.
+  provisioning:
+    allow-private-targets: ${SCIM_ALLOW_PRIVATE_TARGETS:false}
   # Added for Service 14 (iam-admin-console) -- see CorsConfig.kt.
   cors:
     allowed-origins: ${ADMIN_CONSOLE_ORIGIN:http://localhost:5173}

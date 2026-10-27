@@ -19,6 +19,7 @@ import {
   TableToolbar,
 } from "@/components/ui";
 import { useToast } from "@/components/feedback";
+import { AppProvisioningPanel } from "@/components/AppProvisioningPanel";
 import { useTable } from "@/lib/useTable";
 
 // A few enterprise/dev tools that plausibly support a custom OIDC login
@@ -221,6 +222,7 @@ export function ClientsPage() {
                           </div>
                         </div>
                         <AppGroupAssignment kind="oidc-clients" appId={app.id} groups={groups} />
+                        <AppProvisioningPanel kind="OIDC" appId={app.id} />
                       </td>
                     </tr>
                   )}
@@ -242,6 +244,7 @@ export function ClientsPage() {
                           </div>
                         </div>
                         <AppGroupAssignment kind="saml-sps" appId={app.id} groups={groups} />
+                        <AppProvisioningPanel kind="SAML" appId={app.id} />
                       </td>
                     </tr>
                   )}

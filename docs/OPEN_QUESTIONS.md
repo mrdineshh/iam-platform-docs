@@ -52,3 +52,29 @@ rests on an assumption a human should confirm.
   session transport (Tier 3) so it needs a decision. Related: SESSION_TTL is 8h
   while the login portal's cookie assumes 1h; consider a shorter lifetime for
   admin sessions.
+
+- **OQ-11 -- Apply the OpenBao policy for SCIM tokens.** The tenant service's
+  AppRole policy (`cert-issuer`) must allow `secret/data/scim/*` before a SCIM
+  connection's token can be stored. `infra/openbao/bootstrap.py` now includes it,
+  but it was not applied on the running server: that needs the OpenBao root
+  token, which was not authorized for me to use, and re-running bootstrap.py
+  rewrites `.env`. Until it is applied, saving a SCIM connection fails at the
+  secret write (nothing is saved).
+- **OQ-12 -- Direction of SCIM.** Built as outbound provisioning (platform pushes
+  to apps), matching the request. FR-2.7 also describes SCIM as a directory
+  pushing users into the platform (Entra/AD -> platform, an inbound SCIM server);
+  that is not built. Third-party apps must expose a SCIM endpoint to be
+  provisioned: Pulse does not (its code has no SCIM routes), so it needs one
+  added, or a different mechanism, before it can be deprovisioned from here.
+- **OQ-13 -- Who is provisioned to a SCIM app.** Every user of the tenant, not
+  only members of groups assigned to the app. Group-scoped provisioning (create
+  when a user gains access, remove when they lose it) is a possible refinement.
+- **OQ-14 -- Group enforcement is now strict.** A signed-in user without a group,
+  or whose group is not assigned to the app, is refused at sign-in (previously
+  they could still sign in by opening the app's own link). Apps with no group
+  assigned are open to admins only. At the time of this change Pulse had no group
+  assigned, so only admins can sign in to Pulse until a group is assigned, and
+  users with no group (employee2, employee3, ratnesh) cannot sign in to any app.
+- **OQ-15 -- Suspend vs delete in apps.** Suspend sets SCIM `active=false` (kept,
+  reversible); delete removes the account. Confirm this matches policy for each
+  app.

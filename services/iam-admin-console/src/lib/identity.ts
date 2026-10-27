@@ -1,5 +1,6 @@
 import { config } from "./config";
 import { http } from "./http";
+import type { TargetResult } from "./provisioning";
 
 export interface CreatedUser {
   id: string;
@@ -11,6 +12,8 @@ export interface CreatedUser {
   provisioningUri: string;
   googleWorkspaceProvisioned: boolean;
   googleWorkspaceError: string | null;
+  // One entry per SCIM-connected app the new user was pushed to.
+  appProvisioning: TargetResult[];
 }
 
 /**
@@ -30,7 +33,8 @@ export async function createUser(
   return http.post<CreatedUser>(
     `${config.tenantSvcUrl}/api/v1/admin/users`,
     { tenantId, email, displayName, password, role, createInGoogleWorkspace },
-    { sessionToken },
+    // Longer than the default: creating a user also contacts Google and each connected app.
+    { sessionToken, timeoutMs: 60_000 },
   );
 }
 
@@ -47,6 +51,34 @@ export interface DeletedUser {
   id: string;
   googleWorkspaceDeleted: boolean;
   googleWorkspaceError: string | null;
+  appProvisioning: TargetResult[];
+}
+
+export interface LifecycleResult {
+  userId: string;
+  status: "ACTIVE" | "SUSPENDED";
+  sessionsEnded: number;
+  // Google Workspace and each SCIM-connected app.
+  targets: TargetResult[];
+}
+
+// Suspends the user here (signed out immediately, cannot sign in) and in Google
+// Workspace and every SCIM-connected app. Downstream failures come back per
+// target; they never undo the suspension.
+export function suspendUser(tenantId: string, userId: string, sessionToken: string): Promise<LifecycleResult> {
+  return http.post<LifecycleResult>(
+    `${config.tenantSvcUrl}/api/v1/admin/users/${userId}/suspend?tenantId=${encodeURIComponent(tenantId)}`,
+    {},
+    { sessionToken, timeoutMs: 60_000 },
+  );
+}
+
+export function reactivateUser(tenantId: string, userId: string, sessionToken: string): Promise<LifecycleResult> {
+  return http.post<LifecycleResult>(
+    `${config.tenantSvcUrl}/api/v1/admin/users/${userId}/reactivate?tenantId=${encodeURIComponent(tenantId)}`,
+    {},
+    { sessionToken, timeoutMs: 60_000 },
+  );
 }
 
 // "Deleted from everywhere" (2026-10-26) -- also deletes the matching
@@ -55,6 +87,6 @@ export interface DeletedUser {
 export async function deleteUser(tenantId: string, userId: string, sessionToken: string): Promise<DeletedUser> {
   return http.delete<DeletedUser>(
     `${config.tenantSvcUrl}/api/v1/admin/users/${userId}?tenantId=${encodeURIComponent(tenantId)}`,
-    { sessionToken },
+    { sessionToken, timeoutMs: 60_000 },
   );
 }

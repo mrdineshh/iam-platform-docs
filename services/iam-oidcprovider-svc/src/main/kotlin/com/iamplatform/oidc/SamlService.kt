@@ -99,6 +99,24 @@ class SamlService(
         val user = identityClient.findUser(session.userId)
             ?: throw SamlSessionInvalidException("user for this session no longer exists")
 
+        // Same rule as the OIDC path: a valid session is not enough, the user's
+        // group must have access to this SP. Checked before any assertion is signed.
+        val access = tenantClient.checkAppAccess("saml", pending.samlSpId, sessionToken)
+        if (!access.allowed) {
+            auditPublisher.publish(
+                AuditEvent(
+                    correlationId = CorrelationId.get(),
+                    tenantId = pending.tenantId,
+                    actorType = ActorType.USER,
+                    actorId = session.userId.toString(),
+                    action = "saml.access_denied",
+                    result = AuditResult.DENIED,
+                    reason = "spEntityId=${pending.spEntityId}; ${access.reason ?: "no access"}",
+                ),
+            )
+            throw AppAccessDeniedException(access.reason ?: "no access to this app")
+        }
+
         val signing = signingKeyProvider.get()
         val responseXml = SamlResponseBuilder.buildSignedResponseXml(
             SamlAssertionRequest(

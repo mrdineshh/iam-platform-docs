@@ -1995,3 +1995,47 @@ any login work itself.
   pulling a third-party headless-browser image onto the server was declined.
   Smoke-test the console in Chrome and watch the DevTools console for
   "Refused to ..." messages. The root fix (httpOnly cookie) is OQ-10.
+
+---
+
+- **[iam-tenant-svc / iam-oidcprovider-svc / iam-login-portal / iam-admin-console]
+  2026-10-27** -- User lifecycle propagation, SCIM provisioning and app-access
+  enforcement (FR-2.7, FR-2.8). (1) **Suspend / reactivate**: admin endpoints in
+  iam-tenant-svc set the status in iam-identity-svc, end every live session at
+  once (a suspended user is signed out now, not at expiry), then push the change
+  downstream; an admin cannot suspend themself. Audited as
+  `identity.suspended_by_admin` / `identity.reactivated_by_admin`. (2) **SCIM 2.0
+  outbound provisioning** (platform -> app): per-app `scim_connections` (URL +
+  bearer token; the token lives in OpenBao at `scim/<id>`, never in Postgres) and
+  `provisioned_accounts` (the app's own resource id per user, so a later
+  suspend/delete addresses exactly the account we created). Create = POST /Users
+  (a 409 "already exists" is linked to the existing account, found by userName
+  filter), suspend/reactivate = PATCH `active` (GET+PUT fallback for servers
+  without PATCH), delete = DELETE /Users/{id}. Reconciliation is state-based and
+  idempotent, so "Retry" is always safe; failures never undo the platform-side
+  change, are stored per user and app (`last_error`), audited
+  (`provisioning.failed`), and shown to the admin. Only accounts we created or
+  adopted are ever suspended or deleted. Google Workspace is suspended and
+  reactivated through the Directory API; addresses outside the configured Google
+  domain are skipped (Google answers 403 for them). Hand-rolled client, no SCIM
+  library or new dependency. (3) **SSRF guard** (`OutboundUrlGuard`): an admin
+  supplies the SCIM URL and the server calls it, so https only, no credentials in
+  the URL, and every resolved address must be public (no loopback, private,
+  link-local incl. 169.254.169.254, CGNAT, unique-local); checked when saving AND
+  on every call, redirects are never followed, 5s connect / 10s read timeouts.
+  `iam.provisioning.allow-private-targets` (env `SCIM_ALLOW_PRIVATE_TARGETS`,
+  default false) lifts this for local development only. Residual risk: DNS
+  rebinding between check and connect. (4) **Group enforcement at sign-in**:
+  iam-oidcprovider-svc asks iam-tenant-svc `GET /api/v1/app-access` (authenticated
+  by the user's own session token, so it only describes the caller) before
+  issuing an OIDC code or signing a SAML assertion; same rule as the launchpad
+  (admins: any app of their tenant; others: only apps assigned to their group; no
+  group or no assigned groups means no access). Denied sign-ins return 403
+  `APP_ACCESS_DENIED`, are audited (`oidc.access_denied` / `saml.access_denied`)
+  and the login portal shows a clear message. Fails closed. Behavior change:
+  groups were previously only a launchpad filter.
+  Tested live: group enforcement, suspend/reactivate (status, sessions, sign-in
+  block, audit), address-safety refusals. NOT yet tested live: an end-to-end SCIM
+  push, because storing a connection's token needs `secret/data/scim/*` added to
+  the `cert-issuer` OpenBao policy (done in `infra/openbao/bootstrap.py`, not yet
+  applied on the server; see OQ-11).

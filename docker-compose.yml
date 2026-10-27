@@ -258,6 +258,9 @@ services:
       # docs/DECISIONS.md) -- this file's own local copy had quietly
       # diverged from the VM's live-patched one before the migration.
       ADMIN_CONSOLE_ORIGIN: https://admin.34-71-129-0.sslip.io
+      # Outbound SCIM provisioning refuses http and private/internal addresses unless this is true.
+      # Keep it false anywhere real; it exists for local development and tests (see OutboundUrlGuard).
+      SCIM_ALLOW_PRIVATE_TARGETS: ${SCIM_ALLOW_PRIVATE_TARGETS:-false}
     depends_on:
       cloudsql-proxy:
         condition: service_started

@@ -19,20 +19,20 @@ class GlobalExceptionHandler {
         TenantNotFoundException::class, TenantSubdomainNotFoundException::class,
         OidcClientNotFoundException::class, SamlSpNotFoundException::class,
         GoogleWorkspaceConfigNotFoundException::class, UserNotFoundForDeletionException::class,
-        SessionNotFoundForRevokeException::class,
+        SessionNotFoundForRevokeException::class, ScimConnectionNotFoundException::class,
     )
     fun handleNotFound(ex: RuntimeException, request: HttpServletRequest): ResponseEntity<ErrorResponse> =
         ResponseEntity.status(HttpStatus.NOT_FOUND).body(
             ErrorResponse.of(HttpStatus.NOT_FOUND.value(), "Not Found", ex.message ?: "", request.requestURI),
         )
 
-    @ExceptionHandler(SubdomainAlreadyExistsException::class, SamlSpEntityIdAlreadyExistsException::class)
+    @ExceptionHandler(SubdomainAlreadyExistsException::class, SamlSpEntityIdAlreadyExistsException::class, CannotSuspendSelfException::class)
     fun handleConflict(ex: RuntimeException, request: HttpServletRequest): ResponseEntity<ErrorResponse> =
         ResponseEntity.status(HttpStatus.CONFLICT).body(
             ErrorResponse.of(HttpStatus.CONFLICT.value(), "Conflict", ex.message ?: "", request.requestURI),
         )
 
-    @ExceptionHandler(InvalidServiceAccountJsonException::class, InvalidBrandingException::class)
+    @ExceptionHandler(InvalidServiceAccountJsonException::class, InvalidBrandingException::class, InvalidProvisioningTargetException::class)
     fun handleInvalidServiceAccountJson(ex: RuntimeException, request: HttpServletRequest): ResponseEntity<ErrorResponse> =
         ResponseEntity.status(HttpStatus.BAD_REQUEST).body(
             ErrorResponse.of(HttpStatus.BAD_REQUEST.value(), "Bad Request", ex.message ?: "", request.requestURI),

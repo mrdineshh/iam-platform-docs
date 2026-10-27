@@ -6,7 +6,7 @@ import { randomUUID } from "node:crypto";
 import { config } from "@/lib/config";
 import { login, precheck, type LoginResponse } from "@/lib/authClient";
 import { completeAuthorization } from "@/lib/oidcClient";
-import { denialMessage } from "@/lib/errorCodes";
+import { denialMessage, isAppAccessDenied } from "@/lib/errorCodes";
 import { UpstreamError } from "@/lib/http";
 import { findTenantBySubdomain, resolveTenantSubdomain, type Tenant } from "@/lib/tenant";
 import { str } from "@/lib/formData";
@@ -182,6 +182,9 @@ export async function loginAction(_prevState: LoginFormState, formData: FormData
     );
     redirectTarget = completion.redirectUri;
   } catch (err) {
+    if (isAppAccessDenied(err)) {
+      return { error: denialMessage("APP_ACCESS_DENIED", ""), errorCode: "APP_ACCESS_DENIED" };
+    }
     console.error("[loginAction] authorize/complete failed", err);
     // Never fail open: the session exists at this point, but if we can't
     // mint an OIDC code the caller must not be silently treated as signed

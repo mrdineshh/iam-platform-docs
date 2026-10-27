@@ -29,6 +29,9 @@ data class RemoteSamlSp(
 )
 
 data class VerifyClientSecretRequest(val clientSecret: String)
+
+/** Whether the signed-in user may use this app (group membership), decided by iam-tenant-svc. */
+data class RemoteAppAccess(val allowed: Boolean, val reason: String? = null)
 data class VerifyClientSecretResponse(val valid: Boolean, val tenantId: UUID? = null)
 
 // Added for Service 13 (iam-login-portal) -- resolves the client's tenant's
@@ -68,6 +71,24 @@ class TenantClient(
             client.get("/api/v1/oidc-clients/$clientId", RemoteOidcClient::class.java)
         } catch (ex: HttpClientErrorException.NotFound) {
             null
+        }
+
+    /**
+     * Asks iam-tenant-svc whether the user behind this session may sign in to
+     * the app (same rule as the launchpad: admins any app of their tenant,
+     * everyone else only apps assigned to their group). Authenticated by the
+     * session token itself, so it can only ever describe the caller's own access.
+     * Anything other than a clear "allowed" is treated as a refusal.
+     */
+    fun checkAppAccess(appKind: String, appId: UUID, sessionToken: String): RemoteAppAccess =
+        try {
+            client.get(
+                "/api/v1/app-access?appKind=$appKind&appId=$appId",
+                RemoteAppAccess::class.java,
+                headers = mapOf("X-Session-Token" to sessionToken),
+            )
+        } catch (ex: HttpClientErrorException) {
+            RemoteAppAccess(false, "access could not be verified")
         }
 
     fun findTenant(tenantId: UUID): RemoteTenant? =

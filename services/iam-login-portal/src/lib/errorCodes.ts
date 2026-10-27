@@ -5,9 +5,12 @@
 // the Kotlin/TypeScript language boundary -- if iam-auth-svc's enum values
 // ever change, this list must be updated to match (same coupling every
 // other consumer of a published contract has).
+import { UpstreamError } from "./http";
+
 export type AuthErrorCode =
   | "ACCOUNT_SUSPENDED"
   | "ACCOUNT_LOCKED"
+  | "APP_ACCESS_DENIED"
   | "LOCATION_UNVERIFIED"
   | "POLICY_UNAVAILABLE"
   | "POLICY_DENIED"
@@ -24,6 +27,8 @@ export function denialMessage(errorCode: string | undefined, fallback: string): 
   switch (errorCode as AuthErrorCode | undefined) {
     case "ACCOUNT_SUSPENDED":
       return "This account has been suspended. Contact your administrator.";
+    case "APP_ACCESS_DENIED":
+      return "You don't have access to this app. Ask your administrator to add you to a group that includes it.";
     case "ACCOUNT_LOCKED":
       return "This account is locked after too many failed sign-in attempts. Try again later, or ask your administrator to unlock it.";
     case "LOCATION_UNVERIFIED":
@@ -49,6 +54,14 @@ export function denialMessage(errorCode: string | undefined, fallback: string): 
     default:
       return fallback;
   }
+}
+
+/**
+ * The sign-in worked, but the person's group has no access to this app
+ * (iam-oidcprovider-svc answers 403 APP_ACCESS_DENIED when completing it).
+ */
+export function isAppAccessDenied(err: unknown): boolean {
+  return err instanceof UpstreamError && err.status === 403 && err.errorCode === "APP_ACCESS_DENIED";
 }
 
 /** Which of these codes belong on the TOTP field vs. the push button. */

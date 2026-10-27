@@ -7,6 +7,8 @@ const MESSAGES: Record<string, string> = {
   tenant_unresolved: "Could not determine which organization to sign in to.",
   tenant_not_found: "No organization was found for this sign-in link.",
   unavailable: "Sign-in is temporarily unavailable. Please try again shortly.",
+  app_access_denied:
+    "You don't have access to this app. Ask your administrator to add you to a group that includes it.",
 };
 
 // Defense in depth (docs/specs/iam-login-portal-SPEC.md Section 4):

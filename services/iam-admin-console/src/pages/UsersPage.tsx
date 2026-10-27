@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import QRCode from "qrcode";
-import { createUser, deleteUser, unlockUser, type CreatedUser } from "@/lib/identity";
+import { createUser, deleteUser, reactivateUser, suspendUser, unlockUser, type CreatedUser } from "@/lib/identity";
+import { summarizeTargets } from "@/lib/provisioning";
 import { listTenantUsers, type AdminUserListEntry } from "@/lib/impersonate";
 import { getPolicy, putPolicy, type Policy } from "@/lib/policy";
 import { listGroups, assignUserToGroup, type Group } from "@/lib/groups";
@@ -22,6 +23,7 @@ import {
 import { useConfirm, useToast } from "@/components/feedback";
 import { useTable } from "@/lib/useTable";
 import { UserSessionsDialog } from "@/components/UserSessionsDialog";
+import { UserProvisioningDialog } from "@/components/UserProvisioningDialog";
 
 // "" / "true" / "false" rather than boolean | null directly -- an HTML
 // <select> only ever carries a string value, and this third state
@@ -85,6 +87,8 @@ export function UsersPage() {
   const [rules, setRules] = useState<PasswordRules>(DEFAULT_RULES);
   const [unlockingUserId, setUnlockingUserId] = useState<string | null>(null);
   const [sessionsFor, setSessionsFor] = useState<{ id: string; label: string } | null>(null);
+  const [provisioningFor, setProvisioningFor] = useState<{ id: string; label: string } | null>(null);
+  const [changingStatusId, setChangingStatusId] = useState<string | null>(null);
   const [justCreated, setJustCreated] = useState<CreatedUser | null>(null);
   const [qrDataUrl, setQrDataUrl] = useState<string | null>(null);
 
@@ -152,6 +156,37 @@ export function UsersPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // Suspending signs the user out at once and suspends them in Google Workspace and
+  // every connected app; reactivating reverses it. Problems downstream never undo it.
+  async function handleSuspend(userId: string, label: string) {
+    const ok = await confirm({
+      title: "Suspend user?",
+      message: `${label} will be signed out right away and cannot sign in until you reactivate them. They are also suspended in Google Workspace and in connected apps.`,
+      confirmLabel: "Suspend user",
+      danger: true,
+    });
+    if (!ok) return;
+    await changeStatus(userId, true);
+  }
+
+  async function changeStatus(userId: string, suspend: boolean) {
+    setChangingStatusId(userId);
+    try {
+      const result = await (suspend ? suspendUser : reactivateUser)(session.tenantId, userId, session.token);
+      const { done, problems } = summarizeTargets(result.targets);
+      const lead = suspend
+        ? `User suspended${result.sessionsEnded > 0 ? ` and signed out of ${result.sessionsEnded} session${result.sessionsEnded === 1 ? "" : "s"}` : ""}.`
+        : "User reactivated.";
+      if (problems.length > 0) toast.error(`${lead} But: ${problems.join(" | ")}`);
+      else toast.success(done ? `${lead} ${done}.` : lead);
+      await refreshUsers();
+    } catch (err) {
+      toast.error(errorMessage(err));
+    } finally {
+      setChangingStatusId(null);
+    }
+  }
+
   async function handleUnlock(userId: string, label: string) {
     setUnlockingUserId(userId);
     try {
@@ -176,8 +211,10 @@ export function UsersPage() {
     setDeletingUserId(userId);
     try {
       const result = await deleteUser(session.tenantId, userId, session.token);
-      if (result.googleWorkspaceError) {
-        toast.error(`User deleted here, but Google Workspace deletion failed: ${result.googleWorkspaceError}`);
+      const { problems } = summarizeTargets(result.appProvisioning);
+      if (result.googleWorkspaceError) problems.unshift(`Google Workspace: ${result.googleWorkspaceError}`);
+      if (problems.length > 0) {
+        toast.error(`User deleted here, but not everywhere: ${problems.join(" | ")}`);
       } else {
         toast.success("User deleted.");
       }
@@ -355,6 +392,15 @@ export function UsersPage() {
           )}
           {justCreated.googleWorkspaceError && (
             <Alert kind="error">Google Workspace account creation failed: {justCreated.googleWorkspaceError}</Alert>
+          )}
+          {summarizeTargets(justCreated.appProvisioning).done && (
+            <Alert kind="success">{summarizeTargets(justCreated.appProvisioning).done}.</Alert>
+          )}
+          {summarizeTargets(justCreated.appProvisioning).problems.length > 0 && (
+            <Alert kind="error">
+              Could not create the user in: {summarizeTargets(justCreated.appProvisioning).problems.join(" | ")}. Open the
+              user's Apps to retry.
+            </Alert>
           )}
           <div className="form-actions">
             <button type="button" className="btn-secondary" onClick={() => setJustCreated(null)}>
@@ -555,6 +601,32 @@ export function UsersPage() {
                         </button>
                         <button
                           type="button"
+                          className="btn-secondary btn-sm"
+                          onClick={() => setProvisioningFor({ id: u.id, label: `${u.displayName} (${u.email})` })}
+                        >
+                          Apps
+                        </button>
+                        {u.status === "ACTIVE" ? (
+                          <button
+                            type="button"
+                            className="btn-secondary btn-sm"
+                            disabled={changingStatusId === u.id}
+                            onClick={() => void handleSuspend(u.id, `${u.displayName} (${u.email})`)}
+                          >
+                            <PendingLabel pending={changingStatusId === u.id} idle="Suspend" busy="Suspending…" />
+                          </button>
+                        ) : (
+                          <button
+                            type="button"
+                            className="btn-sm"
+                            disabled={changingStatusId === u.id}
+                            onClick={() => void changeStatus(u.id, false)}
+                          >
+                            <PendingLabel pending={changingStatusId === u.id} idle="Reactivate" busy="Reactivating…" />
+                          </button>
+                        )}
+                        <button
+                          type="button"
                           className="btn-danger btn-sm"
                           disabled={deletingUserId === u.id}
                           onClick={() => void handleDelete(u.id, `${u.displayName} (${u.email})`)}
@@ -578,6 +650,13 @@ export function UsersPage() {
           />
         </div>
         </>
+      )}
+      {provisioningFor && (
+        <UserProvisioningDialog
+          userId={provisioningFor.id}
+          userLabel={provisioningFor.label}
+          onClose={() => setProvisioningFor(null)}
+        />
       )}
       {sessionsFor && (
         <UserSessionsDialog

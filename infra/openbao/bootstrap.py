@@ -206,6 +206,9 @@ path "secret/data/saml-signing-key" {
 path "secret/data/google-workspace/*" {
   capabilities = ["read", "create", "update"]
 }
+path "secret/data/scim/*" {
+  capabilities = ["read", "create", "update"]
+}
 """
 
 

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { denialMessage, isPushError, isTotpError } from "./errorCodes";
+import { denialMessage, isAppAccessDenied, isPushError, isTotpError } from "./errorCodes";
+import { UpstreamError } from "./http";
 
 describe("denialMessage", () => {
   it("maps a known errorCode to its user-facing message, not the raw backend message", () => {
@@ -24,5 +25,21 @@ describe("isTotpError / isPushError", () => {
     expect(isPushError("PUSH_DENIED")).toBe(true);
     expect(isPushError("PUSH_TIMEOUT")).toBe(true);
     expect(isPushError("TOTP_INVALID")).toBe(false);
+  });
+});
+
+describe("app access denied", () => {
+  it("has a clear message that tells the person what to do", () => {
+    const message = denialMessage("APP_ACCESS_DENIED", "raw");
+    expect(message).toContain("don't have access");
+    expect(message).toContain("administrator");
+  });
+
+  it("recognizes only the 403 APP_ACCESS_DENIED answer from the provider", () => {
+    expect(isAppAccessDenied(new UpstreamError(403, "no", "APP_ACCESS_DENIED"))).toBe(true);
+    expect(isAppAccessDenied(new UpstreamError(403, "no", "POLICY_DENIED"))).toBe(false);
+    expect(isAppAccessDenied(new UpstreamError(500, "boom", "APP_ACCESS_DENIED"))).toBe(false);
+    expect(isAppAccessDenied(new Error("x"))).toBe(false);
+    expect(isAppAccessDenied(null)).toBe(false);
   });
 });

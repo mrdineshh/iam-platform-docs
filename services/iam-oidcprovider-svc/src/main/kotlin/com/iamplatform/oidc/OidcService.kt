@@ -94,6 +94,24 @@ class OidcService(
         val user = identityClient.findUser(session.userId)
             ?: throw SessionInvalidException("user for this session no longer exists")
 
+        // Signing in is not the same as being allowed to use THIS app: the user's
+        // group must have access to it (admins: any app of their organization).
+        val access = tenantClient.checkAppAccess("oidc", clientId, sessionToken)
+        if (!access.allowed) {
+            auditPublisher.publish(
+                AuditEvent(
+                    correlationId = CorrelationId.get(),
+                    tenantId = client.tenantId,
+                    actorType = ActorType.USER,
+                    actorId = session.userId.toString(),
+                    action = "oidc.access_denied",
+                    result = AuditResult.DENIED,
+                    reason = "clientId=$clientId; ${access.reason ?: "no access"}",
+                ),
+            )
+            throw AppAccessDeniedException(access.reason ?: "no access to this app")
+        }
+
         val code = codeStore.issue(
             AuthorizationCodeData(
                 clientId = clientId,

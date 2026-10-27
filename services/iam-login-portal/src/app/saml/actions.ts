@@ -5,7 +5,7 @@ import { randomUUID } from "node:crypto";
 import { config } from "@/lib/config";
 import { login, type LoginResponse } from "@/lib/authClient";
 import { completeSamlAuthorization } from "@/lib/samlClient";
-import { denialMessage } from "@/lib/errorCodes";
+import { denialMessage, isAppAccessDenied } from "@/lib/errorCodes";
 import { UpstreamError } from "@/lib/http";
 import { str } from "@/lib/formData";
 import { resolveTenant } from "../login/actions";
@@ -93,6 +93,9 @@ export async function samlLoginAction(_prevState: SamlLoginFormState, formData: 
       },
     };
   } catch (err) {
+    if (isAppAccessDenied(err)) {
+      return { error: denialMessage("APP_ACCESS_DENIED", ""), errorCode: "APP_ACCESS_DENIED" };
+    }
     console.error("[samlLoginAction] saml/complete failed", err);
     // Never fail open: the session exists at this point, but if we can't
     // mint a signed assertion the caller must not be silently treated as

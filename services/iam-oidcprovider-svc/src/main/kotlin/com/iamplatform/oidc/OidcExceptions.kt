@@ -15,6 +15,10 @@ class AuthorizeCompleteException(message: String) : RuntimeException(message)
 // session token, or a session that doesn't belong to this client's tenant.
 class SessionInvalidException(message: String) : RuntimeException(message)
 
+// The user has a valid session but their group has no access to this app
+// (completing the sign-in is refused; the portal shows a clear message).
+class AppAccessDeniedException(message: String) : RuntimeException(message)
+
 class InvalidGrantException(message: String) : RuntimeException(message)
 
 class InvalidClientException(message: String) : RuntimeException(message)

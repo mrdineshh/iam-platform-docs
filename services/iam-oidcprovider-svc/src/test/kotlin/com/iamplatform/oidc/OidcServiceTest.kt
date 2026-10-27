@@ -1,6 +1,7 @@
 package com.iamplatform.oidc
 
 import com.iamplatform.oidc.client.IdentityClient
+import com.iamplatform.oidc.client.RemoteAppAccess
 import com.iamplatform.oidc.client.RemoteOidcClient
 import com.iamplatform.oidc.client.RemoteSession
 import com.iamplatform.oidc.client.RemoteTenant
@@ -8,11 +9,15 @@ import com.iamplatform.oidc.client.RemoteUser
 import com.iamplatform.oidc.client.SessionClient
 import com.iamplatform.oidc.client.TenantClient
 import com.iamplatform.oidc.client.VerifyClientSecretResponse
+import com.iamplatform.servicekit.audit.AuditEvent
 import com.iamplatform.servicekit.audit.AuditPublisher
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.assertThrows
 import org.mockito.kotlin.any
+import org.mockito.kotlin.argumentCaptor
 import org.mockito.kotlin.mock
+import org.mockito.kotlin.never
+import org.mockito.kotlin.verify
 import org.mockito.kotlin.whenever
 import java.time.Duration
 import java.time.Instant
@@ -115,6 +120,7 @@ class OidcServiceTest {
         whenever(tenantClient.findClient(clientId)).thenReturn(remoteClient())
         whenever(sessionClient.find("session-token")).thenReturn(RemoteSession(UUID.randomUUID(), tenantId, userId, Instant.now().plusSeconds(3600)))
         whenever(identityClient.findUser(userId)).thenReturn(RemoteUser(userId, tenantId, "carol@acme.com", "Carol", "ACTIVE", Instant.now()))
+        whenever(tenantClient.checkAppAccess("oidc", clientId, "session-token")).thenReturn(RemoteAppAccess(true))
         whenever(codeStore.issue(any())).thenReturn("issued-code")
 
         val redirect = service.completeAuthorization("session-token", clientId, redirectUri, "openid", "xyz")
@@ -188,5 +194,41 @@ class OidcServiceTest {
         assertEquals("id-token", result.idToken)
         assertEquals("access-token", result.accessToken)
         assertNotNull(result.expiresIn)
+    }
+
+    @Test
+    fun `completeAuthorization refuses a signed-in user whose group has no access to the app, and issues no code`() {
+        val userId = UUID.randomUUID()
+        whenever(tenantClient.findClient(clientId)).thenReturn(remoteClient())
+        whenever(sessionClient.find("session-token")).thenReturn(RemoteSession(UUID.randomUUID(), tenantId, userId, Instant.now().plusSeconds(3600)))
+        whenever(identityClient.findUser(userId)).thenReturn(RemoteUser(userId, tenantId, "carol@acme.com", "Carol", "ACTIVE", Instant.now()))
+        whenever(tenantClient.checkAppAccess("oidc", clientId, "session-token"))
+            .thenReturn(RemoteAppAccess(false, "your group does not have access to this app"))
+
+        val ex = assertThrows<AppAccessDeniedException> {
+            service.completeAuthorization("session-token", clientId, redirectUri, "openid", "xyz")
+        }
+
+        assertEquals("your group does not have access to this app", ex.message)
+        verify(codeStore, never()).issue(any())
+        val captor = argumentCaptor<AuditEvent>()
+        verify(auditPublisher).publish(captor.capture())
+        assertEquals("oidc.access_denied", captor.firstValue.action)
+        assertEquals(userId.toString(), captor.firstValue.actorId)
+    }
+
+    @Test
+    fun `the access check is asked about this exact client and this exact session`() {
+        val userId = UUID.randomUUID()
+        whenever(tenantClient.findClient(clientId)).thenReturn(remoteClient())
+        whenever(sessionClient.find("session-token")).thenReturn(RemoteSession(UUID.randomUUID(), tenantId, userId, Instant.now().plusSeconds(3600)))
+        whenever(identityClient.findUser(userId)).thenReturn(RemoteUser(userId, tenantId, "carol@acme.com", "Carol", "ACTIVE", Instant.now()))
+        whenever(tenantClient.checkAppAccess("oidc", clientId, "session-token")).thenReturn(RemoteAppAccess(false))
+
+        assertThrows<AppAccessDeniedException> {
+            service.completeAuthorization("session-token", clientId, redirectUri, "openid", "xyz")
+        }
+
+        verify(tenantClient).checkAppAccess("oidc", clientId, "session-token")
     }
 }

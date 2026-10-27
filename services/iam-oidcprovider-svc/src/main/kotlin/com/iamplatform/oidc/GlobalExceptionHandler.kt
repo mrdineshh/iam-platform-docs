@@ -38,6 +38,17 @@ class GlobalExceptionHandler {
             ErrorResponse.of(HttpStatus.UNAUTHORIZED.value(), HttpStatus.UNAUTHORIZED.reasonPhrase, ex.message ?: "", request.requestURI),
         )
 
+    // The sign-in itself succeeded, but this user may not use this app. A stable
+    // errorCode lets iam-login-portal show a specific message instead of a generic failure.
+    @ExceptionHandler(AppAccessDeniedException::class)
+    fun handleAppAccessDenied(ex: AppAccessDeniedException, request: HttpServletRequest): ResponseEntity<ErrorResponse> =
+        ResponseEntity.status(HttpStatus.FORBIDDEN).body(
+            ErrorResponse.of(
+                HttpStatus.FORBIDDEN.value(), HttpStatus.FORBIDDEN.reasonPhrase,
+                ex.message ?: "no access to this app", request.requestURI, "APP_ACCESS_DENIED",
+            ),
+        )
+
     @ExceptionHandler(InvalidGrantException::class)
     fun handleInvalidGrant(ex: InvalidGrantException): ResponseEntity<OAuthError> =
         ResponseEntity.status(HttpStatus.BAD_REQUEST).body(OAuthError("invalid_grant", ex.message))

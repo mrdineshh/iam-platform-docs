@@ -44,6 +44,7 @@ class AdminUserController(
     private val adminAccessGuard: AdminAccessGuard,
     private val googleWorkspaceConfigService: GoogleWorkspaceConfigService,
     private val googleWorkspaceDirectoryClient: GoogleWorkspaceDirectoryClient,
+    private val provisioningService: ProvisioningService,
     private val auditPublisher: AuditPublisher,
 ) {
     @PostMapping
@@ -101,6 +102,11 @@ class AdminUserController(
             )
         }
 
+        // Push the new user to every SCIM-connected app (best effort, like Google above).
+        val appProvisioning = provisioningService.reconcile(
+            ProvisionUser(created.id, request.tenantId, created.email, created.displayName, active = true),
+        )
+
         return ResponseEntity.status(HttpStatus.CREATED).body(
             CreatedUserResponse(
                 id = created.id,
@@ -112,6 +118,7 @@ class AdminUserController(
                 provisioningUri = device.provisioningUri,
                 googleWorkspaceProvisioned = googleProvisioned,
                 googleWorkspaceError = googleError,
+                appProvisioning = appProvisioning,
             ),
         )
     }
@@ -137,10 +144,13 @@ class AdminUserController(
 
         identityClient.deleteUser(id)
 
+        // Delete the accounts we created in SCIM-connected apps (only those; see ProvisioningService).
+        val appProvisioning = provisioningService.deprovision(tenantId, id, user.email)
+
         var googleDeleted = false
         var googleError: String? = null
         val googleConfig = googleWorkspaceConfigService.loadProvisioningConfig(tenantId)
-        if (googleConfig != null && user.email != null) {
+        if (googleConfig != null && user.email != null && googleConfig.manages(user.email)) {
             try {
                 googleWorkspaceDirectoryClient.deleteUser(googleConfig.adminEmail, googleConfig.serviceAccountKey, user.email)
                 googleDeleted = true
@@ -160,7 +170,14 @@ class AdminUserController(
             )
         }
 
-        return ResponseEntity.ok(DeletedUserResponse(id = id, googleWorkspaceDeleted = googleDeleted, googleWorkspaceError = googleError))
+        return ResponseEntity.ok(
+            DeletedUserResponse(
+                id = id,
+                googleWorkspaceDeleted = googleDeleted,
+                googleWorkspaceError = googleError,
+                appProvisioning = appProvisioning,
+            ),
+        )
     }
 
     // FR-3.5: an admin clears a lockout (temporary or permanent) so the user can
@@ -196,8 +213,4 @@ class AdminUserController(
         return ResponseEntity.noContent().build()
     }
 
-    private fun splitDisplayName(displayName: String): Pair<String, String> {
-        val parts = displayName.trim().split(Regex("\\s+"), limit = 2)
-        return if (parts.size == 2) parts[0] to parts[1] else parts[0] to parts[0]
-    }
 }

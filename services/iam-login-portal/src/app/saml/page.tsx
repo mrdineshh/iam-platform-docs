@@ -7,6 +7,7 @@ import { SamlAutoPostForm } from "./SamlAutoPostForm";
 import { config } from "@/lib/config";
 import { completeSamlAuthorization } from "@/lib/samlClient";
 import { findTenantBySubdomain, resolveTenantSubdomain } from "@/lib/tenant";
+import { isAppAccessDenied } from "@/lib/errorCodes";
 import { brandStyle, safeLogoUrl } from "@/lib/branding";
 
 interface SearchParams {
@@ -49,8 +50,12 @@ export default async function SamlLoginPage({
           <SamlAutoPostForm acsUrl={completion.acsUrl} samlResponse={completion.samlResponse} relayState={completion.relayState} />
         </main>
       );
-    } catch {
-      // Falls through to the normal login form below -- an expired,
+    } catch (err) {
+      // Signed in, but this person's group has no access to the SP: say so.
+      if (isAppAccessDenied(err)) {
+        redirect("/login/error?reason=app_access_denied");
+      }
+      // Otherwise falls through to the normal login form below -- an expired,
       // terminated, or foreign session fails closed, not silently.
     }
   }

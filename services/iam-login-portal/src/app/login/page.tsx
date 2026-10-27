@@ -6,6 +6,7 @@ import { SplitShell } from "../SplitShell";
 import { config } from "@/lib/config";
 import { completeAuthorization } from "@/lib/oidcClient";
 import { findTenantBySubdomain, resolveTenantSubdomain } from "@/lib/tenant";
+import { isAppAccessDenied } from "@/lib/errorCodes";
 import { brandStyle, safeLogoUrl } from "@/lib/branding";
 
 interface SearchParams {
@@ -52,6 +53,7 @@ export default async function LoginPage({
   // login form below.
   const ssoToken = (await cookies()).get(config.ssoCookieName)?.value;
   let ssoRedirect: string | null = null;
+  let accessDenied = false;
   if (ssoToken) {
     try {
       const completion = await completeAuthorization(
@@ -59,9 +61,15 @@ export default async function LoginPage({
         correlationId,
       );
       ssoRedirect = completion.redirectUri;
-    } catch {
+    } catch (err) {
+      // Signed in, but this person's group has no access to the app: say so,
+      // rather than showing a sign-in form that could never help.
+      accessDenied = isAppAccessDenied(err);
       ssoRedirect = null;
     }
+  }
+  if (accessDenied) {
+    redirect("/login/error?reason=app_access_denied");
   }
   // Deliberately outside the try above: redirect() signals by throwing, so
   // calling it in there would be swallowed by that catch and silently fall

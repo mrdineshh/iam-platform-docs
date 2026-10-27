@@ -30,6 +30,15 @@ data class ProvisionGoogleUserRequest(
 class GoogleProvisioningException(message: String) : RuntimeException(message)
 
 /**
+ * True when [email] is on the Google Workspace domain this tenant configured.
+ * An address on any other domain cannot exist in that Workspace, and Google
+ * answers 403 "Not Authorized" for it, so callers skip it rather than report
+ * a failure.
+ */
+fun ProvisionGoogleUserRequest.manages(email: String): Boolean =
+    email.substringAfterLast('@', "").equals(domain, ignoreCase = true)
+
+/**
  * Admin SDK Directory API client, used to auto-create a matching Google
  * Workspace account whenever a user is created on this platform (added
  * 2026-10-26, see docs/DECISIONS.md). Hand-rolled JWT + OAuth2 exchange
@@ -109,6 +118,30 @@ class GoogleWorkspaceDirectoryClient {
                 .toBodilessEntity()
         } catch (ex: Exception) {
             throw GoogleProvisioningException("Google Workspace user deletion failed: ${ex.message}")
+        }
+    }
+
+    /**
+     * Suspends or reactivates the Google account (Directory API users.patch,
+     * `suspended`). A suspended Google user cannot sign in to any Google
+     * service, including through this platform's SSO. Returns false when Google
+     * has no such user (nothing to change), true when it was applied.
+     */
+    fun setSuspended(adminEmail: String, serviceAccountKey: GoogleServiceAccountKey, primaryEmail: String, suspended: Boolean): Boolean {
+        val accessToken = fetchAccessToken(adminEmail, serviceAccountKey)
+        try {
+            directoryClient.patch()
+                .uri("/admin/directory/v1/users/{email}", primaryEmail)
+                .header("Authorization", "Bearer $accessToken")
+                .body(mapOf("suspended" to suspended))
+                .retrieve()
+                .toBodilessEntity()
+            return true
+        } catch (ex: org.springframework.web.client.HttpClientErrorException.NotFound) {
+            return false
+        } catch (ex: Exception) {
+            val verb = if (suspended) "suspension" else "reactivation"
+            throw GoogleProvisioningException("Google Workspace user $verb failed: ${ex.message}")
         }
     }
 

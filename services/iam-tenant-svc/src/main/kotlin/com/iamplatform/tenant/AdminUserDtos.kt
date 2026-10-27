@@ -46,6 +46,8 @@ data class CreatedUserResponse(
     // best-effort, not a hard dependency of the core flow.
     val googleWorkspaceProvisioned: Boolean = false,
     val googleWorkspaceError: String? = null,
+    // One entry per SCIM-connected app the new user was pushed to.
+    val appProvisioning: List<TargetResult> = emptyList(),
 )
 
 data class Enroll2faResponse(
@@ -67,6 +69,8 @@ data class DeletedUserResponse(
     val id: UUID,
     val googleWorkspaceDeleted: Boolean = false,
     val googleWorkspaceError: String? = null,
+    // One entry per SCIM-connected app account that was deleted (or failed to be).
+    val appProvisioning: List<TargetResult> = emptyList(),
 )
 
 class UserNotFoundForDeletionException(id: UUID) : RuntimeException("No user '$id' found for this tenant")
