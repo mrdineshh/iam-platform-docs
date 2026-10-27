@@ -13,7 +13,14 @@ import java.util.UUID
 enum class RemoteUserRole { ADMIN, USER }
 enum class RemoteUserStatus { ACTIVE, SUSPENDED }
 
-data class RemoteUser(val id: UUID, val tenantId: UUID, val role: RemoteUserRole, val groupId: UUID? = null, val email: String? = null)
+data class RemoteUser(
+    val id: UUID,
+    val tenantId: UUID,
+    val role: RemoteUserRole,
+    val groupId: UUID? = null,
+    val email: String? = null,
+    val displayName: String? = null,
+)
 
 data class RemoteUserListEntry(
     val id: UUID,

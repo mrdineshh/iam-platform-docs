@@ -24,6 +24,12 @@ export function tileColor(name: string): string {
   return PALETTE[hash % PALETTE.length];
 }
 
+/** First letter for the account avatar: from the name, else the email, else a fallback. */
+export function accountInitial(name: string | null, email: string | null, fallback = "?"): string {
+  const source = (name ?? "").trim() || (email ?? "").trim();
+  return source ? source.charAt(0).toUpperCase() : fallback;
+}
+
 // Real logos for known apps, matched by name (case-insensitive).
 const KNOWN_LOGOS: Array<{ match: string; src: string }> = [
   { match: "pulse", src: "/app-logos/pulse.svg" },

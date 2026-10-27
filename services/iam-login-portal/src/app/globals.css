@@ -561,6 +561,50 @@ h1 {
   box-shadow: 0 4px 14px rgba(60, 64, 67, 0.3), 0 1px 3px rgba(60, 64, 67, 0.15);
 }
 
+.lp__avatar--user {
+  color: #ffffff;
+  font-size: 1.05rem;
+  font-weight: 500;
+}
+
+.lp__avatar--user:hover,
+.lp__menu[open] .lp__avatar--user {
+  filter: brightness(0.92);
+}
+
+.lp__who {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 0 0 14px;
+  padding-bottom: 14px;
+  border-bottom: 1px solid #e8eaed;
+  min-width: 0;
+}
+
+.lp__who-name {
+  font-size: 1rem;
+  font-weight: 500;
+  color: #202124;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.lp__who-email {
+  font-size: 0.88rem;
+  color: #5f6368;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.lp__who-tenant {
+  margin-top: 6px;
+  font-size: 0.8rem;
+  color: #80868b;
+}
+
 .lp__menu-tenant {
   margin: 0 0 14px;
   color: #5f6368;

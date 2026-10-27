@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { filterApps, knownLogo, tileColor, type LaunchApp } from "@/lib/launchpad";
+import { accountInitial, filterApps, knownLogo, tileColor, type LaunchApp } from "@/lib/launchpad";
 import { signOutAction } from "./actions";
 
 /**
@@ -13,11 +13,13 @@ export function Launchpad({
   tenantName,
   logoUrl,
   apps,
+  user,
   tenantOverride,
 }: {
   tenantName: string;
   logoUrl: string | null;
   apps: LaunchApp[];
+  user: { name: string | null; email: string | null } | null;
   tenantOverride: string | null;
 }) {
   const [query, setQuery] = useState("");
@@ -77,16 +79,32 @@ export function Launchpad({
         </label>
 
         <details className="lp__menu" ref={menuRef}>
-          <summary className="lp__avatar" aria-label="Account menu">
-            <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true" focusable="false">
-              <path
-                fill="currentColor"
-                d="M12 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8m0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4"
-              />
-            </svg>
+          <summary
+            className={user ? "lp__avatar lp__avatar--user" : "lp__avatar"}
+            style={user ? { background: tileColor(user.email ?? user.name ?? tenantName) } : undefined}
+            aria-label={user ? `Account menu for ${user.name ?? user.email}` : "Account menu"}
+          >
+            {user ? (
+              <span aria-hidden="true">{accountInitial(user.name, user.email)}</span>
+            ) : (
+              <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true" focusable="false">
+                <path
+                  fill="currentColor"
+                  d="M12 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8m0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4"
+                />
+              </svg>
+            )}
           </summary>
           <div className="lp__menu-panel">
-            <p className="lp__menu-tenant">Signed in to {tenantName}</p>
+            {user ? (
+              <div className="lp__who">
+                <span className="lp__who-name">{user.name ?? user.email}</span>
+                {user.name && user.email && <span className="lp__who-email">{user.email}</span>}
+                <span className="lp__who-tenant">{tenantName}</span>
+              </div>
+            ) : (
+              <p className="lp__menu-tenant">Signed in to {tenantName}</p>
+            )}
             <form action={signOutAction.bind(null, tenantOverride)}>
               <button type="submit" className="lp__signout">
                 Sign out

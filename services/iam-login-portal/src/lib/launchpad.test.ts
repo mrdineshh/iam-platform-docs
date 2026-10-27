@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { filterApps, knownLogo, tileColor } from "./launchpad";
+import { accountInitial, filterApps, knownLogo, tileColor } from "./launchpad";
 
 const apps = [
   { id: "1", name: "Pulse" },
@@ -28,6 +28,15 @@ describe("tileColor", () => {
   it("is stable for the same name and always one of the palette colors", () => {
     expect(tileColor("Jira")).toBe(tileColor("Jira"));
     expect(tileColor("Jira")).toMatch(/^#[0-9a-f]{6}$/);
+  });
+});
+
+describe("accountInitial", () => {
+  it("uses the name first, then the email, then the fallback", () => {
+    expect(accountInitial("ada lovelace", "x@y.z")).toBe("A");
+    expect(accountInitial("  ", "bob@econz.net")).toBe("B");
+    expect(accountInitial(null, null)).toBe("?");
+    expect(accountInitial(null, null, "E")).toBe("E");
   });
 });
 

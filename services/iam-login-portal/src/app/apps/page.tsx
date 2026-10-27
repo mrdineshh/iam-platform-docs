@@ -6,6 +6,7 @@ import { findTenantBySubdomain, resolveTenantSubdomain } from "@/lib/tenant";
 import { brandStyle, safeLogoUrl } from "@/lib/branding";
 import { listMyApps, type MyAppTile } from "@/lib/myApps";
 import { UpstreamError } from "@/lib/http";
+import { getMe } from "@/lib/me";
 import { Launchpad } from "./Launchpad";
 
 interface SearchParams {
@@ -55,6 +56,8 @@ export default async function AppsPage({
     redirect("/login/error?reason=tenant_not_found");
   }
 
+  const me = await getMe(ssoToken, correlationId);
+
   let apps: MyAppTile[];
   try {
     apps = await listMyApps(tenant.id, ssoToken, correlationId);
@@ -74,6 +77,7 @@ export default async function AppsPage({
         tenantName={tenant.name}
         logoUrl={safeLogoUrl(tenant.branding)}
         apps={apps}
+        user={me ? { name: me.displayName, email: me.email } : null}
         tenantOverride={tenantOverride}
       />
     </div>
