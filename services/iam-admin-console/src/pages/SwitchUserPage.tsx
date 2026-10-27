@@ -3,6 +3,19 @@ import { useNavigate } from "react-router-dom";
 import { listTenantUsers, impersonate, type AdminUserListEntry } from "@/lib/impersonate";
 import { loadSession, startImpersonation } from "@/lib/session";
 import { UpstreamError } from "@/lib/http";
+import {
+  Alert,
+  Avatar,
+  EmptyState,
+  PageHeader,
+  Pagination,
+  PendingLabel,
+  SkeletonRows,
+  SortableTh,
+  StatusBadge,
+  TableToolbar,
+} from "@/components/ui";
+import { useTable } from "@/lib/useTable";
 
 /**
  * Admin-only "Switch to user" picker. Every switch is server-side audited
@@ -54,48 +67,98 @@ export function SwitchUserPage() {
     }
   }
 
+  const table = useTable(users, {
+    searchText: (u) => `${u.displayName} ${u.email} ${u.role} ${u.status}`,
+    sorters: {
+      name: (a, b) => a.displayName.localeCompare(b.displayName),
+      role: (a, b) => a.role.localeCompare(b.role),
+      status: (a, b) => a.status.localeCompare(b.status),
+    },
+    initialSort: { key: "name", dir: "asc" },
+  });
+
   return (
     <main className="page">
-      <h1>Switch to user</h1>
-      <p className="hint">You'll be signed in as the selected user. Every switch is logged.</p>
+      <PageHeader
+        title="Switch to user"
+        subtitle="Sign in as another user to see exactly what they see. Every switch is recorded in the audit log."
+      />
 
-      {error && (
-        <p role="alert" className="login-form__error">
-          {error}
-        </p>
-      )}
+      {error && <Alert kind="error">{error}</Alert>}
 
       {loading ? (
-        <p>Loading…</p>
+        <SkeletonRows rows={4} />
       ) : users.length === 0 ? (
-        <p>No other users in this tenant yet.</p>
+        <EmptyState title="No users yet" description="Create a user first, then you can switch to them here." />
       ) : (
-        <table>
-          <thead>
-            <tr>
-              <th>Name</th>
-              <th>Email</th>
-              <th>Role</th>
-              <th>Status</th>
-              <th></th>
-            </tr>
-          </thead>
-          <tbody>
-            {users.map((u) => (
-              <tr key={u.id}>
-                <td>{u.displayName}</td>
-                <td>{u.email}</td>
-                <td>{u.role}</td>
-                <td>{u.status}</td>
-                <td>
-                  <button type="button" disabled={switching === u.id} onClick={() => void handleSwitch(u.id)}>
-                    {switching === u.id ? "Switching…" : "Switch to this user"}
-                  </button>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+        <>
+          <TableToolbar
+            query={table.query}
+            onQuery={table.setQuery}
+            placeholder="Search users"
+            summary={`${table.filteredCount} of ${table.total} users`}
+          />
+          <div className="card table-card">
+            <table>
+              <thead>
+                <tr>
+                  <SortableTh label="User" sortKey="name" sort={table.sort} onSort={table.toggleSort} />
+                  <SortableTh label="Role" sortKey="role" sort={table.sort} onSort={table.toggleSort} />
+                  <SortableTh label="Status" sortKey="status" sort={table.sort} onSort={table.toggleSort} />
+                  <th></th>
+                </tr>
+              </thead>
+              <tbody>
+                {table.filteredCount === 0 && (
+                  <tr className="table-empty-row">
+                    <td colSpan={4}>No users match "{table.query}".</td>
+                  </tr>
+                )}
+                {table.pageRows.map((u) => (
+                  <tr key={u.id}>
+                    <td>
+                      <div className="cell-user">
+                        <Avatar name={u.displayName} />
+                        <div>
+                          <div className="cell-user__name">{u.displayName}</div>
+                          <div className="cell-user__sub">{u.email}</div>
+                        </div>
+                      </div>
+                    </td>
+                    <td>
+                      <StatusBadge tone={u.role === "ADMIN" ? "info" : "neutral"}>{u.role}</StatusBadge>
+                    </td>
+                    <td>
+                      <StatusBadge tone={u.status === "ACTIVE" ? "success" : "warning"}>
+                        {u.status === "ACTIVE" ? "Active" : "Suspended"}
+                      </StatusBadge>
+                    </td>
+                    <td>
+                      <div className="row-actions">
+                        <button
+                          type="button"
+                          className="btn-secondary btn-sm"
+                          disabled={switching === u.id}
+                          onClick={() => void handleSwitch(u.id)}
+                        >
+                          <PendingLabel pending={switching === u.id} idle="Switch to this user" busy="Switching…" />
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            <Pagination
+              page={table.page}
+              pageCount={table.pageCount}
+              pageSize={table.pageSize}
+              filteredCount={table.filteredCount}
+              onPage={table.setPage}
+              onPageSize={table.setPageSize}
+            />
+          </div>
+        </>
       )}
     </main>
   );

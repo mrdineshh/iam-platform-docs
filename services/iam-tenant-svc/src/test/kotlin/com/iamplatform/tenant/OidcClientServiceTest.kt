@@ -22,7 +22,8 @@ class OidcClientServiceTest {
     private val tenantRepository = mock<TenantRepository>()
     private val secretHasher = mock<ClientSecretHasher>()
     private val auditPublisher = mock<AuditPublisher>()
-    private val service = OidcClientService(repository, tenantRepository, secretHasher, auditPublisher)
+    private val groupRepository = mock<OidcClientGroupRepository>()
+    private val service = OidcClientService(repository, tenantRepository, groupRepository, secretHasher, auditPublisher)
 
     private val tenantId = UUID.randomUUID()
 

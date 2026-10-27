@@ -7,7 +7,20 @@ import { listClients } from "@/lib/oidcClients";
 import { listSamlSps } from "@/lib/samlSps";
 import { loadSession } from "@/lib/session";
 import { UpstreamError } from "@/lib/http";
-import { Alert, AppIcon, Avatar, EmptyState, PageHeader, PendingLabel, SkeletonRows, StatusBadge } from "@/components/ui";
+import {
+  Alert,
+  AppIcon,
+  Avatar,
+  EmptyState,
+  PageHeader,
+  Pagination,
+  PendingLabel,
+  SkeletonRows,
+  StatusBadge,
+  TableToolbar,
+} from "@/components/ui";
+import { useConfirm, useToast } from "@/components/feedback";
+import { useTable } from "@/lib/useTable";
 
 // Same "connected app" shape ClientsPage builds, just the minimum this page
 // needs: id/name/kind to drive the per-group app checkboxes below.
@@ -26,6 +39,8 @@ interface GroupApp {
  */
 export function GroupsPage() {
   const session = loadSession()!;
+  const toast = useToast();
+  const confirm = useConfirm();
   const [groups, setGroups] = useState<Group[]>([]);
   const [users, setUsers] = useState<AdminUserListEntry[]>([]);
   const [apps, setApps] = useState<GroupApp[]>([]);
@@ -33,8 +48,8 @@ export function GroupsPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  async function refresh() {
-    setLoading(true);
+  async function refresh(showSkeleton = true) {
+    if (showSkeleton) setLoading(true);
     setError(null);
     try {
       const [g, u, oidcClients, samlSps] = await Promise.all([
@@ -71,32 +86,47 @@ export function GroupsPage() {
     try {
       await createGroup(session.tenantId, newGroupName.trim(), session.token);
       setNewGroupName("");
-      await refresh();
+      toast.success("Group created.");
+      await refresh(false);
     } catch (err) {
-      setError(errorMessage(err));
+      toast.error(errorMessage(err));
     }
   }
 
   async function handleAssign(userId: string, groupId: string) {
-    setError(null);
     try {
       await assignUserToGroup(session.tenantId, userId, groupId || null, session.token);
-      await refresh();
+      toast.success(groupId ? "Member added." : "Member removed.");
+      await refresh(false);
     } catch (err) {
-      setError(errorMessage(err));
+      toast.error(errorMessage(err));
     }
   }
 
   async function handleDeleteGroup(group: Group) {
-    if (!window.confirm(`Delete "${group.name}"? Its members will be unassigned and its app access removed.`)) return;
-    setError(null);
+    const ok = await confirm({
+      title: `Delete "${group.name}"?`,
+      message: "Its members will be unassigned and its app access removed. The users and apps themselves are not deleted.",
+      confirmLabel: "Delete group",
+      danger: true,
+    });
+    if (!ok) return;
     try {
       await deleteGroup(session.tenantId, group.id, session.token);
-      await refresh();
+      toast.success("Group deleted.");
+      await refresh(false);
     } catch (err) {
-      setError(errorMessage(err));
+      toast.error(errorMessage(err));
     }
   }
+
+  const unassigned = users.filter((u) => !u.groupId);
+  const unassignedTable = useTable(unassigned, {
+    searchText: (u) => `${u.displayName} ${u.email}`,
+    sorters: { name: (a, b) => a.displayName.localeCompare(b.displayName) },
+    initialSort: { key: "name", dir: "asc" },
+    pageSize: 10,
+  });
 
   return (
     <main className="page">
@@ -138,9 +168,16 @@ export function GroupsPage() {
       <div className="section-title">
         <h2>Users with no group</h2>
       </div>
-      {loading ? null : users.filter((u) => !u.groupId).length === 0 ? (
+      {loading ? null : unassigned.length === 0 ? (
         <EmptyState title="Everyone is in a group" description="Users without a group can't open any apps." />
       ) : (
+        <>
+        <TableToolbar
+          query={unassignedTable.query}
+          onQuery={unassignedTable.setQuery}
+          placeholder="Search users without a group"
+          summary={`${unassignedTable.filteredCount} of ${unassignedTable.total}`}
+        />
         <div className="card table-card">
           <table>
             <thead>
@@ -150,9 +187,12 @@ export function GroupsPage() {
               </tr>
             </thead>
             <tbody>
-              {users
-                .filter((u) => !u.groupId)
-                .map((u) => (
+              {unassignedTable.filteredCount === 0 && (
+                <tr className="table-empty-row">
+                  <td colSpan={2}>No users match "{unassignedTable.query}".</td>
+                </tr>
+              )}
+              {unassignedTable.pageRows.map((u) => (
                   <tr key={u.id}>
                     <td>
                       <div className="cell-user">
@@ -179,7 +219,16 @@ export function GroupsPage() {
                 ))}
             </tbody>
           </table>
+          <Pagination
+            page={unassignedTable.page}
+            pageCount={unassignedTable.pageCount}
+            pageSize={unassignedTable.pageSize}
+            filteredCount={unassignedTable.filteredCount}
+            onPage={unassignedTable.setPage}
+            onPageSize={unassignedTable.setPageSize}
+          />
         </div>
+        </>
       )}
     </main>
   );
@@ -208,7 +257,7 @@ function GroupCard({
   const [mfaRequired, setMfaRequired] = useState<"" | "true" | "false">("");
   const [allowedCidrs, setAllowedCidrs] = useState("");
   const [blockedCidrs, setBlockedCidrs] = useState("");
-  const [saved, setSaved] = useState(false);
+  const toast = useToast();
   const [savingPolicy, setSavingPolicy] = useState(false);
 
   // Per-app "is this app assigned to this group" state, keyed by app id.
@@ -264,6 +313,7 @@ function GroupCard({
         next.set(app.id, checked);
         return next;
       });
+      toast.success(checked ? `${app.name} added to ${group.name}.` : `${app.name} removed from ${group.name}.`);
     } catch (err) {
       setAppError(errorMessage(err));
     } finally {
@@ -273,7 +323,6 @@ function GroupCard({
 
   async function savePolicy(e: React.FormEvent) {
     e.preventDefault();
-    setSaved(false);
     setSavingPolicy(true);
     try {
       await putPolicy(
@@ -287,7 +336,7 @@ function GroupCard({
         },
         sessionToken,
       );
-      setSaved(true);
+      toast.success("Group policy saved.");
     } catch (err) {
       onError(errorMessage(err));
     } finally {
@@ -336,7 +385,6 @@ function GroupCard({
 
       <div className="group-card__section">
         <h4 className="group-card__section-title">Sign-in policy</h4>
-        {saved && <Alert kind="success">Group policy saved.</Alert>}
         <form onSubmit={(e) => void savePolicy(e)} className="policy-form" style={{ maxWidth: "none" }}>
           <div className="form-grid">
             <label className="login-form__field">

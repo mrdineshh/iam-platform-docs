@@ -155,3 +155,111 @@ export function AppIcon({ name, size = 52 }: { name: string; size?: number }) {
     </span>
   );
 }
+
+// ---------- Table toolbar, sortable header, pagination ----------
+
+export function TableToolbar({
+  query,
+  onQuery,
+  placeholder = "Search…",
+  summary,
+  right,
+}: {
+  query: string;
+  onQuery: (q: string) => void;
+  placeholder?: string;
+  summary?: ReactNode;
+  right?: ReactNode;
+}) {
+  return (
+    <div className="table-toolbar">
+      <input
+        type="search"
+        className="table-toolbar__search"
+        value={query}
+        onChange={(e) => onQuery(e.target.value)}
+        placeholder={placeholder}
+        aria-label={placeholder}
+      />
+      {summary && <span className="table-toolbar__summary">{summary}</span>}
+      {right && <div className="table-toolbar__right">{right}</div>}
+    </div>
+  );
+}
+
+export function SortableTh({
+  label,
+  sortKey,
+  sort,
+  onSort,
+}: {
+  label: string;
+  sortKey: string;
+  sort: { key: string; dir: "asc" | "desc" } | null;
+  onSort: (key: string) => void;
+}) {
+  const active = sort?.key === sortKey;
+  return (
+    <th aria-sort={active ? (sort!.dir === "asc" ? "ascending" : "descending") : "none"}>
+      <button type="button" className="th-sort" onClick={() => onSort(sortKey)}>
+        {label}
+        <span className={active ? "th-sort__arrow th-sort__arrow--active" : "th-sort__arrow"} aria-hidden="true">
+          {active ? (sort!.dir === "asc" ? "▲" : "▼") : "↕"}
+        </span>
+      </button>
+    </th>
+  );
+}
+
+export function Pagination({
+  page,
+  pageCount,
+  pageSize,
+  filteredCount,
+  onPage,
+  onPageSize,
+}: {
+  page: number;
+  pageCount: number;
+  pageSize: number;
+  filteredCount: number;
+  onPage: (p: number) => void;
+  onPageSize: (n: number) => void;
+}) {
+  if (filteredCount === 0) return null;
+  const from = (page - 1) * pageSize + 1;
+  const to = Math.min(page * pageSize, filteredCount);
+  return (
+    <div className="pagination">
+      <span className="pagination__range">
+        {from}–{to} of {filteredCount}
+      </span>
+      <label className="pagination__size">
+        Rows
+        <select value={pageSize} onChange={(e) => onPageSize(Number(e.target.value))}>
+          {[10, 25, 50].map((n) => (
+            <option key={n} value={n}>
+              {n}
+            </option>
+          ))}
+        </select>
+      </label>
+      <div className="pagination__buttons">
+        <button type="button" className="btn-secondary btn-sm" disabled={page <= 1} onClick={() => onPage(page - 1)}>
+          Previous
+        </button>
+        <span className="pagination__page">
+          Page {page} of {pageCount}
+        </span>
+        <button
+          type="button"
+          className="btn-secondary btn-sm"
+          disabled={page >= pageCount}
+          onClick={() => onPage(page + 1)}
+        >
+          Next
+        </button>
+      </div>
+    </div>
+  );
+}

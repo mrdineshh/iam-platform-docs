@@ -44,6 +44,13 @@ class SessionService(
         )
         redis.opsForValue().set(sessionKey(token), objectMapper.writeValueAsString(session), properties.ttl)
 
+        // Per-user index of token hashes (never raw tokens) so an admin or the
+        // user can list and revoke their sessions. Its TTL is refreshed on every
+        // issue, so it outlives the newest member and then disappears on its own.
+        val indexKey = userIndexKey(session.tenantId, session.userId)
+        redis.opsForSet().add(indexKey, SessionTokens.hash(token))
+        redis.expire(indexKey, properties.ttl)
+
         publish("session.issued", session, reason = "sessionId=${session.sessionId}")
         return IssueResult(token, session, replayed = false)
     }
@@ -56,6 +63,65 @@ class SessionService(
         // double-publish session.terminated.
         val raw = redis.opsForValue().getAndDelete(sessionKey(token)) ?: throw SessionNotFoundException()
         val session = objectMapper.readValue(raw, SessionRecord::class.java)
+        redis.opsForSet().remove(userIndexKey(session.tenantId, session.userId), SessionTokens.hash(token))
+        publishTerminated(session, reason)
+    }
+
+    /**
+     * Live sessions for one user, newest first. Index entries whose session has
+     * already expired or been terminated are pruned as they are found. Sessions
+     * issued before this index existed are not listed; they expire on their own.
+     */
+    fun listForUser(tenantId: UUID, userId: UUID): List<SessionRecord> {
+        val indexKey = userIndexKey(tenantId, userId)
+        val sessions = mutableListOf<SessionRecord>()
+        for (hash in redis.opsForSet().members(indexKey).orEmpty()) {
+            val raw = redis.opsForValue().get(sessionKeyForHash(hash))
+            if (raw == null) {
+                redis.opsForSet().remove(indexKey, hash)
+                continue
+            }
+            val session = objectMapper.readValue(raw, SessionRecord::class.java)
+            if (session.tenantId == tenantId && session.userId == userId) sessions += session
+        }
+        return sessions.sortedByDescending { it.issuedAt }
+    }
+
+    /** Ends every live session for the user. Returns how many were actually ended. */
+    fun terminateAllForUser(tenantId: UUID, userId: UUID, reason: String?): Int {
+        val indexKey = userIndexKey(tenantId, userId)
+        var ended = 0
+        for (hash in redis.opsForSet().members(indexKey).orEmpty()) {
+            if (terminateByHash(hash, indexKey, tenantId, userId, reason) != null) ended++
+        }
+        return ended
+    }
+
+    /** Ends one specific session of the user, identified by its sessionId. */
+    fun terminateOneForUser(tenantId: UUID, userId: UUID, sessionId: UUID, reason: String?) {
+        val indexKey = userIndexKey(tenantId, userId)
+        for (hash in redis.opsForSet().members(indexKey).orEmpty()) {
+            val raw = redis.opsForValue().get(sessionKeyForHash(hash)) ?: continue
+            val session = objectMapper.readValue(raw, SessionRecord::class.java)
+            if (session.sessionId == sessionId) {
+                terminateByHash(hash, indexKey, tenantId, userId, reason) ?: throw SessionNotFoundException()
+                return
+            }
+        }
+        throw SessionNotFoundException()
+    }
+
+    private fun terminateByHash(hash: String, indexKey: String, tenantId: UUID, userId: UUID, reason: String?): SessionRecord? {
+        val raw = redis.opsForValue().getAndDelete(sessionKeyForHash(hash))
+        redis.opsForSet().remove(indexKey, hash)
+        if (raw == null) return null
+        val session = objectMapper.readValue(raw, SessionRecord::class.java)
+        if (session.tenantId != tenantId || session.userId != userId) return null
+        publishTerminated(session, reason)
+        return session
+    }
+
+    private fun publishTerminated(session: SessionRecord, reason: String?) {
         val detail = reason?.takeIf { it.isNotBlank() } ?: "unspecified"
         publish("session.terminated", session, reason = "sessionId=${session.sessionId}; $detail")
     }
@@ -88,7 +154,9 @@ class SessionService(
     }
 
     companion object {
-        fun sessionKey(token: String): String = "session:${SessionTokens.hash(token)}"
+        fun sessionKey(token: String): String = sessionKeyForHash(SessionTokens.hash(token))
+        fun sessionKeyForHash(hash: String): String = "session:$hash"
+        fun userIndexKey(tenantId: UUID, userId: UUID): String = "user-sessions:$tenantId:$userId"
         fun idempotencyKey(tenantId: UUID, key: String): String = "session-idem:$tenantId:$key"
     }
 }

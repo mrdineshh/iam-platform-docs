@@ -11,6 +11,7 @@ import org.mockito.kotlin.mock
 import org.mockito.kotlin.never
 import org.mockito.kotlin.verify
 import org.mockito.kotlin.whenever
+import org.springframework.data.redis.core.SetOperations
 import org.springframework.data.redis.core.StringRedisTemplate
 import org.springframework.data.redis.core.ValueOperations
 import tools.jackson.module.kotlin.jacksonObjectMapper
@@ -25,10 +26,14 @@ import kotlin.test.assertTrue
 class SessionServiceTest {
 
     private val ops = mock<ValueOperations<String, String>>()
-    private val redis = mock<StringRedisTemplate>().also { whenever(it.opsForValue()).thenReturn(ops) }
+    private val setOps = mock<SetOperations<String, String>>()
+    private val redis = mock<StringRedisTemplate>().also {
+        whenever(it.opsForValue()).thenReturn(ops)
+        whenever(it.opsForSet()).thenReturn(setOps)
+    }
     private val objectMapper = jacksonObjectMapper()
     private val auditPublisher = mock<AuditPublisher>()
-    private val properties = SessionProperties()
+    private val properties = SessionProperties(ttl = Duration.ofHours(8)) // application.yml sets 8h; the class default is 1h
     private val service = SessionService(redis, objectMapper, auditPublisher, properties)
 
     private val tenantId = UUID.randomUUID()
@@ -132,6 +137,96 @@ class SessionServiceTest {
         whenever(ops.getAndDelete(any())).thenReturn(null)
 
         assertThrows<SessionNotFoundException> { service.terminate("gone", reason = null) }
+        verify(auditPublisher, never()).publish(any())
+    }
+
+    @Test
+    fun `issue indexes the token hash under the user so sessions can be listed`() {
+        val result = service.issue(IssueSessionRequest(tenantId, userId), idempotencyKey = null)
+
+        verify(setOps).add(eq(SessionService.userIndexKey(tenantId, userId)), eq(SessionTokens.hash(result.token)))
+        verify(redis).expire(eq(SessionService.userIndexKey(tenantId, userId)), eq(Duration.ofHours(8)))
+    }
+
+    @Test
+    fun `terminate also removes the session from the user index`() {
+        val session = storedSession()
+        whenever(ops.getAndDelete(SessionService.sessionKey("tok"))).thenReturn(objectMapper.writeValueAsString(session))
+
+        service.terminate("tok", reason = null)
+
+        verify(setOps).remove(eq(SessionService.userIndexKey(tenantId, userId)), eq(SessionTokens.hash("tok")))
+    }
+
+    @Test
+    fun `listForUser returns live sessions newest first and prunes dead index entries`() {
+        val indexKey = SessionService.userIndexKey(tenantId, userId)
+        val now = Instant.now()
+        val older = storedSession().copy(issuedAt = now.minusSeconds(600))
+        val newer = storedSession().copy(issuedAt = now)
+        whenever(setOps.members(indexKey)).thenReturn(setOf("h1", "h2", "h3"))
+        whenever(ops.get(SessionService.sessionKeyForHash("h1"))).thenReturn(objectMapper.writeValueAsString(older))
+        whenever(ops.get(SessionService.sessionKeyForHash("h2"))).thenReturn(objectMapper.writeValueAsString(newer))
+        whenever(ops.get(SessionService.sessionKeyForHash("h3"))).thenReturn(null)
+
+        val result = service.listForUser(tenantId, userId)
+
+        assertEquals(listOf(newer.sessionId, older.sessionId), result.map { it.sessionId })
+        verify(setOps).remove(eq(indexKey), eq("h3"))
+    }
+
+    @Test
+    fun `listForUser never returns a session that belongs to a different user`() {
+        val indexKey = SessionService.userIndexKey(tenantId, userId)
+        val foreign = storedSession(user = UUID.randomUUID())
+        whenever(setOps.members(indexKey)).thenReturn(setOf("h1"))
+        whenever(ops.get(SessionService.sessionKeyForHash("h1"))).thenReturn(objectMapper.writeValueAsString(foreign))
+
+        assertTrue(service.listForUser(tenantId, userId).isEmpty())
+    }
+
+    @Test
+    fun `terminateAllForUser ends every live session and audits each one`() {
+        val indexKey = SessionService.userIndexKey(tenantId, userId)
+        whenever(setOps.members(indexKey)).thenReturn(setOf("h1", "h2", "h3"))
+        whenever(ops.getAndDelete(SessionService.sessionKeyForHash("h1"))).thenReturn(objectMapper.writeValueAsString(storedSession()))
+        whenever(ops.getAndDelete(SessionService.sessionKeyForHash("h2"))).thenReturn(objectMapper.writeValueAsString(storedSession()))
+        whenever(ops.getAndDelete(SessionService.sessionKeyForHash("h3"))).thenReturn(null)
+
+        val ended = service.terminateAllForUser(tenantId, userId, reason = "revoked by admin")
+
+        assertEquals(2, ended)
+        val captor = argumentCaptor<AuditEvent>()
+        verify(auditPublisher, org.mockito.kotlin.times(2)).publish(captor.capture())
+        assertTrue(captor.allValues.all { it.action == "session.terminated" && it.reason!!.endsWith("revoked by admin") })
+    }
+
+    @Test
+    fun `terminateOneForUser ends only the matching session`() {
+        val indexKey = SessionService.userIndexKey(tenantId, userId)
+        val other = storedSession()
+        val target = storedSession()
+        whenever(setOps.members(indexKey)).thenReturn(setOf("h1", "h2"))
+        whenever(ops.get(SessionService.sessionKeyForHash("h1"))).thenReturn(objectMapper.writeValueAsString(other))
+        whenever(ops.get(SessionService.sessionKeyForHash("h2"))).thenReturn(objectMapper.writeValueAsString(target))
+        whenever(ops.getAndDelete(SessionService.sessionKeyForHash("h2"))).thenReturn(objectMapper.writeValueAsString(target))
+
+        service.terminateOneForUser(tenantId, userId, target.sessionId, reason = null)
+
+        verify(ops).getAndDelete(SessionService.sessionKeyForHash("h2"))
+        verify(ops, never()).getAndDelete(SessionService.sessionKeyForHash("h1"))
+        verify(auditPublisher).publish(any())
+    }
+
+    @Test
+    fun `terminateOneForUser with an unknown sessionId throws and audits nothing`() {
+        val indexKey = SessionService.userIndexKey(tenantId, userId)
+        whenever(setOps.members(indexKey)).thenReturn(setOf("h1"))
+        whenever(ops.get(SessionService.sessionKeyForHash("h1"))).thenReturn(objectMapper.writeValueAsString(storedSession()))
+
+        assertThrows<SessionNotFoundException> {
+            service.terminateOneForUser(tenantId, userId, UUID.randomUUID(), reason = null)
+        }
         verify(auditPublisher, never()).publish(any())
     }
 }

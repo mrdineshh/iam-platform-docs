@@ -63,6 +63,8 @@ fun IssueResult.toResponse(): IssuedSessionResponse =
         expiresAt = session.expiresAt,
     )
 
+data class TerminatedSessionsResponse(val terminated: Int)
+
 class SessionNotFoundException : RuntimeException("Session not found, expired, or terminated")
 
 class IdempotencyConflictException(message: String) : RuntimeException(message)

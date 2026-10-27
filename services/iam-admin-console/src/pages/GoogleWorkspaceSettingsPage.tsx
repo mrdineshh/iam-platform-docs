@@ -2,6 +2,8 @@ import { useEffect, useState } from "react";
 import { getGoogleWorkspaceConfig, setGoogleWorkspaceConfig, type GoogleWorkspaceConfig } from "@/lib/googleWorkspace";
 import { loadSession } from "@/lib/session";
 import { UpstreamError } from "@/lib/http";
+import { Alert, PageHeader, PendingLabel, SkeletonRows, StatusBadge } from "@/components/ui";
+import { useToast } from "@/components/feedback";
 
 /**
  * One-time setup so that creating a user here also creates the matching
@@ -14,6 +16,7 @@ import { UpstreamError } from "@/lib/http";
  */
 export function GoogleWorkspaceSettingsPage() {
   const session = loadSession()!;
+  const toast = useToast();
   const [existing, setExisting] = useState<GoogleWorkspaceConfig | null>(null);
   const [loading, setLoading] = useState(true);
   const [domain, setDomain] = useState("");
@@ -22,7 +25,6 @@ export function GoogleWorkspaceSettingsPage() {
   const [serviceAccountJson, setServiceAccountJson] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
-  const [saved, setSaved] = useState(false);
 
   useEffect(() => {
     (async () => {
@@ -52,14 +54,13 @@ export function GoogleWorkspaceSettingsPage() {
       return;
     }
     setSaving(true);
-    setSaved(false);
     try {
       const config = await setGoogleWorkspaceConfig(
         session.tenantId, domain.trim(), adminEmail.trim(), orgUnitPath.trim(), serviceAccountJson.trim(), session.token,
       );
       setExisting(config);
       setServiceAccountJson("");
-      setSaved(true);
+      toast.success("Google Workspace settings saved.");
     } catch (err) {
       setError(errorMessage(err));
     } finally {
@@ -68,85 +69,97 @@ export function GoogleWorkspaceSettingsPage() {
   }
 
   return (
-    <main className="page">
-      <h1>Google Workspace</h1>
-      <p className="hint">
-        Once configured, creating a user here also creates the matching Google Workspace account automatically —
-        you'll only ever need this platform's own password to sign in, not a separate Google one.
-      </p>
+    <main className="page page--narrow">
+      <PageHeader
+        title="Google Workspace"
+        subtitle="Once connected, creating a user here also creates the matching Google Workspace account automatically. Users only ever need this platform's password to sign in."
+        actions={
+          loading ? undefined : existing ? (
+            <StatusBadge tone="success">Connected</StatusBadge>
+          ) : (
+            <StatusBadge tone="warning">Not configured</StatusBadge>
+          )
+        }
+      />
 
       {loading ? (
-        <p>Loading…</p>
+        <SkeletonRows rows={4} />
       ) : (
         <>
           {existing && (
-            <div className="callout">
-              <p>
-                Configured for <strong>{existing.domain}</strong>, impersonating <strong>{existing.adminEmail}</strong>
-                {existing.orgUnitPath ? (
-                  <>
-                    {" "}
-                    into <code>{existing.orgUnitPath}</code>
-                  </>
-                ) : null}
-                .
-              </p>
+            <Alert kind="info">
+              Connected to <strong>{existing.domain}</strong>, acting as <strong>{existing.adminEmail}</strong>
+              {existing.orgUnitPath ? (
+                <>
+                  , creating new users in <code>{existing.orgUnitPath}</code>
+                </>
+              ) : null}
+              . To change anything, re-enter the service account key below and save.
+            </Alert>
+          )}
+
+          {error && <Alert kind="error">{error}</Alert>}
+
+          <section className="card card--padded" style={{ marginBottom: 24 }}>
+            <h3 className="card__title">Before you start</h3>
+            <p className="card__desc">One-time setup on the Google side so this platform is allowed to create accounts.</p>
+            <ol className="steps">
+              <li>In Google Cloud Console, create a service account and download its JSON key.</li>
+              <li>Enable the <strong>Admin SDK API</strong> for that project.</li>
+              <li>
+                In Google Admin, open Security → API controls → <strong>Domain-wide delegation</strong> and authorize the
+                service account's client ID with the scope <code>https://www.googleapis.com/auth/admin.directory.user</code>.
+              </li>
+            </ol>
+          </section>
+
+          <form className="card card--padded" onSubmit={(e) => void handleSubmit(e)}>
+            <h3 className="card__title">Connection settings</h3>
+            <p className="card__desc">The key is stored encrypted in the platform's secret store, never in the database.</p>
+
+            <div className="form-grid">
+              <label className="login-form__field">
+                Workspace domain
+                <input value={domain} onChange={(e) => setDomain(e.target.value)} placeholder="demo.econz.net" required />
+              </label>
+
+              <label className="login-form__field">
+                Admin email to act as
+                <input
+                  value={adminEmail}
+                  onChange={(e) => setAdminEmail(e.target.value)}
+                  placeholder="A super admin on this domain"
+                  required
+                />
+              </label>
+
+              <label className="login-form__field form-grid__full">
+                Org unit path for new users
+                <input
+                  value={orgUnitPath}
+                  onChange={(e) => setOrgUnitPath(e.target.value)}
+                  placeholder="/Ratnesh Test"
+                />
+                <span className="field-hint">Optional. Leave blank to place new users in the root org unit.</span>
+              </label>
+
+              <label className="login-form__field form-grid__full">
+                Service account JSON key
+                <textarea
+                  value={serviceAccountJson}
+                  onChange={(e) => setServiceAccountJson(e.target.value)}
+                  placeholder="Paste the full contents of the downloaded JSON key file"
+                  rows={8}
+                  required
+                />
+              </label>
             </div>
-          )}
 
-          {error && (
-            <p role="alert" className="login-form__error">
-              {error}
-            </p>
-          )}
-          {saved && <p className="hint">Saved.</p>}
-
-          <form className="setup-form" onSubmit={(e) => void handleSubmit(e)}>
-            <p className="hint">
-              One-time Google-side setup needed before this works: create a service account in Google Cloud Console,
-              enable the Admin SDK API, then authorize that service account for domain-wide delegation in Workspace
-              Admin console (Security → API controls → Domain-wide delegation) with scope{" "}
-              <code>https://www.googleapis.com/auth/admin.directory.user</code>.
-            </p>
-
-            <label>
-              Workspace domain
-              <input value={domain} onChange={(e) => setDomain(e.target.value)} placeholder="demo.econz.net" required />
-            </label>
-
-            <label>
-              Admin email to impersonate
-              <input
-                value={adminEmail}
-                onChange={(e) => setAdminEmail(e.target.value)}
-                placeholder="a real super admin on this domain"
-                required
-              />
-            </label>
-
-            <label>
-              Org unit path for new users
-              <input
-                value={orgUnitPath}
-                onChange={(e) => setOrgUnitPath(e.target.value)}
-                placeholder="/Ratnesh Test (optional — blank places new users in the root OU)"
-              />
-            </label>
-
-            <label>
-              Service account JSON key
-              <textarea
-                value={serviceAccountJson}
-                onChange={(e) => setServiceAccountJson(e.target.value)}
-                placeholder="Paste the full contents of the downloaded JSON key file"
-                rows={8}
-                required
-              />
-            </label>
-
-            <button type="submit" disabled={saving}>
-              {saving ? "Saving…" : existing ? "Update" : "Save"}
-            </button>
+            <div className="form-actions">
+              <button type="submit" disabled={saving}>
+                <PendingLabel pending={saving} idle={existing ? "Update connection" : "Save connection"} busy="Saving…" />
+              </button>
+            </div>
           </form>
         </>
       )}

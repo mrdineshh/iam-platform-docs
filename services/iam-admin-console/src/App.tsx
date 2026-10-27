@@ -14,9 +14,11 @@ import { GoogleWorkspaceSettingsPage } from "@/pages/GoogleWorkspaceSettingsPage
 import { ProtectedRoute } from "@/components/ProtectedRoute";
 import { SessionRoute } from "@/components/SessionRoute";
 import { ImpersonationBanner } from "@/components/ImpersonationBanner";
+import { FeedbackProvider } from "@/components/feedback";
 
 export function App() {
   return (
+    <FeedbackProvider>
     <BrowserRouter>
       <ImpersonationBanner />
       <Routes>
@@ -104,5 +106,6 @@ export function App() {
         />
       </Routes>
     </BrowserRouter>
+    </FeedbackProvider>
   );
 }

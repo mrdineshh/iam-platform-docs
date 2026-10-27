@@ -7,7 +7,21 @@ import { listGroups, assignUserToGroup, type Group } from "@/lib/groups";
 import { getGoogleWorkspaceConfig } from "@/lib/googleWorkspace";
 import { loadSession } from "@/lib/session";
 import { UpstreamError } from "@/lib/http";
-import { Alert, Avatar, EmptyState, PageHeader, PendingLabel, SkeletonRows, StatusBadge } from "@/components/ui";
+import {
+  Alert,
+  Avatar,
+  EmptyState,
+  PageHeader,
+  Pagination,
+  PendingLabel,
+  SkeletonRows,
+  SortableTh,
+  StatusBadge,
+  TableToolbar,
+} from "@/components/ui";
+import { useConfirm, useToast } from "@/components/feedback";
+import { useTable } from "@/lib/useTable";
+import { UserSessionsDialog } from "@/components/UserSessionsDialog";
 
 // "" / "true" / "false" rather than boolean | null directly -- an HTML
 // <select> only ever carries a string value, and this third state
@@ -27,6 +41,8 @@ const ALLOW_ANY_IP = "0.0.0.0/0";
 
 export function UsersPage() {
   const session = loadSession()!;
+  const toast = useToast();
+  const confirm = useConfirm();
   const [email, setEmail] = useState("");
   const [displayName, setDisplayName] = useState("");
   const [password, setPassword] = useState("");
@@ -36,6 +52,7 @@ export function UsersPage() {
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
   const [showCreate, setShowCreate] = useState(false);
+  const [sessionsFor, setSessionsFor] = useState<{ id: string; label: string } | null>(null);
   const [justCreated, setJustCreated] = useState<CreatedUser | null>(null);
   const [qrDataUrl, setQrDataUrl] = useState<string | null>(null);
 
@@ -91,19 +108,24 @@ export function UsersPage() {
   }, []);
 
   async function handleDelete(userId: string, label: string) {
-    if (!window.confirm(`Delete ${label}? This removes them from this platform and, if configured, Google Workspace too. This cannot be undone.`)) {
-      return;
-    }
+    const ok = await confirm({
+      title: "Delete user?",
+      message: `${label} will be removed from this platform and, if configured, from Google Workspace too. This cannot be undone.`,
+      confirmLabel: "Delete user",
+      danger: true,
+    });
+    if (!ok) return;
     setDeletingUserId(userId);
-    setError(null);
     try {
       const result = await deleteUser(session.tenantId, userId, session.token);
       if (result.googleWorkspaceError) {
-        setError(`User deleted here, but Google Workspace deletion failed: ${result.googleWorkspaceError}`);
+        toast.error(`User deleted here, but Google Workspace deletion failed: ${result.googleWorkspaceError}`);
+      } else {
+        toast.success("User deleted.");
       }
       await refreshUsers();
     } catch (err) {
-      setError(errorMessage(err));
+      toast.error(errorMessage(err));
     } finally {
       setDeletingUserId(null);
     }
@@ -118,12 +140,12 @@ export function UsersPage() {
   // so either one keeps the other in sync.
   async function handleGroupChange(userId: string, groupId: string) {
     setSavingGroupUserId(userId);
-    setError(null);
     try {
       await assignUserToGroup(session.tenantId, userId, groupId || null, session.token);
       setUsers((prev) => prev.map((u) => (u.id === userId ? { ...u, groupId: groupId || null } : u)));
+      toast.success("Group updated.");
     } catch (err) {
-      setError(errorMessage(err));
+      toast.error(errorMessage(err));
     } finally {
       setSavingGroupUserId(null);
     }
@@ -131,7 +153,6 @@ export function UsersPage() {
 
   async function handleMfaChange(userId: string, value: TriState) {
     setSavingMfaUserId(userId);
-    setError(null);
     try {
       const existing = userPolicies.get(userId);
       const updated = await putPolicy(
@@ -148,8 +169,9 @@ export function UsersPage() {
         session.token,
       );
       setUserPolicies((prev) => new Map(prev).set(userId, updated));
+      toast.success("2FA setting updated.");
     } catch (err) {
-      setError(errorMessage(err));
+      toast.error(errorMessage(err));
     } finally {
       setSavingMfaUserId(null);
     }
@@ -178,8 +200,9 @@ export function UsersPage() {
         session.token,
       );
       setUserPolicies((prev) => new Map(prev).set(userId, updated));
+      toast.success(allow ? "User can now sign in from any IP." : "IP restriction restored.");
     } catch (err) {
-      setError(errorMessage(err));
+      toast.error(errorMessage(err));
     } finally {
       setTogglingUserId(null);
     }
@@ -217,6 +240,18 @@ export function UsersPage() {
       setPending(false);
     }
   }
+
+  const groupName = (id: string | null) => groups.find((g) => g.id === id)?.name ?? "";
+  const table = useTable(users, {
+    searchText: (u) => `${u.displayName} ${u.email} ${u.role} ${u.status} ${groupName(u.groupId)}`,
+    sorters: {
+      name: (a, b) => a.displayName.localeCompare(b.displayName),
+      role: (a, b) => a.role.localeCompare(b.role),
+      status: (a, b) => a.status.localeCompare(b.status),
+      group: (a, b) => groupName(a.groupId).localeCompare(groupName(b.groupId)),
+    },
+    initialSort: { key: "name", dir: "asc" },
+  });
 
   return (
     <main className="page">
@@ -323,12 +358,8 @@ export function UsersPage() {
       )}
 
       <div className="section-title">
-        <h2>All users {!loadingUsers && <span className="hint">({users.length})</span>}</h2>
+        <h2>All users</h2>
       </div>
-      <p className="hint" style={{ marginTop: 0 }}>
-        "Allow from any IP" exempts a user from every IP restriction (tenant or group policy), useful to unblock
-        someone who is locked out. It has no effect if the tenant policy marks that setting as a hard cap.
-      </p>
 
       {loadingUsers ? (
         <SkeletonRows rows={5} />
@@ -343,21 +374,33 @@ export function UsersPage() {
           }
         />
       ) : (
+        <>
+        <TableToolbar
+          query={table.query}
+          onQuery={table.setQuery}
+          placeholder="Search by name, email, role or group"
+          summary={`${table.filteredCount} of ${table.total} users`}
+        />
         <div className="card table-card">
           <table>
             <thead>
               <tr>
-                <th>User</th>
-                <th>Role</th>
-                <th>Status</th>
-                <th>Group</th>
+                <SortableTh label="User" sortKey="name" sort={table.sort} onSort={table.toggleSort} />
+                <SortableTh label="Role" sortKey="role" sort={table.sort} onSort={table.toggleSort} />
+                <SortableTh label="Status" sortKey="status" sort={table.sort} onSort={table.toggleSort} />
+                <SortableTh label="Group" sortKey="group" sort={table.sort} onSort={table.toggleSort} />
                 <th>2FA</th>
-                <th>Any IP</th>
+                <th title="Exempt from every IP restriction">Any IP</th>
                 <th></th>
               </tr>
             </thead>
             <tbody>
-              {users.map((u) => {
+              {table.filteredCount === 0 && (
+                <tr className="table-empty-row">
+                  <td colSpan={7}>No users match "{table.query}".</td>
+                </tr>
+              )}
+              {table.pageRows.map((u) => {
                 const mfaValue: TriState =
                   userPolicies.get(u.id)?.mfaRequired === null || userPolicies.get(u.id)?.mfaRequired === undefined
                     ? ""
@@ -424,6 +467,13 @@ export function UsersPage() {
                       <div className="row-actions">
                         <button
                           type="button"
+                          className="btn-secondary btn-sm"
+                          onClick={() => setSessionsFor({ id: u.id, label: `${u.displayName} (${u.email})` })}
+                        >
+                          Sessions
+                        </button>
+                        <button
+                          type="button"
                           className="btn-danger btn-sm"
                           disabled={deletingUserId === u.id}
                           onClick={() => void handleDelete(u.id, `${u.displayName} (${u.email})`)}
@@ -437,7 +487,23 @@ export function UsersPage() {
               })}
             </tbody>
           </table>
+          <Pagination
+            page={table.page}
+            pageCount={table.pageCount}
+            pageSize={table.pageSize}
+            filteredCount={table.filteredCount}
+            onPage={table.setPage}
+            onPageSize={table.setPageSize}
+          />
         </div>
+        </>
+      )}
+      {sessionsFor && (
+        <UserSessionsDialog
+          userId={sessionsFor.id}
+          userLabel={sessionsFor.label}
+          onClose={() => setSessionsFor(null)}
+        />
       )}
     </main>
   );

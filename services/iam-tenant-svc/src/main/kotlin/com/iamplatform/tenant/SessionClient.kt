@@ -51,4 +51,34 @@ class SessionClient(
     // and the audit event this always publishes).
     fun issue(tenantId: UUID, userId: UUID, sourceIp: String?): IssuedRemoteSession =
         client.post("/api/v1/sessions", IssueRemoteSessionRequest(tenantId, userId, sourceIp), IssuedRemoteSession::class.java)
+
+    // Per-user session management. `reason` must be a URL-safe token (no
+    // spaces or percent signs): ResilientHttpClient passes the URI through
+    // RestClient's template encoder, which would double-encode anything else.
+    fun listForUser(tenantId: UUID, userId: UUID): List<RemoteSessionRecord> =
+        client.get("/api/v1/sessions/by-user/$userId?tenantId=$tenantId", Array<RemoteSessionRecord>::class.java).toList()
+
+    fun terminateAllForUser(tenantId: UUID, userId: UUID, reason: String) {
+        client.delete("/api/v1/sessions/by-user/$userId?tenantId=$tenantId&reason=$reason")
+    }
+
+    fun terminateOneForUser(tenantId: UUID, userId: UUID, sessionId: UUID, reason: String) {
+        try {
+            client.delete("/api/v1/sessions/by-user/$userId/$sessionId?tenantId=$tenantId&reason=$reason")
+        } catch (ex: HttpClientErrorException.NotFound) {
+            throw SessionNotFoundForRevokeException()
+        }
+    }
 }
+
+data class RemoteSessionRecord(
+    val sessionId: UUID,
+    val tenantId: UUID,
+    val userId: UUID,
+    val sourceIp: String?,
+    val deviceId: String?,
+    val issuedAt: Instant,
+    val expiresAt: Instant,
+)
+
+class SessionNotFoundForRevokeException : RuntimeException("Session not found, expired, or already ended")

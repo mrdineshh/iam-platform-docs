@@ -6,7 +6,20 @@ import { getAppGroups, setAppGroups, type AppKind } from "@/lib/appGroups";
 import { listGroups, type Group } from "@/lib/groups";
 import { loadSession } from "@/lib/session";
 import { UpstreamError } from "@/lib/http";
-import { Alert, AppIcon, EmptyState, PageHeader, PendingLabel, SkeletonRows, StatusBadge } from "@/components/ui";
+import {
+  Alert,
+  AppIcon,
+  EmptyState,
+  PageHeader,
+  Pagination,
+  PendingLabel,
+  SkeletonRows,
+  SortableTh,
+  StatusBadge,
+  TableToolbar,
+} from "@/components/ui";
+import { useToast } from "@/components/feedback";
+import { useTable } from "@/lib/useTable";
 
 // A few enterprise/dev tools that plausibly support a custom OIDC login
 // (unlike consumer services like real Gmail, which don't let a third party
@@ -51,6 +64,15 @@ export function ClientsPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  const table = useTable(apps, {
+    searchText: (a) => `${a.name} ${a.type}`,
+    sorters: {
+      name: (a, b) => a.name.localeCompare(b.name),
+      type: (a, b) => a.type.localeCompare(b.type),
+      created: (a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime(),
+    },
+    initialSort: { key: "created", dir: "desc" },
+  });
 
   function toggleExpanded(id: string) {
     setExpanded((prev) => {
@@ -137,18 +159,30 @@ export function ClientsPage() {
           description="Pick an app from the catalog above, or add a custom one. Connected apps show up here and in every group's app list automatically."
         />
       ) : (
+        <>
+        <TableToolbar
+          query={table.query}
+          onQuery={table.setQuery}
+          placeholder="Search connected apps"
+          summary={`${table.filteredCount} of ${table.total} apps`}
+        />
         <div className="card table-card">
         <table>
           <thead>
             <tr>
-              <th>Name</th>
-              <th>Type</th>
-              <th>Created</th>
+              <SortableTh label="Name" sortKey="name" sort={table.sort} onSort={table.toggleSort} />
+              <SortableTh label="Type" sortKey="type" sort={table.sort} onSort={table.toggleSort} />
+              <SortableTh label="Created" sortKey="created" sort={table.sort} onSort={table.toggleSort} />
               <th></th>
             </tr>
           </thead>
           <tbody>
-            {apps.map((app) => {
+            {table.filteredCount === 0 && (
+              <tr className="table-empty-row">
+                <td colSpan={4}>No apps match "{table.query}".</td>
+              </tr>
+            )}
+            {table.pageRows.map((app) => {
               const isOpen = expanded.has(app.id);
               return (
                 <Fragment key={app.id}>
@@ -216,7 +250,16 @@ export function ClientsPage() {
             })}
           </tbody>
         </table>
+        <Pagination
+          page={table.page}
+          pageCount={table.pageCount}
+          pageSize={table.pageSize}
+          filteredCount={table.filteredCount}
+          onPage={table.setPage}
+          onPageSize={table.setPageSize}
+        />
         </div>
+        </>
       )}
     </main>
   );
@@ -258,6 +301,7 @@ function AppLogo({ name, slug }: { name: string; slug: string }) {
  */
 function AppGroupAssignment({ kind, appId, groups }: { kind: AppKind; appId: string; groups: Group[] }) {
   const session = loadSession()!;
+  const toast = useToast();
   const [selected, setSelected] = useState<Set<string> | null>(null);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
@@ -292,6 +336,7 @@ function AppGroupAssignment({ kind, appId, groups }: { kind: AppKind; appId: str
     try {
       await setAppGroups(kind, appId, session.tenantId, Array.from(selected), session.token);
       setSaved(true);
+      toast.success("Group access saved.");
     } catch (err) {
       setLoadError(errorMessage(err));
     } finally {
