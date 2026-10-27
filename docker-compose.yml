@@ -521,7 +521,7 @@ services:
       # in this local-dev value, so GET /authorize appends "?tenant=..."
       # itself rather than constructing an unresolvable subdomain host.
       # Host port 3001, not 3000 -- see iam-login-portal's own port mapping.
-      LOGIN_PORTAL_BASE_URL: http://localhost:3001
+      LOGIN_PORTAL_BASE_URL: ${ADMIN_CONSOLE_LOGIN_PORTAL_URL:-http://localhost:3001}
     depends_on:
       valkey:
         condition: service_healthy
