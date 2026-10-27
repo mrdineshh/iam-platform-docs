@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import QRCode from "qrcode";
 import { login, precheck } from "@/lib/auth";
-import { findTenantBySubdomain, resolveTenantSubdomain } from "@/lib/tenant";
+import { findTenantBySubdomain, rememberTenantSubdomain, resolveTenantSubdomain } from "@/lib/tenant";
 import { UpstreamError } from "@/lib/http";
 import { saveSession } from "@/lib/session";
 import { denialMessage } from "@/lib/errorCodes";
@@ -16,6 +16,7 @@ export function LoginPage() {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const tenantOverride = searchParams.get("tenant");
+  const signedOutForIdle = searchParams.get("reason") === "idle";
 
   const [step, setStep] = useState<Step>("credentials");
   const [email, setEmail] = useState("");
@@ -34,6 +35,7 @@ export function LoginPage() {
     if (!subdomain) return;
     void findTenantBySubdomain(subdomain).then((tenant) => {
       if (!tenant) return;
+      rememberTenantSubdomain(subdomain);
       applyBranding(tenant.branding ?? null);
       setBrand({ name: tenant.name, branding: tenant.branding ?? null });
     });
@@ -50,6 +52,7 @@ export function LoginPage() {
       setError("No organization was found for this sign-in link.");
       return null;
     }
+    rememberTenantSubdomain(subdomain);
     return tenant;
   }
 
@@ -170,6 +173,12 @@ export function LoginPage() {
           <li className="login-steps__item login-steps__item--done" />
           <li className={step !== "credentials" ? "login-steps__item login-steps__item--done" : "login-steps__item"} />
         </ol>
+
+        {signedOutForIdle && !error && step === "credentials" && (
+          <p className="login-form__pending" role="status">
+            You were signed out after 30 minutes of inactivity. Please sign in again.
+          </p>
+        )}
 
         {error && (
           <p role="alert" className="login-form__error">

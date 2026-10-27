@@ -1970,3 +1970,28 @@ any login work itself.
   app access added a constructor parameter (which blocked every iam-tenant-svc
   test), and `SessionServiceTest` assumed an 8h TTL while
   `SessionProperties` defaults to 1h.
+
+---
+
+- **[iam-admin-console] 2026-10-27** -- Hardened the "session token lives in
+  sessionStorage" risk (the SPA has no server to hold an httpOnly cookie)
+  without changing where the token is stored. (1) nginx now sends a strict
+  Content-Security-Policy: `script-src 'self'` (no inline or injected script
+  runs), `connect-src` limited to this deployment's own backend origins, plus
+  `frame-ancestors 'none'`, `base-uri 'self'`, `object-src 'none'`,
+  X-Frame-Options, nosniff, Referrer-Policy and Permissions-Policy. The allowed
+  origins come from the container's environment via nginx's envsubst templates
+  (`CSP_CONNECT_SRC`, set in docker-compose.yml from the same
+  ADMIN_CONSOLE_*_URL values as the build args), so one image serves any
+  hostnames. The inline theme script moved to `/theme-init.js` to satisfy
+  `script-src`. (2) The console signs a person out after 30 minutes without
+  activity in the tab (server session ended too). (3) The last organization
+  signed in to is remembered as a non-secret hint, so the sign-in page still
+  works after a sign-out. Deliberately no `form-action` rule: the My Apps tiles
+  POST to the login portal, which redirects on to the app, and browsers apply
+  form-action to that redirect. Verification: the built bundle was checked
+  statically (no inline scripts, no XHR/WebSocket, no CSS url(), every external
+  host is an image CDN or display text); it was NOT run in a real browser, since
+  pulling a third-party headless-browser image onto the server was declined.
+  Smoke-test the console in Chrome and watch the DevTools console for
+  "Refused to ..." messages. The root fix (httpOnly cookie) is OQ-10.

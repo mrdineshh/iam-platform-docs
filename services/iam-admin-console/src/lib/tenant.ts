@@ -18,6 +18,19 @@ export interface Tenant {
  * "duplication is the cost of independence" reasoning used across every
  * backend client pair in this platform).
  */
+// Last organization this browser signed in to. Only a non-secret hint, so the
+// sign-in page still knows which organization to use after a sign-out or an
+// automatic idle sign-out, when the URL no longer carries ?tenant=.
+const LAST_TENANT_KEY = "iam-admin-console:last-tenant";
+
+export function rememberTenantSubdomain(subdomain: string): void {
+  try {
+    localStorage.setItem(LAST_TENANT_KEY, subdomain);
+  } catch {
+    // Storage unavailable (private mode, quota): the hint is optional.
+  }
+}
+
 export function resolveTenantSubdomain(hostname: string, tenantOverride: string | null): string | null {
   // The explicit override always wins. This console is served from one
   // fixed hostname (admin.<rootDomain>) shared by every tenant -- it is
@@ -35,7 +48,11 @@ export function resolveTenantSubdomain(hostname: string, tenantOverride: string 
     const subdomain = hostname.slice(0, -suffix.length);
     if (subdomain.length > 0) return subdomain;
   }
-  return null;
+  try {
+    return localStorage.getItem(LAST_TENANT_KEY);
+  } catch {
+    return null;
+  }
 }
 
 export async function findTenantBySubdomain(subdomain: string): Promise<Tenant | null> {

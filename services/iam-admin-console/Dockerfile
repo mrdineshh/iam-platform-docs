@@ -27,5 +27,8 @@ RUN npm run build
 # fallback so client-side routing (react-router) works on a hard refresh.
 FROM nginx:alpine
 COPY --from=build /workspace/iam-admin-console/dist /usr/share/nginx/html
-COPY iam-admin-console/nginx.conf /etc/nginx/conf.d/default.conf
+# Rendered at container start (nginx image's envsubst step) so the Content-
+# Security-Policy can name this deployment's backend hosts.
+ENV CSP_CONNECT_SRC=""
+COPY iam-admin-console/nginx.conf.template /etc/nginx/templates/default.conf.template
 EXPOSE 80

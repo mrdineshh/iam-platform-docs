@@ -42,3 +42,13 @@ rests on an assumption a human should confirm.
   `/api/v1/evaluate` on the plain-HTTP iam-policy-svc (callers are backends
   holding no admin session). It reveals password rules and the lockout
   threshold. Consider restricting the route at the network edge.
+
+- **OQ-10 -- Move the admin session token out of JavaScript's reach.** The
+  console keeps the token in sessionStorage, readable by any script that runs
+  in the page. The CSP above makes that much harder to exploit but does not
+  remove it. The real fix is an httpOnly cookie, which needs a server-side
+  piece (a backend-for-frontend, or cookie sessions in the auth service) plus
+  CSRF protection and `credentials` CORS across five services. That changes the
+  session transport (Tier 3) so it needs a decision. Related: SESSION_TTL is 8h
+  while the login portal's cookie assumes 1h; consider a shorter lifetime for
+  admin sessions.

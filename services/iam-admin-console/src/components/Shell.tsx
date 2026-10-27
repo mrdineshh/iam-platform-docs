@@ -1,12 +1,15 @@
-import { useEffect, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import { clearSession, isAdmin, loadImpersonationOriginal, loadSession } from "@/lib/session";
 import { logout } from "@/lib/auth";
+import { useIdleTimeout } from "@/lib/useIdleTimeout";
 import { ThemeToggle } from "@/components/ThemeToggle";
 import { loadStoredBranding } from "@/lib/branding";
 
 const SIDEBAR_COLLAPSED_KEY = "iam-admin-console:sidebar-collapsed";
 const ADMIN_SECTION_OPEN_KEY = "iam-admin-console:admin-nav-open";
+// Signs the person out after this long with no activity in the tab.
+const IDLE_SIGN_OUT_MS = 30 * 60 * 1000;
 
 /**
  * Persistent sidebar + topbar wrapped around every authenticated page
@@ -41,14 +44,19 @@ export function Shell({ children }: { children: ReactNode }) {
     localStorage.setItem(ADMIN_SECTION_OPEN_KEY, adminOpen ? "1" : "0");
   }, [adminOpen]);
 
+  // A tab left open on a shared or unattended computer must not stay usable.
+  const idleSignOut = useRef<() => void>(() => undefined);
+  idleSignOut.current = () => void handleSignOut("idle");
+  useIdleTimeout(useCallback(() => idleSignOut.current(), []), IDLE_SIGN_OUT_MS);
+
   // Ends the session(s) on the server first so the sign-out is real and audited,
   // not just forgotten by this browser. Includes the admin's own session if they
   // are currently "switched to" another user.
-  async function handleSignOut() {
+  async function handleSignOut(reason?: "idle") {
     const original = loadImpersonationOriginal();
     await Promise.all([session ? logout(session.token) : undefined, original ? logout(original.token) : undefined]);
     clearSession();
-    navigate("/login");
+    navigate(reason === "idle" ? "/login?reason=idle" : "/login");
   }
 
   const branding = loadStoredBranding();

@@ -1,0 +1,41 @@
+server {
+    listen 80;
+    server_name _;
+    root /usr/share/nginx/html;
+    index index.html;
+
+    # Browser-side defenses. The session token lives in this SPA's
+    # sessionStorage (no server to hold an httpOnly cookie), so anything that
+    # could run a script here could read it. This policy is the safety net:
+    #  - script-src 'self'      only our own bundle runs; no inline or injected script
+    #  - connect-src            the page may talk only to itself and the backend
+    #                           services below, so a script could not send a token
+    #                           to any other site
+    #  - frame-ancestors 'none' nobody can embed this console in a frame (clickjacking)
+    # (No form-action rule on purpose: the My Apps tiles POST to the login
+    # portal, which redirects on to the app, and browsers apply form-action to
+    # that redirect too -- it would block launching apps for little gain.)
+    # CSP_CONNECT_SRC is filled in from the container's
+    # environment at start-up (nginx image's envsubst templates), so the same
+    # image works for every deployment's hostnames.
+    add_header Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; font-src 'self' data:; connect-src 'self' ${CSP_CONNECT_SRC}; frame-ancestors 'none'; base-uri 'self'; object-src 'none'" always;
+    add_header X-Frame-Options "DENY" always;
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+    add_header Permissions-Policy "camera=(), microphone=(), geolocation=(), payment=(), usb=()" always;
+
+    location / {
+        try_files $uri $uri/ /index.html;
+    }
+
+    # Pure static SPA has no server of its own to read the real client IP
+    # off -- this is the only way it can learn it, mirroring iam-login-
+    # portal's own real-IP fix (server.js): Caddy (host-level reverse
+    # proxy in front) always sets X-Forwarded-For to the address it saw the
+    # connection from, appending to (not trusting) any value already
+    # present, so the LAST entry is what Caddy itself observed.
+    location = /whoami {
+        default_type application/json;
+        return 200 '{"ip":"$http_x_forwarded_for"}';
+    }
+}

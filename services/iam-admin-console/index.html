@@ -7,17 +7,7 @@
     <link rel="icon" type="image/png" sizes="96x96" href="/favicon.png" />
     <link rel="icon" type="image/x-icon" href="/favicon.ico" />
     <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
-    <script>
-      (function () {
-        try {
-          var stored = localStorage.getItem("iam-admin-console:theme");
-          var theme = stored === "light" || stored === "dark"
-            ? stored
-            : (window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
-          document.documentElement.setAttribute("data-theme", theme);
-        } catch (e) {}
-      })();
-    </script>
+    <script src="/theme-init.js"></script>
   </head>
   <body>
     <div id="root"></div>
