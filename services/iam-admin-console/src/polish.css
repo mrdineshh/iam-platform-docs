@@ -515,11 +515,11 @@ select:focus-visible {
 .app-icon--chip {
   background: #ffffff;
   border: 1px solid var(--iam-border);
-  padding: 18%;
 }
 
 .app-icon--chip img {
-  padding: 0;
+  width: 62%;
+  height: 62%;
 }
 
 .app-icon--letter {
