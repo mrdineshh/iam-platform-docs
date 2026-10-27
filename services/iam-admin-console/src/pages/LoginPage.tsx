@@ -139,7 +139,15 @@ export function LoginPage() {
   }
 
   return (
-    <main className="login-page">
+    <main className="login-split">
+      <aside className="login-split__art" aria-hidden="true">
+        <img src="/login-art.jpg" alt="" />
+        <div className="login-split__caption">
+          <h2>Secure access for every app, user and device</h2>
+          <p>Single sign-on, adaptive multi-factor and continuous policy enforcement, managed from one console.</p>
+        </div>
+      </aside>
+      <section className="login-page login-split__panel">
       <ThemeToggle className="login-page__theme-toggle" />
       <div className="login-page__brand">
         {brand?.branding?.logoUrl ? (
@@ -289,6 +297,7 @@ export function LoginPage() {
           </p>
         )}
       </form>
+      </section>
     </main>
   );
 }
