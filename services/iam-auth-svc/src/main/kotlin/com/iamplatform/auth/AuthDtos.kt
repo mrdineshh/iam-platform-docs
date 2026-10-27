@@ -80,6 +80,7 @@ class InvalidCredentialsException : RuntimeException("Invalid credentials")
 // branch on the denial cause without parsing the free-text reason string.
 enum class AuthErrorCode {
     ACCOUNT_SUSPENDED,
+    ACCOUNT_LOCKED,
     LOCATION_UNVERIFIED,
     POLICY_UNAVAILABLE,
     POLICY_DENIED,

@@ -55,7 +55,12 @@ class ImpersonateController(
     ): ResponseEntity<List<AdminUserListEntry>> {
         adminAccessGuard.requireTenantAdmin(sessionToken, tenantId)
         val users = identityClient.listUsers(tenantId)
-            .map { AdminUserListEntry(it.id, it.email, it.displayName, it.status, it.role, it.groupId) }
+            .map {
+                AdminUserListEntry(
+                    it.id, it.email, it.displayName, it.status, it.role, it.groupId,
+                    it.locked, it.lockedUntil, it.permanentlyLocked,
+                )
+            }
         return ResponseEntity.ok(users)
     }
 

@@ -1904,3 +1904,69 @@ any login work itself.
   `iam-login-portal` still uses a single fixed `login.` hostname rather
   than true per-tenant DNS, the same failure will resurface there too --
   check this before setting that variable.
+
+---
+
+- **[iam-session-svc / iam-tenant-svc / iam-admin-console] 2026-10-27** --
+  Added active-session management. New Valkey set per user
+  (`user-sessions:<tenantId>:<userId>`, members are token *hashes*, never raw
+  tokens), maintained on issue and terminate, with its TTL refreshed on every
+  issue. New internal endpoints in iam-session-svc to list, end one, or end all
+  of a user's sessions (`/api/v1/sessions/by-user/...`), proxied by
+  iam-tenant-svc for admins (`/api/v1/admin/users/{id}/sessions`, target user
+  re-resolved and tenant-checked, `session.revoked_by_admin` audit event with
+  the admin as actor) and for users on themselves (`/api/v1/me/sessions`,
+  including "sign out of all other devices"). Ending a session deletes it, so
+  iam-enforcement-svc rejects the next request using it (AP-2). Sessions issued
+  before this change are not in the index and so are not listed; they expire
+  on their own within the session TTL. Traceability: FR-11.1 (session
+  lifecycle) and AP-2 (killable mid-flight); there is no FR that names
+  "list/revoke sessions" explicitly -- flagged as OQ-8.
+
+- **[iam-tenant-svc / iam-login-portal / iam-admin-console] 2026-10-27** --
+  Added per-tenant branding (FR-6.1): new `tenant_branding` table (one
+  optional row per tenant: `#RRGGBB` color, https logo URL, headline, default
+  theme), returned inside the existing public tenant lookups
+  (`/tenants/by-subdomain/{s}`, `/tenants/{id}`) so a branded page costs no
+  extra round trip, written via admin-only `PUT /api/v1/admin/branding`
+  (`tenant.branding_updated` audit event). The color is validated server-side
+  *and* re-validated where it is injected into CSS custom properties (login
+  portal `brandStyle`), and the logo must be `https://`; both are guards
+  against CSS/URL injection on a pre-login page. Logo is a URL only, no upload
+  (see OQ-7).
+
+- **[iam-policy-svc / iam-identity-svc / iam-auth-svc / iam-tenant-svc]
+  2026-10-27** -- Added tenant password rules (FR-3.1) and account lockout
+  (FR-3.5), kept inside the single engine (AP-1): the settings are new nullable
+  columns on the TENANT-scope policy row (rejected on OU/USER scope, range
+  checked), exposed as effective-with-defaults values at
+  `GET /api/v1/security-settings`, and enforced where credentials live, in
+  iam-identity-svc. Complexity is checked on create and set-password and fails
+  closed (503) if the rules cannot be read. Lockout state
+  (`failed_login_attempts`, `locked_until`, `permanently_locked`) lives on the
+  user row; the counter is incremented atomically in SQL; a correct password
+  clears it; locked-account guesses are not counted, so an attacker cannot
+  extend a lock. If iam-policy-svc is unreachable while recording a failure,
+  the failure is still counted and the lock engages on the next failure once
+  settings are readable (an outage must neither lock everyone out nor lose
+  counts). Admins unlock from the Users page
+  (`identity.unlocked_by_admin` audit, admin as actor). Defaults: lockout OFF,
+  min length 8, no character-class rules (OQ-4). The tenant service now
+  ignores HTTP 400 from iam-identity-svc in its retry and circuit-breaker
+  config, so a weak password is reported once, not retried five times and
+  counted toward opening the breaker.
+  Not changed: password hashing (Argon2id parameters untouched), the device
+  service's own TOTP lockout (still 5 attempts / 5 minutes, not configurable).
+
+- **[iam-admin-console] 2026-10-27** -- UI layer: toast notifications and a
+  confirm dialog replace `window.confirm`; one `useTable` hook gives every
+  list client-side search, sort and pagination (lists are fully loaded and
+  small, the hook's return shape is the seam for server-side paging later);
+  Policy page now loads and re-sends every tenant-scope policy field, because
+  the old page PUT only a subset and `PUT /policies` overwrites the whole row,
+  so saving it silently wiped the tenant IP ranges and 2FA setting.
+  Also fixed two stale tests found while running the suites for the first time
+  in this area: `OidcClientServiceTest` no longer compiled after group-based
+  app access added a constructor parameter (which blocked every iam-tenant-svc
+  test), and `SessionServiceTest` assumed an 8h TTL while
+  `SessionProperties` defaults to 1h.

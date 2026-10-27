@@ -62,6 +62,7 @@ iam:
     token: ${BAO_TOKEN:}
   dependencies:
     tenant-svc: ${TENANT_SVC_URL:http://iam-tenant-svc:8080}
+    policy-svc: ${POLICY_SVC_URL:http://iam-policy-svc:8080}
 
 resilience4j:
   circuitbreaker:
@@ -73,8 +74,18 @@ resilience4j:
         wait-duration-in-open-state: 30s
         ignore-exceptions:
           - org.springframework.web.client.HttpClientErrorException$NotFound
+      policy-svc:
+        failure-rate-threshold: 50
+        sliding-window-size: 5
+        minimum-number-of-calls: 5
+        wait-duration-in-open-state: 30s
   retry:
     instances:
+      policy-svc:
+        max-attempts: 3
+        exponential-backoff-multiplier: 2
+        ignore-exceptions:
+          - io.github.resilience4j.circuitbreaker.CallNotPermittedException
       tenant-svc:
         max-attempts: 5
         exponential-backoff-multiplier: 2

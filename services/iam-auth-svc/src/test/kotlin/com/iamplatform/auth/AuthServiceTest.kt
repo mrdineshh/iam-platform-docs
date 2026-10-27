@@ -22,6 +22,7 @@ import io.github.resilience4j.circuitbreaker.CallNotPermittedException
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.assertThrows
 import org.mockito.kotlin.any
+import org.mockito.kotlin.anyOrNull
 import org.mockito.kotlin.argumentCaptor
 import org.mockito.kotlin.eq
 import org.mockito.kotlin.mock
@@ -51,7 +52,7 @@ class AuthServiceTest {
         whenever(identityClient.verifyPassword(tenantId, "alice@acme.com", "correct-password"))
             .thenReturn(VerifyPasswordResponse(valid = true, userId = userId, status = RemoteUserStatus.ACTIVE))
         whenever(geoClient.resolve("8.8.8.8")).thenReturn(GeoResolution("8.8.8.8", resolved = true, country = "US"))
-        whenever(policyClient.evaluate(tenantId, userId, "US")).thenReturn(EvaluateResponse(allowed = true))
+        whenever(policyClient.evaluate(tenantId, userId, null, "US", "8.8.8.8")).thenReturn(EvaluateResponse(allowed = true))
         whenever(deviceClient.sendPush(tenantId, userId))
             .thenReturn(PushSendResult(UUID.randomUUID(), RemotePushResult.APPROVED))
         val expiresAt = Instant.now()
@@ -96,7 +97,7 @@ class AuthServiceTest {
         verify(auditPublisher).publish(captor.capture())
         assertEquals(AuditResult.DENIED, captor.firstValue.result)
         verify(geoClient, never()).resolve(any())
-        verify(policyClient, never()).evaluate(any(), any(), any())
+        verify(policyClient, never()).evaluate(any(), any(), anyOrNull(), any(), anyOrNull())
     }
 
     @Test
@@ -107,7 +108,7 @@ class AuthServiceTest {
 
         val ex = assertThrows<LoginDeniedException> { service.login(request) }
         assertEquals("location could not be verified", ex.message)
-        verify(policyClient, never()).evaluate(any(), any(), any())
+        verify(policyClient, never()).evaluate(any(), any(), anyOrNull(), any(), anyOrNull())
         verify(sessionClient, never()).issue(any(), any(), any(), any())
     }
 
@@ -131,7 +132,7 @@ class AuthServiceTest {
         whenever(identityClient.verifyPassword(tenantId, "alice@acme.com", "correct-password"))
             .thenReturn(VerifyPasswordResponse(valid = true, userId = userId, status = RemoteUserStatus.ACTIVE))
         whenever(geoClient.resolve("8.8.8.8")).thenReturn(GeoResolution("8.8.8.8", resolved = true, country = "KP"))
-        whenever(policyClient.evaluate(tenantId, userId, "KP"))
+        whenever(policyClient.evaluate(tenantId, userId, null, "KP", "8.8.8.8"))
             .thenReturn(EvaluateResponse(allowed = false, reason = "country 'KP' is in blockedCountries", policyScopeApplied = "TENANT"))
 
         val ex = assertThrows<LoginDeniedException> { service.login(request) }
@@ -148,7 +149,7 @@ class AuthServiceTest {
         whenever(identityClient.verifyPassword(tenantId, "alice@acme.com", "correct-password"))
             .thenReturn(VerifyPasswordResponse(valid = true, userId = userId, status = RemoteUserStatus.ACTIVE))
         whenever(geoClient.resolve("8.8.8.8")).thenReturn(GeoResolution("8.8.8.8", resolved = true, country = "US"))
-        whenever(policyClient.evaluate(tenantId, userId, "US"))
+        whenever(policyClient.evaluate(tenantId, userId, null, "US", "8.8.8.8"))
             .thenThrow(CallNotPermittedException.createCallNotPermittedException(
                 io.github.resilience4j.circuitbreaker.CircuitBreaker.ofDefaults("policy-svc"),
             ))
@@ -162,7 +163,7 @@ class AuthServiceTest {
         whenever(identityClient.verifyPassword(tenantId, "alice@acme.com", "correct-password"))
             .thenReturn(VerifyPasswordResponse(valid = true, userId = userId, status = RemoteUserStatus.ACTIVE))
         whenever(geoClient.resolve("8.8.8.8")).thenReturn(GeoResolution("8.8.8.8", resolved = true, country = "US"))
-        whenever(policyClient.evaluate(tenantId, userId, "US")).thenReturn(EvaluateResponse(allowed = true))
+        whenever(policyClient.evaluate(tenantId, userId, null, "US", "8.8.8.8")).thenReturn(EvaluateResponse(allowed = true))
         whenever(deviceClient.sendPush(tenantId, userId))
             .thenReturn(PushSendResult(UUID.randomUUID(), RemotePushResult.APPROVED))
         whenever(sessionClient.issue(eq(tenantId), eq(userId), eq("8.8.8.8"), any()))
@@ -180,7 +181,7 @@ class AuthServiceTest {
         whenever(identityClient.verifyPassword(tenantId, "alice@acme.com", "correct-password"))
             .thenReturn(VerifyPasswordResponse(valid = true, userId = userId, status = RemoteUserStatus.ACTIVE))
         whenever(geoClient.resolve("8.8.8.8")).thenReturn(GeoResolution("8.8.8.8", resolved = true, country = "US"))
-        whenever(policyClient.evaluate(tenantId, userId, "US")).thenReturn(EvaluateResponse(allowed = true))
+        whenever(policyClient.evaluate(tenantId, userId, null, "US", "8.8.8.8")).thenReturn(EvaluateResponse(allowed = true))
         whenever(deviceClient.verifyTotp(tenantId, userId, "123456"))
             .thenReturn(TotpVerifyResult(valid = true, status = RemoteDeviceStatus.ACTIVE))
         whenever(sessionClient.issue(eq(tenantId), eq(userId), eq("8.8.8.8"), any()))
@@ -197,7 +198,7 @@ class AuthServiceTest {
         whenever(identityClient.verifyPassword(tenantId, "alice@acme.com", "correct-password"))
             .thenReturn(VerifyPasswordResponse(valid = true, userId = userId, status = RemoteUserStatus.ACTIVE, role = RemoteUserRole.ADMIN))
         whenever(geoClient.resolve("8.8.8.8")).thenReturn(GeoResolution("8.8.8.8", resolved = true, country = "US"))
-        whenever(policyClient.evaluate(tenantId, userId, "US")).thenReturn(EvaluateResponse(allowed = true))
+        whenever(policyClient.evaluate(tenantId, userId, null, "US", "8.8.8.8")).thenReturn(EvaluateResponse(allowed = true))
         whenever(deviceClient.sendPush(tenantId, userId)).thenReturn(PushSendResult(UUID.randomUUID(), RemotePushResult.APPROVED))
         whenever(sessionClient.issue(eq(tenantId), eq(userId), eq("8.8.8.8"), any()))
             .thenReturn(IssuedSession("tok-role", UUID.randomUUID(), Instant.now()))
@@ -213,7 +214,7 @@ class AuthServiceTest {
         whenever(identityClient.verifyPassword(tenantId, "alice@acme.com", "correct-password"))
             .thenReturn(VerifyPasswordResponse(valid = true, userId = userId, status = RemoteUserStatus.ACTIVE))
         whenever(geoClient.resolve("8.8.8.8")).thenReturn(GeoResolution("8.8.8.8", resolved = true, country = "US"))
-        whenever(policyClient.evaluate(tenantId, userId, "US")).thenReturn(EvaluateResponse(allowed = true))
+        whenever(policyClient.evaluate(tenantId, userId, null, "US", "8.8.8.8")).thenReturn(EvaluateResponse(allowed = true))
         whenever(deviceClient.verifyTotp(tenantId, userId, "000000"))
             .thenReturn(TotpVerifyResult(valid = false, status = RemoteDeviceStatus.PENDING))
 
@@ -230,7 +231,7 @@ class AuthServiceTest {
         whenever(identityClient.verifyPassword(tenantId, "alice@acme.com", "correct-password"))
             .thenReturn(VerifyPasswordResponse(valid = true, userId = userId, status = RemoteUserStatus.ACTIVE))
         whenever(geoClient.resolve("8.8.8.8")).thenReturn(GeoResolution("8.8.8.8", resolved = true, country = "US"))
-        whenever(policyClient.evaluate(tenantId, userId, "US")).thenReturn(EvaluateResponse(allowed = true))
+        whenever(policyClient.evaluate(tenantId, userId, null, "US", "8.8.8.8")).thenReturn(EvaluateResponse(allowed = true))
         whenever(deviceClient.verifyTotp(tenantId, userId, "000000"))
             .thenReturn(TotpVerifyResult(valid = false, status = RemoteDeviceStatus.LOCKED))
 
@@ -244,7 +245,7 @@ class AuthServiceTest {
         whenever(identityClient.verifyPassword(tenantId, "alice@acme.com", "correct-password"))
             .thenReturn(VerifyPasswordResponse(valid = true, userId = userId, status = RemoteUserStatus.ACTIVE))
         whenever(geoClient.resolve("8.8.8.8")).thenReturn(GeoResolution("8.8.8.8", resolved = true, country = "US"))
-        whenever(policyClient.evaluate(tenantId, userId, "US")).thenReturn(EvaluateResponse(allowed = true))
+        whenever(policyClient.evaluate(tenantId, userId, null, "US", "8.8.8.8")).thenReturn(EvaluateResponse(allowed = true))
         whenever(deviceClient.sendPush(tenantId, userId))
             .thenReturn(PushSendResult(UUID.randomUUID(), RemotePushResult.DENIED))
 
@@ -260,7 +261,7 @@ class AuthServiceTest {
         whenever(identityClient.verifyPassword(tenantId, "alice@acme.com", "correct-password"))
             .thenReturn(VerifyPasswordResponse(valid = true, userId = userId, status = RemoteUserStatus.ACTIVE))
         whenever(geoClient.resolve("8.8.8.8")).thenReturn(GeoResolution("8.8.8.8", resolved = true, country = "US"))
-        whenever(policyClient.evaluate(tenantId, userId, "US")).thenReturn(EvaluateResponse(allowed = true))
+        whenever(policyClient.evaluate(tenantId, userId, null, "US", "8.8.8.8")).thenReturn(EvaluateResponse(allowed = true))
         whenever(deviceClient.sendPush(tenantId, userId))
             .thenReturn(PushSendResult(UUID.randomUUID(), RemotePushResult.TIMEOUT))
 
@@ -274,7 +275,7 @@ class AuthServiceTest {
         whenever(identityClient.verifyPassword(tenantId, "alice@acme.com", "correct-password"))
             .thenReturn(VerifyPasswordResponse(valid = true, userId = userId, status = RemoteUserStatus.ACTIVE))
         whenever(geoClient.resolve("8.8.8.8")).thenReturn(GeoResolution("8.8.8.8", resolved = true, country = "US"))
-        whenever(policyClient.evaluate(tenantId, userId, "US")).thenReturn(EvaluateResponse(allowed = true))
+        whenever(policyClient.evaluate(tenantId, userId, null, "US", "8.8.8.8")).thenReturn(EvaluateResponse(allowed = true))
         whenever(deviceClient.sendPush(tenantId, userId)).thenThrow(
             CallNotPermittedException.createCallNotPermittedException(
                 io.github.resilience4j.circuitbreaker.CircuitBreaker.ofDefaults("device-svc"),
@@ -292,7 +293,7 @@ class AuthServiceTest {
         whenever(identityClient.verifyPassword(tenantId, "alice@acme.com", "correct-password"))
             .thenReturn(VerifyPasswordResponse(valid = true, userId = userId, status = RemoteUserStatus.ACTIVE))
         whenever(geoClient.resolve("8.8.8.8")).thenReturn(GeoResolution("8.8.8.8", resolved = true, country = "US"))
-        whenever(policyClient.evaluate(tenantId, userId, "US")).thenReturn(EvaluateResponse(allowed = true))
+        whenever(policyClient.evaluate(tenantId, userId, null, "US", "8.8.8.8")).thenReturn(EvaluateResponse(allowed = true))
         whenever(deviceClient.sendPush(tenantId, userId)).thenThrow(
             org.springframework.web.client.HttpClientErrorException.create(
                 org.springframework.http.HttpStatus.NOT_FOUND, "Not Found", org.springframework.http.HttpHeaders.EMPTY, ByteArray(0), null,
@@ -309,5 +310,34 @@ class AuthServiceTest {
         service.logout("some-token")
 
         verify(sessionClient).terminate("some-token", "logout")
+    }
+
+    @Test
+    fun `a locked account is denied with ACCOUNT_LOCKED, audited, and nothing else is called`() {
+        whenever(identityClient.verifyPassword(tenantId, "alice@acme.com", "correct-password"))
+            .thenReturn(VerifyPasswordResponse(valid = false, locked = true))
+
+        val ex = assertThrows<LoginDeniedException> { service.login(request) }
+
+        assertEquals(AuthErrorCode.ACCOUNT_LOCKED, ex.errorCode)
+        val captor = argumentCaptor<AuditEvent>()
+        verify(auditPublisher).publish(captor.capture())
+        assertEquals("auth.login_denied", captor.firstValue.action)
+        assertEquals(AuditResult.DENIED, captor.firstValue.result)
+        verify(geoClient, never()).resolve(any())
+        verify(sessionClient, never()).issue(any(), any(), any(), any())
+    }
+
+    @Test
+    fun `precheck also reports a locked account as ACCOUNT_LOCKED`() {
+        whenever(identityClient.verifyPassword(tenantId, "alice@acme.com", "correct-password"))
+            .thenReturn(VerifyPasswordResponse(valid = false, locked = true, permanentlyLocked = true))
+
+        val ex = assertThrows<LoginDeniedException> {
+            service.precheck(PrecheckRequest(tenantId, "alice@acme.com", "correct-password", "8.8.8.8"))
+        }
+
+        assertEquals(AuthErrorCode.ACCOUNT_LOCKED, ex.errorCode)
+        verify(geoClient, never()).resolve(any())
     }
 }

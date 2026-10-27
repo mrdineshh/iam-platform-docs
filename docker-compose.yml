@@ -311,6 +311,9 @@ services:
       # tenant-svc's own inbound listener stays plain HTTP -- see that
       # service's application.yml comment.
       TENANT_SVC_URL: http://iam-tenant-svc:8080
+      # Password rules and lockout settings (FR-3.1, FR-3.5) are read from
+      # iam-policy-svc, which stays plain HTTP (browser-facing).
+      POLICY_SVC_URL: http://iam-policy-svc:8080
     depends_on:
       cloudsql-proxy:
         condition: service_started

@@ -8,6 +8,9 @@ export interface AdminUserListEntry {
   status: "ACTIVE" | "SUSPENDED";
   role: "ADMIN" | "USER";
   groupId: string | null;
+  locked?: boolean;
+  lockedUntil?: string | null;
+  permanentlyLocked?: boolean;
 }
 
 export interface ImpersonateResult {

@@ -49,6 +49,10 @@ class AuthService(
         val correlationId = CorrelationId.get()
 
         val verified = identityClient.verifyPassword(request.tenantId, request.email, request.password)
+        if (verified.locked) {
+            audit(request.tenantId, request.email, "auth.login_denied", AuditResult.DENIED, "account locked", request.sourceIp)
+            throw LoginDeniedException("account locked", AuthErrorCode.ACCOUNT_LOCKED)
+        }
         if (!verified.valid) {
             audit(request.tenantId, request.email, "auth.login_failure", AuditResult.FAILURE, "invalid credentials", request.sourceIp)
             throw InvalidCredentialsException()
@@ -143,6 +147,10 @@ class AuthService(
      */
     fun precheck(request: PrecheckRequest): PrecheckResponse {
         val verified = identityClient.verifyPassword(request.tenantId, request.email, request.password)
+        if (verified.locked) {
+            audit(request.tenantId, request.email, "auth.login_denied", AuditResult.DENIED, "account locked", request.sourceIp)
+            throw LoginDeniedException("account locked", AuthErrorCode.ACCOUNT_LOCKED)
+        }
         if (!verified.valid) {
             audit(request.tenantId, request.email, "auth.login_failure", AuditResult.FAILURE, "invalid credentials", request.sourceIp)
             throw InvalidCredentialsException()

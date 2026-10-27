@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import QRCode from "qrcode";
 import { login, precheck } from "@/lib/auth";
@@ -8,6 +8,7 @@ import { saveSession } from "@/lib/session";
 import { denialMessage } from "@/lib/errorCodes";
 import { ThemeToggle } from "@/components/ThemeToggle";
 import { detectRealIp } from "@/lib/clientIp";
+import { applyBranding, type Branding } from "@/lib/branding";
 
 type Step = "credentials" | "enroll" | "code";
 
@@ -24,6 +25,19 @@ export function LoginPage() {
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState<"check" | "totp" | "push" | null>(null);
   const [sourceIp, setSourceIp] = useState<string | null>(null);
+  const [brand, setBrand] = useState<{ name: string; branding: Branding | null } | null>(null);
+
+  // Brand the page as soon as it opens (logo, color, headline), not only
+  // after "Next": the tenant is known from the subdomain / ?tenant= already.
+  useEffect(() => {
+    const subdomain = resolveTenantSubdomain(window.location.hostname, tenantOverride);
+    if (!subdomain) return;
+    void findTenantBySubdomain(subdomain).then((tenant) => {
+      if (!tenant) return;
+      applyBranding(tenant.branding ?? null);
+      setBrand({ name: tenant.name, branding: tenant.branding ?? null });
+    });
+  }, [tenantOverride]);
 
   async function resolveTenantOrFail() {
     const subdomain = resolveTenantSubdomain(window.location.hostname, tenantOverride);
@@ -128,8 +142,14 @@ export function LoginPage() {
     <main className="login-page">
       <ThemeToggle className="login-page__theme-toggle" />
       <div className="login-page__brand">
-        <span className="login-page__brand-mark">IAM</span>
-        <span className="login-page__brand-name">Platform</span>
+        {brand?.branding?.logoUrl ? (
+          <img src={brand.branding.logoUrl} alt={brand.name} className="login-page__brand-logo" />
+        ) : (
+          <>
+            <span className="login-page__brand-mark">{brand ? brand.name.charAt(0).toUpperCase() : "IAM"}</span>
+            <span className="login-page__brand-name">{brand?.name ?? "Platform"}</span>
+          </>
+        )}
       </div>
       <form
         className="login-form"
@@ -139,7 +159,7 @@ export function LoginPage() {
           else void submitCode("totp");
         }}
       >
-        <h1>Admin sign in</h1>
+        <h1>{brand?.branding?.headline ?? "Admin sign in"}</h1>
         <ol className="login-steps" aria-hidden="true">
           <li className="login-steps__item login-steps__item--done" />
           <li className={step !== "credentials" ? "login-steps__item login-steps__item--done" : "login-steps__item"} />

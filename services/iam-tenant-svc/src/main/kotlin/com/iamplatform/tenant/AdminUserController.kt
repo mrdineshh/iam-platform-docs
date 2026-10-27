@@ -5,6 +5,7 @@ import com.iamplatform.servicekit.audit.AuditEvent
 import com.iamplatform.servicekit.audit.AuditPublisher
 import com.iamplatform.servicekit.audit.AuditResult
 import com.iamplatform.servicekit.correlation.CorrelationId
+import jakarta.servlet.http.HttpServletRequest
 import jakarta.validation.Valid
 import org.springframework.http.HttpStatus
 import org.springframework.http.ResponseEntity
@@ -160,6 +161,39 @@ class AdminUserController(
         }
 
         return ResponseEntity.ok(DeletedUserResponse(id = id, googleWorkspaceDeleted = googleDeleted, googleWorkspaceError = googleError))
+    }
+
+    // FR-3.5: an admin clears a lockout (temporary or permanent) so the user can
+    // sign in again without waiting. Recorded with the admin as actor.
+    @PostMapping("/{id}/unlock")
+    fun unlockUser(
+        @PathVariable id: UUID,
+        @RequestParam tenantId: UUID,
+        @RequestHeader("X-Session-Token") sessionToken: String,
+        httpRequest: HttpServletRequest,
+    ): ResponseEntity<Void> {
+        adminAccessGuard.requireTenantAdmin(sessionToken, tenantId)
+        val user = identityClient.findUser(id)
+        if (user == null || user.tenantId != tenantId) {
+            throw UserNotFoundForDeletionException(id)
+        }
+        val admin = adminAccessGuard.requireValidSession(sessionToken)
+
+        identityClient.unlockUser(id)
+
+        auditPublisher.publish(
+            AuditEvent(
+                correlationId = CorrelationId.get(),
+                tenantId = tenantId,
+                actorType = ActorType.ADMIN,
+                actorId = admin.userId.toString(),
+                action = "identity.unlocked_by_admin",
+                result = AuditResult.SUCCESS,
+                reason = "targetUser=$id",
+                sourceIp = httpRequest.remoteAddr,
+            ),
+        )
+        return ResponseEntity.noContent().build()
     }
 
     private fun splitDisplayName(displayName: String): Pair<String, String> {

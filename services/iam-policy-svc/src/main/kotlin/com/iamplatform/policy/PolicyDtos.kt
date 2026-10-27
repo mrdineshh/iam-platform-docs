@@ -29,6 +29,16 @@ data class PutPolicyRequest(
 
     val totpReenrollEveryLogin: Boolean? = null,
     val totpReenrollEveryLoginHardCap: Boolean = false,
+
+    // TENANT scope only (FR-3.1 / FR-3.5). Null = platform default.
+    val passwordMinLength: Int? = null,
+    val passwordRequireUppercase: Boolean? = null,
+    val passwordRequireLowercase: Boolean? = null,
+    val passwordRequireDigit: Boolean? = null,
+    val passwordRequireSymbol: Boolean? = null,
+    val lockoutThreshold: Int? = null,
+    val lockoutDurationMinutes: Int? = null,
+    val lockoutPermanent: Boolean? = null,
 )
 
 data class PolicyResponse(
@@ -48,6 +58,14 @@ data class PolicyResponse(
     val mfaRequiredHardCap: Boolean,
     val totpReenrollEveryLogin: Boolean?,
     val totpReenrollEveryLoginHardCap: Boolean,
+    val passwordMinLength: Int?,
+    val passwordRequireUppercase: Boolean?,
+    val passwordRequireLowercase: Boolean?,
+    val passwordRequireDigit: Boolean?,
+    val passwordRequireSymbol: Boolean?,
+    val lockoutThreshold: Int?,
+    val lockoutDurationMinutes: Int?,
+    val lockoutPermanent: Boolean?,
     val updatedAt: Instant,
 )
 
@@ -69,6 +87,14 @@ fun PolicyEntity.toResponse(): PolicyResponse =
         mfaRequiredHardCap = mfaRequiredHardCap,
         totpReenrollEveryLogin = totpReenrollEveryLogin,
         totpReenrollEveryLoginHardCap = totpReenrollEveryLoginHardCap,
+        passwordMinLength = passwordMinLength,
+        passwordRequireUppercase = passwordRequireUppercase,
+        passwordRequireLowercase = passwordRequireLowercase,
+        passwordRequireDigit = passwordRequireDigit,
+        passwordRequireSymbol = passwordRequireSymbol,
+        lockoutThreshold = lockoutThreshold,
+        lockoutDurationMinutes = lockoutDurationMinutes,
+        lockoutPermanent = lockoutPermanent,
         updatedAt = updatedAt,
     )
 
@@ -95,6 +121,27 @@ data class EvaluateResponse(
     val mfaRequired: Boolean,
     val totpReenrollEveryLogin: Boolean,
 )
+
+/**
+ * The effective sign-in security settings for a tenant, defaults filled in --
+ * what iam-identity-svc enforces on password changes and failed logins.
+ * lockoutThreshold = 0 means lockout is off.
+ */
+data class SecuritySettingsResponse(
+    val passwordMinLength: Int,
+    val passwordRequireUppercase: Boolean,
+    val passwordRequireLowercase: Boolean,
+    val passwordRequireDigit: Boolean,
+    val passwordRequireSymbol: Boolean,
+    val lockoutThreshold: Int,
+    val lockoutDurationMinutes: Int,
+    val lockoutPermanent: Boolean,
+) {
+    companion object {
+        const val DEFAULT_MIN_LENGTH = 8
+        const val DEFAULT_LOCKOUT_MINUTES = 15
+    }
+}
 
 class InvalidPolicyRequestException(message: String) : RuntimeException(message)
 

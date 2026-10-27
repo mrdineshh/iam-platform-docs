@@ -11,6 +11,7 @@ import { LaunchpadPage } from "@/pages/LaunchpadPage";
 import { SwitchUserPage } from "@/pages/SwitchUserPage";
 import { GroupsPage } from "@/pages/GroupsPage";
 import { GoogleWorkspaceSettingsPage } from "@/pages/GoogleWorkspaceSettingsPage";
+import { BrandingPage } from "@/pages/BrandingPage";
 import { ProtectedRoute } from "@/components/ProtectedRoute";
 import { SessionRoute } from "@/components/SessionRoute";
 import { ImpersonationBanner } from "@/components/ImpersonationBanner";
@@ -101,6 +102,14 @@ export function App() {
           element={
             <ProtectedRoute>
               <GoogleWorkspaceSettingsPage />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/branding"
+          element={
+            <ProtectedRoute>
+              <BrandingPage />
             </ProtectedRoute>
           }
         />

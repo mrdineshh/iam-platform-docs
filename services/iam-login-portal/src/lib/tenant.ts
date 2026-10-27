@@ -1,5 +1,6 @@
 import { config } from "./config";
 import { getJson } from "./http";
+import type { Branding } from "./branding";
 
 export interface Tenant {
   id: string;
@@ -7,6 +8,7 @@ export interface Tenant {
   subdomain: string;
   status: "ACTIVE" | "SUSPENDED";
   createdAt: string;
+  branding?: Branding | null;
 }
 
 /**

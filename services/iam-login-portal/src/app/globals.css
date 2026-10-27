@@ -59,9 +59,16 @@ h1 {
   height: 32px;
   border-radius: 8px;
   background: var(--iam-primary);
-  color: white;
+  color: var(--iam-on-primary, #fff);
   font-size: 0.8rem;
   font-weight: 800;
+}
+
+.login-page__brand-logo {
+  max-height: 40px;
+  max-width: 180px;
+  object-fit: contain;
+  display: block;
 }
 
 .login-page__brand-name {
@@ -148,7 +155,7 @@ h1 {
   font-weight: 600;
   cursor: pointer;
   background: var(--iam-primary);
-  color: white;
+  color: var(--iam-on-primary, #fff);
   font-family: inherit;
   transition: background-color 0.12s, opacity 0.12s;
 }
@@ -259,7 +266,7 @@ h1 {
   height: 52px;
   border-radius: 13px;
   background: var(--iam-primary);
-  color: white;
+  color: var(--iam-on-primary, #fff);
   font-size: 1.4rem;
   font-weight: 700;
 }

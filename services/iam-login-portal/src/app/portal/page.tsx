@@ -4,6 +4,7 @@ import { randomUUID } from "node:crypto";
 import { LoginForm } from "../login/LoginForm";
 import { config } from "@/lib/config";
 import { findTenantBySubdomain, resolveTenantSubdomain } from "@/lib/tenant";
+import { brandStyle, safeLogoUrl } from "@/lib/branding";
 
 interface SearchParams {
   // Dev-only tenant override -- see resolveTenantSubdomain.
@@ -50,8 +51,17 @@ export default async function PortalLoginPage({
   }
 
   return (
-    <main className="login-page">
-      <LoginForm clientId="" redirectUri="" scope="openid" state="" tenantOverride={tenantOverride} tenantName={tenant.name} />
+    <main className="login-page" style={brandStyle(tenant.branding)}>
+      <LoginForm
+        clientId=""
+        redirectUri=""
+        scope="openid"
+        state=""
+        tenantOverride={tenantOverride}
+        tenantName={tenant.name}
+        logoUrl={safeLogoUrl(tenant.branding)}
+        headline={tenant.branding?.headline}
+      />
     </main>
   );
 }

@@ -15,6 +15,7 @@ import java.util.UUID
 @RequestMapping("/api/v1/tenants")
 class TenantController(
     private val tenantService: TenantService,
+    private val brandingService: TenantBrandingService,
 ) {
 
     @PostMapping
@@ -23,12 +24,14 @@ class TenantController(
 
     @GetMapping("/{id}")
     fun getTenant(@PathVariable id: UUID): ResponseEntity<TenantResponse> =
-        ResponseEntity.ok(tenantService.getTenant(id).toResponse())
+        ResponseEntity.ok(tenantService.getTenant(id).let { it.toResponse(brandingService.find(it.id)?.toResponse()) })
 
     // Added for Service 13 (iam-login-portal) -- resolves tenantId from the
     // Host header subdomain per FR-6.2. See docs/specs/iam-login-portal-SPEC.md
     // Section 1.2.
     @GetMapping("/by-subdomain/{subdomain}")
     fun getTenantBySubdomain(@PathVariable subdomain: String): ResponseEntity<TenantResponse> =
-        ResponseEntity.ok(tenantService.getTenantBySubdomain(subdomain).toResponse())
+        ResponseEntity.ok(
+            tenantService.getTenantBySubdomain(subdomain).let { it.toResponse(brandingService.find(it.id)?.toResponse()) },
+        )
 }

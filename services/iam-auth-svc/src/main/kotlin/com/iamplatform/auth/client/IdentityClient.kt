@@ -21,6 +21,11 @@ data class VerifyPasswordResponse(
     val status: RemoteUserStatus? = null,
     val role: RemoteUserRole? = null,
     val groupId: UUID? = null,
+    // Set (with valid=false) when the correct password was given for a locked
+    // account -- see iam-identity-svc's verifyPassword for why it isn't
+    // revealed to a wrong guess.
+    val locked: Boolean = false,
+    val permanentlyLocked: Boolean = false,
 )
 
 // Added for the break-glass 2FA reset path (BreakGlassService) -- it needs

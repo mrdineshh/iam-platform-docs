@@ -524,7 +524,7 @@ select:focus-visible {
 
 .app-icon--letter {
   background: var(--iam-primary);
-  color: #fff;
+  color: var(--iam-on-primary, #fff);
   font-weight: 700;
 }
 
@@ -831,4 +831,129 @@ code {
   margin: 2px 0 0;
   color: var(--iam-text-muted);
   font-size: 0.84rem;
+}
+
+/* ---------- Branding page, preview, and brand logos ---------- */
+
+.branding-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1.4fr) minmax(280px, 1fr);
+  gap: 24px;
+  align-items: start;
+}
+
+.branding-fields {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.color-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.color-row input:not([type="color"]) {
+  max-width: 140px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+.color-row__picker {
+  width: 44px;
+  height: 40px;
+  padding: 2px;
+  border: 1px solid var(--iam-border);
+  border-radius: 8px;
+  background: var(--iam-surface);
+  cursor: pointer;
+}
+
+.branding-preview__label {
+  margin: 0 0 8px;
+  font-size: 0.74rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--iam-text-muted);
+}
+
+.branding-preview {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 28px 24px;
+  background: var(--iam-surface);
+  border: 1px solid var(--iam-border);
+  border-radius: var(--iam-radius-lg);
+  box-shadow: var(--iam-shadow-md);
+}
+
+.branding-preview__brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.branding-preview__logo {
+  max-height: 36px;
+  max-width: 160px;
+  object-fit: contain;
+}
+
+.branding-preview__mark {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  background: var(--iam-primary);
+  color: var(--iam-on-primary);
+  font-weight: 800;
+}
+
+.branding-preview__name {
+  font-weight: 700;
+}
+
+.branding-preview__headline {
+  margin: 6px 0 2px;
+  font-size: 1.05rem;
+}
+
+.branding-preview__input {
+  padding: 10px 12px;
+  border: 1px solid var(--iam-border);
+  border-radius: 8px;
+  color: var(--iam-text-muted);
+  font-size: 0.88rem;
+}
+
+.branding-preview__button {
+  padding: 10px 14px;
+  border-radius: 8px;
+  background: var(--iam-primary);
+  color: var(--iam-on-primary);
+  font-weight: 600;
+  font-size: 0.9rem;
+  text-align: center;
+}
+
+.shell__brand-logo,
+.login-page__brand-logo {
+  max-height: 32px;
+  max-width: 150px;
+  object-fit: contain;
+  display: block;
+}
+
+.login-page__headline {
+  margin: 0 0 4px;
+}
+
+@media (max-width: 900px) {
+  .branding-layout {
+    grid-template-columns: 1fr;
+  }
 }

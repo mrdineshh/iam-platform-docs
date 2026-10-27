@@ -70,6 +70,13 @@ data class VerifyPasswordResponse(
     // Added for group-based policy -- iam-auth-svc forwards this as the
     // evaluate call's ouId, so group-scoped 2FA/IP policy actually applies.
     val groupId: UUID? = null,
+
+    // Set only when the CORRECT password was supplied for a locked account
+    // (valid stays false): a wrong password gets the same generic answer as an
+    // unknown user, so lock state never leaks to someone guessing passwords.
+    val locked: Boolean = false,
+    val lockedUntil: Instant? = null,
+    val permanentlyLocked: Boolean = false,
 )
 
 data class UserResponse(
@@ -81,6 +88,9 @@ data class UserResponse(
     val role: UserRole,
     val groupId: UUID?,
     val createdAt: Instant,
+    val locked: Boolean = false,
+    val lockedUntil: Instant? = null,
+    val permanentlyLocked: Boolean = false,
 )
 
 fun UserEntity.toResponse(): UserResponse =
@@ -93,6 +103,9 @@ fun UserEntity.toResponse(): UserResponse =
         role = role,
         groupId = groupId,
         createdAt = createdAt,
+        locked = isLockedAt(Instant.now()),
+        lockedUntil = lockedUntil?.takeIf { it.isAfter(Instant.now()) },
+        permanentlyLocked = permanentlyLocked,
     )
 
 data class CreateGroupRequest(

@@ -5,15 +5,23 @@ import com.iamplatform.servicekit.audit.AuditPublisher
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.assertThrows
 import org.mockito.kotlin.any
+import org.mockito.kotlin.eq
 import org.mockito.kotlin.mock
 import org.mockito.kotlin.never
 import org.mockito.kotlin.times
 import org.mockito.kotlin.verify
 import org.mockito.kotlin.whenever
+import org.springframework.web.client.ResourceAccessException
+import java.time.Clock
+import java.time.Duration
+import java.time.Instant
+import java.time.ZoneOffset
 import java.util.Optional
 import java.util.UUID
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertNull
+import kotlin.test.assertTrue
 
 class UserServiceTest {
 
@@ -21,7 +29,23 @@ class UserServiceTest {
     private val tenantClient = mock<TenantClient>()
     private val auditPublisher = mock<AuditPublisher>()
     private val passwordService = mock<PasswordService>()
-    private val service = UserService(repository, tenantClient, auditPublisher, passwordService)
+    private val policyClient = mock<PolicyClient>()
+    private val now = Instant.parse("2026-10-27T12:00:00Z")
+    private val clock = Clock.fixed(now, ZoneOffset.UTC)
+    private val service = UserService(repository, tenantClient, auditPublisher, passwordService, policyClient, clock)
+
+    private fun settings(
+        lockoutThreshold: Int = 0,
+        lockoutDurationMinutes: Int = 15,
+        lockoutPermanent: Boolean = false,
+        minLength: Int = 8,
+        digit: Boolean = false,
+    ) = SecuritySettings(minLength, false, false, digit, false, lockoutThreshold, lockoutDurationMinutes, lockoutPermanent)
+
+    init {
+        // Platform defaults unless a test says otherwise.
+        whenever(policyClient.securitySettings(any())).thenReturn(settings())
+    }
 
     private val tenantId = UUID.randomUUID()
 
@@ -218,5 +242,208 @@ class UserServiceTest {
 
         assertEquals(false, result.valid)
         verify(passwordService, never()).matches(any(), any())
+    }
+
+    // ---- Password rules (FR-3.1) ----
+
+    @Test
+    fun `createUser rejects a password that breaks the tenant rules without hashing or saving`() {
+        whenever(tenantClient.exists(tenantId)).thenReturn(true)
+        whenever(repository.existsByTenantIdAndEmail(tenantId, "a@acme.com")).thenReturn(false)
+        whenever(policyClient.securitySettings(tenantId)).thenReturn(settings(minLength = 12, digit = true))
+
+        assertThrows<WeakPasswordException> {
+            service.createUser(CreateUserRequest(tenantId, "a@acme.com", "Alice", "longenoughbutnodigits"))
+        }
+        verify(passwordService, never()).hash(any())
+        verify(repository, never()).save(any())
+    }
+
+    @Test
+    fun `createUser fails closed when the tenant rules cannot be read`() {
+        whenever(tenantClient.exists(tenantId)).thenReturn(true)
+        whenever(repository.existsByTenantIdAndEmail(tenantId, "a@acme.com")).thenReturn(false)
+        whenever(policyClient.securitySettings(tenantId)).thenThrow(ResourceAccessException("policy-svc down"))
+
+        assertThrows<ResourceAccessException> {
+            service.createUser(CreateUserRequest(tenantId, "a@acme.com", "Alice", "validpassword1"))
+        }
+        verify(repository, never()).save(any())
+    }
+
+    @Test
+    fun `setPassword rejects a weak password and leaves the existing one untouched`() {
+        val id = UUID.randomUUID()
+        val user = UserEntity(id = id, tenantId = tenantId, email = "a@acme.com", displayName = "Alice", passwordHash = "old-hash")
+        whenever(repository.findById(id)).thenReturn(Optional.of(user))
+        whenever(policyClient.securitySettings(tenantId)).thenReturn(settings(minLength = 14))
+
+        assertThrows<WeakPasswordException> { service.setPassword(id, SetPasswordRequest("only12chars!")) }
+
+        assertEquals("old-hash", user.passwordHash)
+        verify(repository, never()).save(any())
+    }
+
+    // ---- Account lockout (FR-3.5) ----
+
+    private fun userWith(attempts: Int = 0, lockedUntil: Instant? = null, permanent: Boolean = false) =
+        UserEntity(
+            id = UUID.randomUUID(), tenantId = tenantId, email = "a@acme.com", displayName = "Alice",
+            passwordHash = "stored-hash", failedLoginAttempts = attempts, lockedUntil = lockedUntil, permanentlyLocked = permanent,
+        ).also {
+            whenever(repository.findByTenantIdAndEmail(tenantId, "a@acme.com")).thenReturn(it)
+            whenever(repository.findById(it.id)).thenReturn(Optional.of(it))
+            whenever(repository.save(any())).thenAnswer { inv -> inv.arguments[0] }
+        }
+
+    private fun wrongPassword() = service.verifyPassword(VerifyPasswordRequest(tenantId, "a@acme.com", "wrong"))
+    private fun rightPassword() = service.verifyPassword(VerifyPasswordRequest(tenantId, "a@acme.com", "correct"))
+
+    @Test
+    fun `a wrong password is counted atomically in the database`() {
+        val user = userWith()
+        whenever(passwordService.matches("wrong", "stored-hash")).thenReturn(false)
+
+        assertFalse(wrongPassword().valid)
+
+        verify(repository).incrementFailedAttempts(user.id)
+    }
+
+    @Test
+    fun `reaching the threshold locks the account for the configured time and audits it`() {
+        // 3 is what the database holds after the increment for this attempt.
+        val user = userWith(attempts = 3)
+        whenever(passwordService.matches("wrong", "stored-hash")).thenReturn(false)
+        whenever(policyClient.securitySettings(tenantId)).thenReturn(settings(lockoutThreshold = 3, lockoutDurationMinutes = 10))
+
+        wrongPassword()
+
+        assertEquals(now.plus(Duration.ofMinutes(10)), user.lockedUntil)
+        assertEquals(0, user.failedLoginAttempts)
+        assertFalse(user.permanentlyLocked)
+        val captor = org.mockito.kotlin.argumentCaptor<AuditEvent>()
+        verify(auditPublisher).publish(captor.capture())
+        assertEquals("identity.account_locked", captor.firstValue.action)
+    }
+
+    @Test
+    fun `below the threshold nothing is locked and nothing is audited`() {
+        val user = userWith(attempts = 2)
+        whenever(passwordService.matches("wrong", "stored-hash")).thenReturn(false)
+        whenever(policyClient.securitySettings(tenantId)).thenReturn(settings(lockoutThreshold = 3))
+
+        wrongPassword()
+
+        assertNull(user.lockedUntil)
+        verify(auditPublisher, never()).publish(any())
+    }
+
+    @Test
+    fun `permanent lockout locks until an admin unlocks`() {
+        val user = userWith(attempts = 5)
+        whenever(passwordService.matches("wrong", "stored-hash")).thenReturn(false)
+        whenever(policyClient.securitySettings(tenantId)).thenReturn(settings(lockoutThreshold = 5, lockoutPermanent = true))
+
+        wrongPassword()
+
+        assertTrue(user.permanentlyLocked)
+        assertNull(user.lockedUntil)
+    }
+
+    @Test
+    fun `with lockout off (threshold 0) many failures never lock`() {
+        val user = userWith(attempts = 500)
+        whenever(passwordService.matches("wrong", "stored-hash")).thenReturn(false)
+
+        wrongPassword()
+
+        assertNull(user.lockedUntil)
+        assertFalse(user.permanentlyLocked)
+        verify(auditPublisher, never()).publish(any())
+    }
+
+    @Test
+    fun `an outage reading the lockout settings still counts the failure but does not lock or throw`() {
+        val user = userWith(attempts = 9)
+        whenever(passwordService.matches("wrong", "stored-hash")).thenReturn(false)
+        whenever(policyClient.securitySettings(tenantId)).thenThrow(ResourceAccessException("policy-svc down"))
+
+        assertFalse(wrongPassword().valid)
+
+        verify(repository).incrementFailedAttempts(user.id)
+        assertNull(user.lockedUntil)
+    }
+
+    @Test
+    fun `a wrong guess on an already locked account is not counted and answers like any wrong password`() {
+        val user = userWith(lockedUntil = now.plusSeconds(600))
+        whenever(passwordService.matches("wrong", "stored-hash")).thenReturn(false)
+
+        val result = wrongPassword()
+
+        assertFalse(result.valid)
+        assertFalse(result.locked)
+        verify(repository, never()).incrementFailedAttempts(user.id)
+    }
+
+    @Test
+    fun `the correct password on a temporarily locked account reports the lock and does not sign in`() {
+        userWith(lockedUntil = now.plusSeconds(600))
+        whenever(passwordService.matches("correct", "stored-hash")).thenReturn(true)
+
+        val result = rightPassword()
+
+        assertFalse(result.valid)
+        assertTrue(result.locked)
+        assertEquals(now.plusSeconds(600), result.lockedUntil)
+        assertFalse(result.permanentlyLocked)
+    }
+
+    @Test
+    fun `the correct password on a permanently locked account reports it`() {
+        userWith(permanent = true)
+        whenever(passwordService.matches("correct", "stored-hash")).thenReturn(true)
+
+        val result = rightPassword()
+
+        assertFalse(result.valid)
+        assertTrue(result.locked)
+        assertTrue(result.permanentlyLocked)
+    }
+
+    @Test
+    fun `a correct password after the lock has expired signs in and clears the state`() {
+        val user = userWith(attempts = 0, lockedUntil = now.minusSeconds(5))
+        whenever(passwordService.matches("correct", "stored-hash")).thenReturn(true)
+
+        val result = rightPassword()
+
+        assertTrue(result.valid)
+        assertNull(user.lockedUntil)
+        verify(repository).save(user)
+    }
+
+    @Test
+    fun `a correct password resets earlier failed attempts`() {
+        val user = userWith(attempts = 2)
+        whenever(passwordService.matches("correct", "stored-hash")).thenReturn(true)
+
+        assertTrue(rightPassword().valid)
+
+        assertEquals(0, user.failedLoginAttempts)
+    }
+
+    @Test
+    fun `unlockUser clears the lock and the counter and audits it`() {
+        val user = userWith(attempts = 4, lockedUntil = now.plusSeconds(600), permanent = true)
+
+        service.unlockUser(user.id)
+
+        assertEquals(0, user.failedLoginAttempts)
+        assertNull(user.lockedUntil)
+        assertFalse(user.permanentlyLocked)
+        val captor = org.mockito.kotlin.argumentCaptor<AuditEvent>()
+        verify(auditPublisher).publish(captor.capture())
+        assertEquals("identity.account_unlocked", captor.firstValue.action)
     }
 }

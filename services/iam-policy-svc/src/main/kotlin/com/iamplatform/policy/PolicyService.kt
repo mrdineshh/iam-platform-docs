@@ -29,6 +29,8 @@ class PolicyService(
             throw InvalidPolicyRequestException("hard-cap flags may only be set on scope=TENANT")
         }
 
+        validateSecuritySettings(request)
+
         val existing = repository.findByTenantIdAndScopeAndScopeId(request.tenantId, request.scope, effectiveScopeId)
         val policy = existing ?: PolicyEntity(
             id = UUID.randomUUID(),
@@ -49,6 +51,14 @@ class PolicyService(
         policy.mfaRequiredHardCap = request.mfaRequiredHardCap
         policy.totpReenrollEveryLogin = request.totpReenrollEveryLogin
         policy.totpReenrollEveryLoginHardCap = request.totpReenrollEveryLoginHardCap
+        policy.passwordMinLength = request.passwordMinLength
+        policy.passwordRequireUppercase = request.passwordRequireUppercase
+        policy.passwordRequireLowercase = request.passwordRequireLowercase
+        policy.passwordRequireDigit = request.passwordRequireDigit
+        policy.passwordRequireSymbol = request.passwordRequireSymbol
+        policy.lockoutThreshold = request.lockoutThreshold
+        policy.lockoutDurationMinutes = request.lockoutDurationMinutes
+        policy.lockoutPermanent = request.lockoutPermanent
         policy.updatedAt = java.time.Instant.now()
 
         val saved = repository.save(policy)
@@ -66,6 +76,46 @@ class PolicyService(
         )
 
         return saved
+    }
+
+    // Password rules and lockout are per tenant (FR-3.1, FR-3.5), so they are
+    // only accepted on the TENANT policy, and range-checked so a typo can't
+    // lock every user out (e.g. a 0-minute lockout) or accept absurd values.
+    private fun validateSecuritySettings(request: PutPolicyRequest) {
+        val hasAny = listOf(
+            request.passwordMinLength, request.passwordRequireUppercase, request.passwordRequireLowercase,
+            request.passwordRequireDigit, request.passwordRequireSymbol, request.lockoutThreshold,
+            request.lockoutDurationMinutes, request.lockoutPermanent,
+        ).any { it != null }
+        if (!hasAny) return
+
+        if (request.scope != PolicyScope.TENANT) {
+            throw InvalidPolicyRequestException("password and lockout settings may only be set on scope=TENANT")
+        }
+        request.passwordMinLength?.let {
+            if (it !in 8..128) throw InvalidPolicyRequestException("passwordMinLength must be between 8 and 128")
+        }
+        request.lockoutThreshold?.let {
+            if (it !in 0..100) throw InvalidPolicyRequestException("lockoutThreshold must be between 0 (off) and 100")
+        }
+        request.lockoutDurationMinutes?.let {
+            if (it !in 1..10080) throw InvalidPolicyRequestException("lockoutDurationMinutes must be between 1 and 10080")
+        }
+    }
+
+    /** Effective settings for a tenant: stored TENANT values, platform defaults for anything unset. */
+    fun securitySettings(tenantId: UUID): SecuritySettingsResponse {
+        val tenant = repository.findByTenantIdAndScopeAndScopeId(tenantId, PolicyScope.TENANT, tenantId)
+        return SecuritySettingsResponse(
+            passwordMinLength = tenant?.passwordMinLength ?: SecuritySettingsResponse.DEFAULT_MIN_LENGTH,
+            passwordRequireUppercase = tenant?.passwordRequireUppercase ?: false,
+            passwordRequireLowercase = tenant?.passwordRequireLowercase ?: false,
+            passwordRequireDigit = tenant?.passwordRequireDigit ?: false,
+            passwordRequireSymbol = tenant?.passwordRequireSymbol ?: false,
+            lockoutThreshold = tenant?.lockoutThreshold ?: 0,
+            lockoutDurationMinutes = tenant?.lockoutDurationMinutes ?: SecuritySettingsResponse.DEFAULT_LOCKOUT_MINUTES,
+            lockoutPermanent = tenant?.lockoutPermanent ?: false,
+        )
     }
 
     // Added for Service 14 (iam-admin-console) -- fetches the raw stored

@@ -6,6 +6,8 @@ import com.iamplatform.servicekit.audit.AuditPublisher
 import com.iamplatform.servicekit.audit.AuditResult
 import com.iamplatform.servicekit.correlation.CorrelationId
 import org.springframework.stereotype.Service
+import java.time.Clock
+import java.time.Duration
 import java.util.UUID
 
 @Service
@@ -14,6 +16,8 @@ class UserService(
     private val tenantClient: TenantClient,
     private val auditPublisher: AuditPublisher,
     private val passwordService: PasswordService,
+    private val policyClient: PolicyClient,
+    private val clock: Clock = Clock.systemUTC(),
 ) {
 
     fun createUser(request: CreateUserRequest): UserEntity {
@@ -23,6 +27,7 @@ class UserService(
         if (repository.existsByTenantIdAndEmail(request.tenantId, request.email)) {
             throw EmailAlreadyExistsException(request.email)
         }
+        request.password?.let { enforcePasswordRules(request.tenantId, it) }
 
         val user = repository.save(
             UserEntity(
@@ -151,6 +156,7 @@ class UserService(
 
     fun setPassword(id: UUID, request: SetPasswordRequest) {
         val user = getUser(id)
+        enforcePasswordRules(user.tenantId, request.password)
         user.passwordHash = passwordService.hash(request.password)
         repository.save(user)
 
@@ -174,14 +180,105 @@ class UserService(
         val user = repository.findByTenantIdAndEmail(request.tenantId, request.email)
             ?: return VerifyPasswordResponse(valid = false)
         val hash = user.passwordHash ?: return VerifyPasswordResponse(valid = false)
+        val now = clock.instant()
+        val lockedNow = user.isLockedAt(now)
 
-        return if (passwordService.matches(request.password, hash)) {
-            VerifyPasswordResponse(valid = true, userId = user.id, status = user.status, role = user.role, groupId = user.groupId)
-        } else {
+        if (!passwordService.matches(request.password, hash)) {
             // Deliberately the same shape as "user not found" above -- never
             // give a caller a way to distinguish a bad email from a bad
-            // password (user enumeration).
-            VerifyPasswordResponse(valid = false)
+            // password (user enumeration). A locked account also answers this
+            // way to a wrong guess: lock state is revealed only to someone who
+            // already knows the password (below). Guesses against a locked
+            // account are not counted, so a lock can't be extended by an attacker.
+            if (!lockedNow) recordFailedAttempt(user, now)
+            return VerifyPasswordResponse(valid = false)
         }
+
+        if (lockedNow) {
+            return VerifyPasswordResponse(
+                valid = false,
+                locked = true,
+                lockedUntil = user.lockedUntil?.takeIf { it.isAfter(now) },
+                permanentlyLocked = user.permanentlyLocked,
+            )
+        }
+
+        // A correct password clears the counter and any lock that has expired.
+        if (user.failedLoginAttempts != 0 || user.lockedUntil != null) {
+            user.failedLoginAttempts = 0
+            user.lockedUntil = null
+            repository.save(user)
+        }
+        return VerifyPasswordResponse(valid = true, userId = user.id, status = user.status, role = user.role, groupId = user.groupId)
+    }
+
+    // FR-3.5. The counter is incremented atomically in the database; the lock
+    // decision then reads the tenant's threshold. If iam-policy-svc cannot be
+    // reached the failure is still counted and the lock simply engages on the
+    // next failed attempt once settings are readable: an outage must neither
+    // lock everyone out nor lose the count.
+    private fun recordFailedAttempt(user: UserEntity, now: java.time.Instant) {
+        repository.incrementFailedAttempts(user.id)
+        val settings = try {
+            policyClient.securitySettings(user.tenantId)
+        } catch (ex: Exception) {
+            return
+        }
+        if (settings.lockoutThreshold <= 0) return
+
+        val fresh = repository.findById(user.id).orElse(null) ?: return
+        if (fresh.isLockedAt(now) || fresh.failedLoginAttempts < settings.lockoutThreshold) return
+
+        val permanent = settings.lockoutPermanent
+        fresh.failedLoginAttempts = 0
+        if (permanent) {
+            fresh.permanentlyLocked = true
+        } else {
+            fresh.lockedUntil = now.plus(Duration.ofMinutes(settings.lockoutDurationMinutes.toLong()))
+        }
+        repository.save(fresh)
+
+        auditPublisher.publish(
+            AuditEvent(
+                correlationId = CorrelationId.get(),
+                tenantId = fresh.tenantId,
+                actorType = ActorType.SYSTEM,
+                actorId = "iam-identity-svc",
+                action = "identity.account_locked",
+                result = AuditResult.SUCCESS,
+                reason = "after ${settings.lockoutThreshold} failed sign-ins; " +
+                    (if (permanent) "until an admin unlocks it" else "for ${settings.lockoutDurationMinutes} minutes") +
+                    "; user=${fresh.id}",
+            ),
+        )
+    }
+
+    /** Clears the lock and the failed-attempt counter. The admin who asked is audited by iam-tenant-svc. */
+    fun unlockUser(id: UUID): UserEntity {
+        val user = getUser(id)
+        user.failedLoginAttempts = 0
+        user.lockedUntil = null
+        user.permanentlyLocked = false
+        repository.save(user)
+
+        auditPublisher.publish(
+            AuditEvent(
+                correlationId = CorrelationId.get(),
+                tenantId = user.tenantId,
+                actorType = ActorType.SYSTEM,
+                actorId = "iam-identity-svc",
+                action = "identity.account_unlocked",
+                result = AuditResult.SUCCESS,
+                reason = "user=${user.id}",
+            ),
+        )
+        return user
+    }
+
+    // Fails closed: if the tenant's rules can't be read, the password is not
+    // accepted (the caller gets the standard 503), rather than silently
+    // falling back to weaker rules than the tenant configured.
+    private fun enforcePasswordRules(tenantId: UUID, password: String) {
+        PasswordRules.enforce(password, policyClient.securitySettings(tenantId))
     }
 }

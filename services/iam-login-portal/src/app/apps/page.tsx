@@ -3,6 +3,7 @@ import { redirect } from "next/navigation";
 import { randomUUID } from "node:crypto";
 import { config } from "@/lib/config";
 import { findTenantBySubdomain, resolveTenantSubdomain } from "@/lib/tenant";
+import { brandStyle, safeLogoUrl } from "@/lib/branding";
 import { listMyApps, type MyAppTile } from "@/lib/myApps";
 import { UpstreamError } from "@/lib/http";
 
@@ -67,8 +68,12 @@ export default async function AppsPage({
   }
 
   return (
-    <main className="login-page">
+    <main className="login-page" style={brandStyle(tenant.branding)}>
       <div className="apps-page">
+        {safeLogoUrl(tenant.branding) && (
+          // eslint-disable-next-line @next/next/no-img-element
+          <img src={safeLogoUrl(tenant.branding)!} alt={tenant.name} className="login-page__brand-logo" />
+        )}
         <h1>{tenant.name}</h1>
         <p className="hint">Your apps</p>
 

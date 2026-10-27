@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import QRCode from "qrcode";
-import { createUser, deleteUser, type CreatedUser } from "@/lib/identity";
+import { createUser, deleteUser, unlockUser, type CreatedUser } from "@/lib/identity";
 import { listTenantUsers, type AdminUserListEntry } from "@/lib/impersonate";
 import { getPolicy, putPolicy, type Policy } from "@/lib/policy";
 import { listGroups, assignUserToGroup, type Group } from "@/lib/groups";
@@ -39,6 +39,36 @@ type TriState = "" | "true" | "false";
 // absolute.
 const ALLOW_ANY_IP = "0.0.0.0/0";
 
+// What the tenant's policy currently demands of a new password (FR-3.1).
+interface PasswordRules {
+  minLength: number;
+  upper: boolean;
+  lower: boolean;
+  digit: boolean;
+  symbol: boolean;
+}
+
+const DEFAULT_RULES: PasswordRules = { minLength: 8, upper: false, lower: false, digit: false, symbol: false };
+
+function describeRules(r: PasswordRules): string {
+  const extras = [r.upper && "an uppercase letter", r.lower && "a lowercase letter", r.digit && "a number", r.symbol && "a symbol"].filter(
+    Boolean,
+  ) as string[];
+  const base = `At least ${r.minLength} characters`;
+  return extras.length === 0 ? `${base}.` : `${base}, including ${extras.join(", ")}.`;
+}
+
+// Client-side mirror of iam-identity-svc's PasswordRules, only so the admin
+// gets instant feedback; the server is what actually enforces it.
+function firstViolation(password: string, r: PasswordRules): string | null {
+  if (password.length < r.minLength) return `The password must be at least ${r.minLength} characters.`;
+  if (r.upper && !/\p{Lu}/u.test(password)) return "The password needs an uppercase letter.";
+  if (r.lower && !/\p{Ll}/u.test(password)) return "The password needs a lowercase letter.";
+  if (r.digit && !/\p{Nd}/u.test(password)) return "The password needs a number.";
+  if (r.symbol && !/[^\p{L}\p{Nd}\s]/u.test(password)) return "The password needs a symbol.";
+  return null;
+}
+
 export function UsersPage() {
   const session = loadSession()!;
   const toast = useToast();
@@ -52,6 +82,8 @@ export function UsersPage() {
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
   const [showCreate, setShowCreate] = useState(false);
+  const [rules, setRules] = useState<PasswordRules>(DEFAULT_RULES);
+  const [unlockingUserId, setUnlockingUserId] = useState<string | null>(null);
   const [sessionsFor, setSessionsFor] = useState<{ id: string; label: string } | null>(null);
   const [justCreated, setJustCreated] = useState<CreatedUser | null>(null);
   const [qrDataUrl, setQrDataUrl] = useState<string | null>(null);
@@ -101,11 +133,37 @@ export function UsersPage() {
     // Only offer the checkbox at all if this tenant actually has Google
     // Workspace configured -- otherwise it's a confusing option that can
     // never do anything (see Settings -> Google Workspace).
+    void getPolicy(session.tenantId, "TENANT", undefined, session.token)
+      .then((p) => {
+        if (p) {
+          setRules({
+            minLength: p.passwordMinLength ?? 8,
+            upper: p.passwordRequireUppercase ?? false,
+            lower: p.passwordRequireLowercase ?? false,
+            digit: p.passwordRequireDigit ?? false,
+            symbol: p.passwordRequireSymbol ?? false,
+          });
+        }
+      })
+      .catch(() => undefined);
     void getGoogleWorkspaceConfig(session.tenantId, session.token)
       .then((config) => setGoogleWorkspaceConfigured(config !== null))
       .catch(() => setGoogleWorkspaceConfigured(false));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  async function handleUnlock(userId: string, label: string) {
+    setUnlockingUserId(userId);
+    try {
+      await unlockUser(session.tenantId, userId, session.token);
+      toast.success(`${label} can sign in again.`);
+      await refreshUsers();
+    } catch (err) {
+      toast.error(errorMessage(err));
+    } finally {
+      setUnlockingUserId(null);
+    }
+  }
 
   async function handleDelete(userId: string, label: string) {
     const ok = await confirm({
@@ -211,8 +269,13 @@ export function UsersPage() {
   async function handleCreate(e: React.FormEvent) {
     e.preventDefault();
     setError(null);
-    if (!email || !displayName || password.length < 8) {
-      setError("Enter an email, display name, and a password of at least 8 characters.");
+    if (!email || !displayName || !password) {
+      setError("Enter an email, display name and a temporary password.");
+      return;
+    }
+    const violation = firstViolation(password, rules);
+    if (violation) {
+      setError(violation);
       return;
     }
     setPending(true);
@@ -233,6 +296,9 @@ export function UsersPage() {
     } catch (err) {
       if (err instanceof UpstreamError && err.status === 409) {
         setError("A user with that email already exists.");
+      } else if (err instanceof UpstreamError && err.status === 400 && err.message) {
+        // e.g. the tenant's password rules, worded by the server.
+        setError(err.message);
       } else {
         setError(errorMessage(err));
       }
@@ -321,9 +387,10 @@ export function UsersPage() {
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 required
-                minLength={8}
-                placeholder="At least 8 characters"
+                minLength={rules.minLength}
+                placeholder={`At least ${rules.minLength} characters`}
               />
+              <span className="field-hint">{describeRules(rules)}</span>
             </label>
 
             <label className="login-form__field">
@@ -423,9 +490,13 @@ export function UsersPage() {
                       <StatusBadge tone={u.role === "ADMIN" ? "info" : "neutral"}>{u.role}</StatusBadge>
                     </td>
                     <td>
-                      <StatusBadge tone={u.status === "ACTIVE" ? "success" : "warning"}>
-                        {u.status === "ACTIVE" ? "Active" : "Suspended"}
-                      </StatusBadge>
+                      {u.locked ? (
+                        <StatusBadge tone="danger">{u.permanentlyLocked ? "Locked until unlocked" : "Locked"}</StatusBadge>
+                      ) : (
+                        <StatusBadge tone={u.status === "ACTIVE" ? "success" : "warning"}>
+                          {u.status === "ACTIVE" ? "Active" : "Suspended"}
+                        </StatusBadge>
+                      )}
                     </td>
                     <td>
                       <select
@@ -465,6 +536,16 @@ export function UsersPage() {
                     </td>
                     <td>
                       <div className="row-actions">
+                        {u.locked && (
+                          <button
+                            type="button"
+                            className="btn-sm"
+                            disabled={unlockingUserId === u.id}
+                            onClick={() => void handleUnlock(u.id, `${u.displayName}`)}
+                          >
+                            <PendingLabel pending={unlockingUserId === u.id} idle="Unlock" busy="Unlocking…" />
+                          </button>
+                        )}
                         <button
                           type="button"
                           className="btn-secondary btn-sm"

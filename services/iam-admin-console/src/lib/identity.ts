@@ -34,6 +34,15 @@ export async function createUser(
   );
 }
 
+// FR-3.5: clears a lockout (temporary or permanent) so the user can sign in again.
+export async function unlockUser(tenantId: string, userId: string, sessionToken: string): Promise<void> {
+  await http.post<void>(
+    `${config.tenantSvcUrl}/api/v1/admin/users/${userId}/unlock?tenantId=${encodeURIComponent(tenantId)}`,
+    {},
+    { sessionToken },
+  );
+}
+
 export interface DeletedUser {
   id: string;
   googleWorkspaceDeleted: boolean;

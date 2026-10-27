@@ -7,6 +7,7 @@
 // other consumer of a published contract has).
 export type AuthErrorCode =
   | "ACCOUNT_SUSPENDED"
+  | "ACCOUNT_LOCKED"
   | "LOCATION_UNVERIFIED"
   | "POLICY_UNAVAILABLE"
   | "POLICY_DENIED"
@@ -23,6 +24,8 @@ export function denialMessage(errorCode: string | undefined, fallback: string): 
   switch (errorCode as AuthErrorCode | undefined) {
     case "ACCOUNT_SUSPENDED":
       return "This account has been suspended. Contact your administrator.";
+    case "ACCOUNT_LOCKED":
+      return "This account is locked after too many failed sign-in attempts. Try again later, or ask your administrator to unlock it.";
     case "LOCATION_UNVERIFIED":
       return "We couldn't verify your location. Please try again.";
     case "POLICY_UNAVAILABLE":

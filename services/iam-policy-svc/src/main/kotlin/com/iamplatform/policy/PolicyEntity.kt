@@ -78,6 +78,32 @@ class PolicyEntity(
     @Column(name = "totp_reenroll_every_login_hard_cap", nullable = false)
     var totpReenrollEveryLoginHardCap: Boolean = false,
 
+    // Tenant-scope-only sign-in security settings (FR-3.1, FR-3.5); null =
+    // platform default. See PolicyService.securitySettings.
+    @Column(name = "password_min_length")
+    var passwordMinLength: Int? = null,
+
+    @Column(name = "password_require_uppercase")
+    var passwordRequireUppercase: Boolean? = null,
+
+    @Column(name = "password_require_lowercase")
+    var passwordRequireLowercase: Boolean? = null,
+
+    @Column(name = "password_require_digit")
+    var passwordRequireDigit: Boolean? = null,
+
+    @Column(name = "password_require_symbol")
+    var passwordRequireSymbol: Boolean? = null,
+
+    @Column(name = "lockout_threshold")
+    var lockoutThreshold: Int? = null,
+
+    @Column(name = "lockout_duration_minutes")
+    var lockoutDurationMinutes: Int? = null,
+
+    @Column(name = "lockout_permanent")
+    var lockoutPermanent: Boolean? = null,
+
     @Column(name = "updated_at", nullable = false)
     var updatedAt: Instant = Instant.now(),
 ) {

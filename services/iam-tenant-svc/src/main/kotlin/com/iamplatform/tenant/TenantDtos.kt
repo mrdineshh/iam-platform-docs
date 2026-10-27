@@ -22,13 +22,17 @@ data class TenantResponse(
     val subdomain: String,
     val status: TenantStatus,
     val createdAt: Instant,
+    // Included in the public tenant lookups the login pages already make, so a
+    // branded page needs no extra round trip. Null = platform default theme.
+    val branding: BrandingResponse? = null,
 )
 
-fun TenantEntity.toResponse(): TenantResponse =
+fun TenantEntity.toResponse(branding: BrandingResponse? = null): TenantResponse =
     TenantResponse(
         id = id,
         name = name,
         subdomain = subdomain,
         status = status,
         createdAt = createdAt,
+        branding = branding,
     )

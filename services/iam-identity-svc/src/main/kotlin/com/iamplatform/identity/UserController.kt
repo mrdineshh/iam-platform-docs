@@ -76,6 +76,11 @@ class UserController(
     fun deleteUser(@PathVariable id: UUID): ResponseEntity<UserResponse> =
         ResponseEntity.ok(userService.deleteUser(id).toResponse())
 
+    // Admin-initiated (the admin is gated and audited at iam-tenant-svc's proxy).
+    @PostMapping("/{id}/unlock")
+    fun unlockUser(@PathVariable id: UUID): ResponseEntity<UserResponse> =
+        ResponseEntity.ok(userService.unlockUser(id).toResponse())
+
     @PostMapping("/verify-password")
     fun verifyPassword(@Valid @RequestBody request: VerifyPasswordRequest): ResponseEntity<VerifyPasswordResponse> =
         ResponseEntity.ok(userService.verifyPassword(request))

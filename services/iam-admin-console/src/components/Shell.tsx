@@ -2,6 +2,7 @@ import { useEffect, useState, type ReactNode } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import { clearSession, isAdmin, loadSession } from "@/lib/session";
 import { ThemeToggle } from "@/components/ThemeToggle";
+import { loadStoredBranding } from "@/lib/branding";
 
 const SIDEBAR_COLLAPSED_KEY = "iam-admin-console:sidebar-collapsed";
 const ADMIN_SECTION_OPEN_KEY = "iam-admin-console:admin-nav-open";
@@ -44,6 +45,7 @@ export function Shell({ children }: { children: ReactNode }) {
     navigate("/login");
   }
 
+  const branding = loadStoredBranding();
   const identityLabel = session?.email ?? session?.tenantName ?? "Signed in";
   const adminIsCurrentSection =
     location.pathname === "/users" ||
@@ -51,7 +53,8 @@ export function Shell({ children }: { children: ReactNode }) {
     location.pathname === "/switch-user" ||
     location.pathname.startsWith("/clients") ||
     location.pathname === "/policy" ||
-    location.pathname === "/google-workspace";
+    location.pathname === "/google-workspace" ||
+    location.pathname === "/branding";
 
   if (collapsed) {
     return (
@@ -75,8 +78,14 @@ export function Shell({ children }: { children: ReactNode }) {
       <aside className="shell__sidebar">
         <div className="shell__sidebar-top">
           <div className="shell__brand">
-            <span className="shell__brand-mark">IAM</span>
-            <span className="shell__brand-name">Platform</span>
+            {branding?.logoUrl ? (
+              <img src={branding.logoUrl} alt={session?.tenantName ?? "Logo"} className="shell__brand-logo" />
+            ) : (
+              <>
+                <span className="shell__brand-mark">{session?.tenantName ? session.tenantName.charAt(0).toUpperCase() : "IAM"}</span>
+                <span className="shell__brand-name">{session?.tenantName ?? "Platform"}</span>
+              </>
+            )}
           </div>
           <button
             type="button"
@@ -119,6 +128,7 @@ export function Shell({ children }: { children: ReactNode }) {
                     label="Google Workspace"
                     active={location.pathname === "/google-workspace"}
                   />
+                  <NavLink to="/branding" label="Branding" active={location.pathname === "/branding"} />
                 </div>
               )}
             </div>

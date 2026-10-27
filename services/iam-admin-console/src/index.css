@@ -179,7 +179,7 @@ a {
   height: 30px;
   border-radius: 8px;
   background: var(--iam-primary);
-  color: white;
+  color: var(--iam-on-primary, #fff);
   font-size: 0.75rem;
   font-weight: 800;
   letter-spacing: 0.02em;
@@ -377,7 +377,7 @@ a {
   height: 32px;
   border-radius: 8px;
   background: var(--iam-primary);
-  color: white;
+  color: var(--iam-on-primary, #fff);
   font-size: 0.8rem;
   font-weight: 800;
 }
@@ -461,7 +461,7 @@ button {
   font-weight: 600;
   cursor: pointer;
   background: var(--iam-primary);
-  color: white;
+  color: var(--iam-on-primary, #fff);
   font-family: inherit;
   transition: background-color 0.12s, opacity 0.12s;
 }

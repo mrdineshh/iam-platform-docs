@@ -6,6 +6,7 @@ import { SamlAutoPostForm } from "./SamlAutoPostForm";
 import { config } from "@/lib/config";
 import { completeSamlAuthorization } from "@/lib/samlClient";
 import { findTenantBySubdomain, resolveTenantSubdomain } from "@/lib/tenant";
+import { brandStyle, safeLogoUrl } from "@/lib/branding";
 
 interface SearchParams {
   saml_request_id?: string;
@@ -69,8 +70,14 @@ export default async function SamlLoginPage({
   }
 
   return (
-    <main className="login-page">
-      <SamlLoginForm samlRequestId={samlRequestId} tenantOverride={tenantOverride} tenantName={tenant.name} />
+    <main className="login-page" style={brandStyle(tenant.branding)}>
+      <SamlLoginForm
+        samlRequestId={samlRequestId}
+        tenantOverride={tenantOverride}
+        tenantName={tenant.name}
+        logoUrl={safeLogoUrl(tenant.branding)}
+        headline={tenant.branding?.headline}
+      />
     </main>
   );
 }

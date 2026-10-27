@@ -50,9 +50,21 @@ class UserEntity(
     @Column(name = "group_id")
     var groupId: UUID? = null,
 
+    // Account lockout (FR-3.5). Reset on a successful sign-in or an admin unlock.
+    @Column(name = "failed_login_attempts", nullable = false)
+    var failedLoginAttempts: Int = 0,
+
+    @Column(name = "locked_until")
+    var lockedUntil: Instant? = null,
+
+    @Column(name = "permanently_locked", nullable = false)
+    var permanentlyLocked: Boolean = false,
+
     @Column(name = "created_at", nullable = false)
     var createdAt: Instant = Instant.now(),
-)
+) {
+    fun isLockedAt(now: Instant): Boolean = permanentlyLocked || (lockedUntil?.isAfter(now) == true)
+}
 
 @Entity
 @Table(name = "groups")

@@ -20,6 +20,15 @@ export interface Policy {
   mfaRequiredHardCap: boolean;
   totpReenrollEveryLogin: boolean | null;
   totpReenrollEveryLoginHardCap: boolean;
+  // Tenant scope only (FR-3.1 password rules, FR-3.5 lockout). null = platform default.
+  passwordMinLength: number | null;
+  passwordRequireUppercase: boolean | null;
+  passwordRequireLowercase: boolean | null;
+  passwordRequireDigit: boolean | null;
+  passwordRequireSymbol: boolean | null;
+  lockoutThreshold: number | null;
+  lockoutDurationMinutes: number | null;
+  lockoutPermanent: boolean | null;
   updatedAt: string;
 }
 
@@ -39,7 +48,19 @@ export interface PutPolicyRequest {
   mfaRequiredHardCap?: boolean;
   totpReenrollEveryLogin?: boolean | null;
   totpReenrollEveryLoginHardCap?: boolean;
+  passwordMinLength?: number | null;
+  passwordRequireUppercase?: boolean | null;
+  passwordRequireLowercase?: boolean | null;
+  passwordRequireDigit?: boolean | null;
+  passwordRequireSymbol?: boolean | null;
+  lockoutThreshold?: number | null;
+  lockoutDurationMinutes?: number | null;
+  lockoutPermanent?: boolean | null;
 }
+
+/** Platform defaults, mirroring iam-policy-svc's SecuritySettingsResponse. */
+export const DEFAULT_MIN_PASSWORD_LENGTH = 8;
+export const DEFAULT_LOCKOUT_MINUTES = 15;
 
 /** Returns null if nothing is stored yet at this exact scope (404) -- a normal, expected state, not an error. */
 export async function getPolicy(

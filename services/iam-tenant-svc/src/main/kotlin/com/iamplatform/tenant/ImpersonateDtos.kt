@@ -28,6 +28,9 @@ data class AdminUserListEntry(
     val status: RemoteUserStatus,
     val role: RemoteUserRole,
     val groupId: UUID? = null,
+    val locked: Boolean = false,
+    val lockedUntil: java.time.Instant? = null,
+    val permanentlyLocked: Boolean = false,
 )
 
 class CannotImpersonateException(message: String) : RuntimeException(message)

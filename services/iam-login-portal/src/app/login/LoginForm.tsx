@@ -1,5 +1,6 @@
 "use client";
 
+import { BrandHeader } from "../BrandHeader";
 import { useActionState, useEffect, useRef, useState } from "react";
 import { useFormStatus } from "react-dom";
 import QRCode from "qrcode";
@@ -13,6 +14,8 @@ interface Props {
   state: string;
   tenantOverride: string | null;
   tenantName: string;
+  logoUrl?: string | null;
+  headline?: string | null;
 }
 
 type Step = "username" | "password" | "enroll" | "code" | "submitting-no-code";
@@ -28,7 +31,7 @@ type Step = "username" | "password" | "enroll" | "code" | "submitting-no-code";
  * never triggers a push send or issues a session itself -- only the final
  * submit (loginAction, same as before) does that.
  */
-export function LoginForm({ clientId, redirectUri, scope, state, tenantOverride, tenantName }: Props) {
+export function LoginForm({ clientId, redirectUri, scope, state, tenantOverride, tenantName, logoUrl, headline }: Props) {
   const [formState, formAction] = useActionState(loginAction, initialLoginFormState);
   const [intent, setIntent] = useState<"totp" | "push">("totp");
   const [step, setStep] = useState<Step>("username");
@@ -79,12 +82,9 @@ export function LoginForm({ clientId, redirectUri, scope, state, tenantOverride,
 
   return (
     <>
-      <div className="login-page__brand">
-        <span className="login-page__brand-mark">IAM</span>
-        <span className="login-page__brand-name">Platform</span>
-      </div>
+      <BrandHeader tenantName={tenantName} logoUrl={logoUrl} />
       <form ref={formRef} action={formAction} className="login-form">
-        <h1>Sign in to {tenantName}</h1>
+        <h1>{headline || `Sign in to ${tenantName}`}</h1>
         <ol className="login-steps" aria-hidden="true">
           <li className={stepIndex >= 0 ? "login-steps__item login-steps__item--done" : "login-steps__item"} />
           <li className={stepIndex >= 1 ? "login-steps__item login-steps__item--done" : "login-steps__item"} />

@@ -5,6 +5,7 @@ import { LoginForm } from "./LoginForm";
 import { config } from "@/lib/config";
 import { completeAuthorization } from "@/lib/oidcClient";
 import { findTenantBySubdomain, resolveTenantSubdomain } from "@/lib/tenant";
+import { brandStyle, safeLogoUrl } from "@/lib/branding";
 
 interface SearchParams {
   client_id?: string;
@@ -85,7 +86,7 @@ export default async function LoginPage({
   }
 
   return (
-    <main className="login-page">
+    <main className="login-page" style={brandStyle(tenant.branding)}>
       <LoginForm
         clientId={clientId}
         redirectUri={redirectUri}
@@ -93,6 +94,8 @@ export default async function LoginPage({
         state={state}
         tenantOverride={tenantOverride}
         tenantName={tenant.name}
+        logoUrl={safeLogoUrl(tenant.branding)}
+        headline={tenant.branding?.headline}
       />
     </main>
   );

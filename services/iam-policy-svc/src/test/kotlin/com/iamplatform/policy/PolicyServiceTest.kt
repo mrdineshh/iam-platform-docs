@@ -126,4 +126,77 @@ class PolicyServiceTest {
         assertEquals(true, result.allowed)
         assertNull(result.policyScopeApplied)
     }
+
+    @Test
+    fun `securitySettings returns platform defaults when no tenant policy is stored`() {
+        whenever(repository.findByTenantIdAndScopeAndScopeId(tenantId, PolicyScope.TENANT, tenantId)).thenReturn(null)
+
+        val settings = service.securitySettings(tenantId)
+
+        assertEquals(8, settings.passwordMinLength)
+        assertEquals(false, settings.passwordRequireUppercase)
+        assertEquals(0, settings.lockoutThreshold)
+        assertEquals(15, settings.lockoutDurationMinutes)
+        assertEquals(false, settings.lockoutPermanent)
+    }
+
+    @Test
+    fun `securitySettings returns stored tenant values and defaults for anything unset`() {
+        val stored = PolicyEntity(
+            id = UUID.randomUUID(), tenantId = tenantId, scope = PolicyScope.TENANT, scopeId = tenantId,
+            passwordMinLength = 14, passwordRequireDigit = true, lockoutThreshold = 5, lockoutPermanent = true,
+        )
+        whenever(repository.findByTenantIdAndScopeAndScopeId(tenantId, PolicyScope.TENANT, tenantId)).thenReturn(stored)
+
+        val settings = service.securitySettings(tenantId)
+
+        assertEquals(14, settings.passwordMinLength)
+        assertEquals(true, settings.passwordRequireDigit)
+        assertEquals(false, settings.passwordRequireSymbol)
+        assertEquals(5, settings.lockoutThreshold)
+        assertEquals(15, settings.lockoutDurationMinutes)
+        assertEquals(true, settings.lockoutPermanent)
+    }
+
+    @Test
+    fun `putPolicy stores the password and lockout settings on the tenant policy`() {
+        whenever(repository.findByTenantIdAndScopeAndScopeId(eq(tenantId), eq(PolicyScope.TENANT), eq(tenantId))).thenReturn(null)
+        whenever(repository.save(any())).thenAnswer { it.arguments[0] }
+
+        val saved = service.putPolicy(
+            PutPolicyRequest(
+                tenantId = tenantId, scope = PolicyScope.TENANT,
+                passwordMinLength = 12, passwordRequireUppercase = true, lockoutThreshold = 5, lockoutDurationMinutes = 30,
+            ),
+        )
+
+        assertEquals(12, saved.passwordMinLength)
+        assertEquals(true, saved.passwordRequireUppercase)
+        assertEquals(5, saved.lockoutThreshold)
+        assertEquals(30, saved.lockoutDurationMinutes)
+    }
+
+    @Test
+    fun `password and lockout settings are rejected on OU and USER scope`() {
+        assertThrows<InvalidPolicyRequestException> {
+            service.putPolicy(PutPolicyRequest(tenantId = tenantId, scope = PolicyScope.OU, scopeId = UUID.randomUUID(), passwordMinLength = 12))
+        }
+        assertThrows<InvalidPolicyRequestException> {
+            service.putPolicy(PutPolicyRequest(tenantId = tenantId, scope = PolicyScope.USER, scopeId = UUID.randomUUID(), lockoutThreshold = 3))
+        }
+    }
+
+    @Test
+    fun `out-of-range password and lockout values are rejected`() {
+        for (bad in listOf(
+            PutPolicyRequest(tenantId = tenantId, scope = PolicyScope.TENANT, passwordMinLength = 4),
+            PutPolicyRequest(tenantId = tenantId, scope = PolicyScope.TENANT, passwordMinLength = 500),
+            PutPolicyRequest(tenantId = tenantId, scope = PolicyScope.TENANT, lockoutThreshold = -1),
+            PutPolicyRequest(tenantId = tenantId, scope = PolicyScope.TENANT, lockoutThreshold = 101),
+            PutPolicyRequest(tenantId = tenantId, scope = PolicyScope.TENANT, lockoutDurationMinutes = 0),
+            PutPolicyRequest(tenantId = tenantId, scope = PolicyScope.TENANT, lockoutDurationMinutes = 20000),
+        )) {
+            assertThrows<InvalidPolicyRequestException> { service.putPolicy(bad) }
+        }
+    }
 }

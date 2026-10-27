@@ -45,6 +45,14 @@ class PolicyController(
         return ResponseEntity.ok(policyService.getPolicy(tenantId, scope, scopeId).toResponse())
     }
 
+    // Service-to-service (iam-identity-svc enforces these on password changes
+    // and failed logins). Not admin-gated, same as /evaluate below: this
+    // service is plain HTTP and called by backends that hold no admin session.
+    // Returns settings only -- nothing secret.
+    @GetMapping("/security-settings")
+    fun securitySettings(@RequestParam tenantId: UUID): ResponseEntity<SecuritySettingsResponse> =
+        ResponseEntity.ok(policyService.securitySettings(tenantId))
+
     // Not audited per-call (see docs/DECISIONS.md, Service 5 entry) -- this
     // sits on the hot path of every login/enforcement check, and the calling
     // service (iam-auth-svc, iam-enforcement-svc) is what records the

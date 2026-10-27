@@ -23,7 +23,16 @@ data class RemoteUserListEntry(
     val status: RemoteUserStatus,
     val role: RemoteUserRole,
     val groupId: UUID? = null,
+    val locked: Boolean = false,
+    val lockedUntil: java.time.Instant? = null,
+    val permanentlyLocked: Boolean = false,
 )
+
+/** The body iam-identity-svc returns on a 4xx -- only what the console needs to show. */
+data class UpstreamErrorBody(val message: String? = null, val errorCode: String? = null)
+
+/** A 400 from a downstream service whose message is meant for the admin (e.g. a weak password). */
+class UpstreamBadRequestException(message: String, val errorCode: String?) : RuntimeException(message)
 
 data class CreateRemoteUserRequest(
     val tenantId: UUID,
@@ -66,7 +75,20 @@ class IdentityClient(
     // proxies straight through to iam-identity-svc's own POST /api/v1/users,
     // which is mTLS-only inbound (no browser SPA can call it directly).
     fun createUser(request: CreateRemoteUserRequest): CreatedRemoteUser =
-        client.post("/api/v1/users", request, CreatedRemoteUser::class.java)
+        try {
+            client.post("/api/v1/users", request, CreatedRemoteUser::class.java)
+        } catch (ex: HttpClientErrorException.BadRequest) {
+            // e.g. WEAK_PASSWORD: the identity service's message names exactly
+            // which of the tenant's rules the password broke, so pass it through.
+            val body = runCatching { ex.getResponseBodyAs(UpstreamErrorBody::class.java) }.getOrNull()
+            throw UpstreamBadRequestException(body?.message ?: "The request was rejected.", body?.errorCode)
+        }
+
+    // Admin-initiated unlock after a lockout (FR-3.5); the admin is gated and
+    // audited by AdminUserController, not here.
+    fun unlockUser(userId: UUID): Unit {
+        client.post("/api/v1/users/$userId/unlock", emptyMap<String, String>(), RemoteUserListEntry::class.java)
+    }
 
     // Added for the admin-console "Switch to user" picker. Array class, not
     // List -- Jackson can deserialize a JSON array directly into a Class

@@ -20,6 +20,12 @@ class GlobalExceptionHandler {
             ErrorResponse.of(HttpStatus.NOT_FOUND.value(), "Not Found", ex.message ?: "", request.requestURI),
         )
 
+    @ExceptionHandler(WeakPasswordException::class)
+    fun handleWeakPassword(ex: WeakPasswordException, request: HttpServletRequest): ResponseEntity<ErrorResponse> =
+        ResponseEntity.status(HttpStatus.BAD_REQUEST).body(
+            ErrorResponse.of(HttpStatus.BAD_REQUEST.value(), "Bad Request", ex.message ?: "", request.requestURI, "WEAK_PASSWORD"),
+        )
+
     @ExceptionHandler(EmailAlreadyExistsException::class)
     fun handleConflict(ex: EmailAlreadyExistsException, request: HttpServletRequest): ResponseEntity<ErrorResponse> =
         ResponseEntity.status(HttpStatus.CONFLICT).body(

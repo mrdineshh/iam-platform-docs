@@ -32,10 +32,16 @@ class GlobalExceptionHandler {
             ErrorResponse.of(HttpStatus.CONFLICT.value(), "Conflict", ex.message ?: "", request.requestURI),
         )
 
-    @ExceptionHandler(InvalidServiceAccountJsonException::class)
-    fun handleInvalidServiceAccountJson(ex: InvalidServiceAccountJsonException, request: HttpServletRequest): ResponseEntity<ErrorResponse> =
+    @ExceptionHandler(InvalidServiceAccountJsonException::class, InvalidBrandingException::class)
+    fun handleInvalidServiceAccountJson(ex: RuntimeException, request: HttpServletRequest): ResponseEntity<ErrorResponse> =
         ResponseEntity.status(HttpStatus.BAD_REQUEST).body(
             ErrorResponse.of(HttpStatus.BAD_REQUEST.value(), "Bad Request", ex.message ?: "", request.requestURI),
+        )
+
+    @ExceptionHandler(UpstreamBadRequestException::class)
+    fun handleUpstreamBadRequest(ex: UpstreamBadRequestException, request: HttpServletRequest): ResponseEntity<ErrorResponse> =
+        ResponseEntity.status(HttpStatus.BAD_REQUEST).body(
+            ErrorResponse.of(HttpStatus.BAD_REQUEST.value(), "Bad Request", ex.message ?: "", request.requestURI, ex.errorCode),
         )
 
     @ExceptionHandler(MethodArgumentNotValidException::class)
