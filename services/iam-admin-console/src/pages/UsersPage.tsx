@@ -7,6 +7,7 @@ import { listGroups, assignUserToGroup, type Group } from "@/lib/groups";
 import { getGoogleWorkspaceConfig } from "@/lib/googleWorkspace";
 import { loadSession } from "@/lib/session";
 import { UpstreamError } from "@/lib/http";
+import { Alert, Avatar, EmptyState, PageHeader, PendingLabel, SkeletonRows, StatusBadge } from "@/components/ui";
 
 // "" / "true" / "false" rather than boolean | null directly -- an HTML
 // <select> only ever carries a string value, and this third state
@@ -34,6 +35,7 @@ export function UsersPage() {
   const [googleWorkspaceConfigured, setGoogleWorkspaceConfigured] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
+  const [showCreate, setShowCreate] = useState(false);
   const [justCreated, setJustCreated] = useState<CreatedUser | null>(null);
   const [qrDataUrl, setQrDataUrl] = useState<string | null>(null);
 
@@ -203,6 +205,7 @@ export function UsersPage() {
       setPassword("");
       setRole("USER");
       setCreateInGoogleWorkspace(true);
+      setShowCreate(false);
       await refreshUsers();
     } catch (err) {
       if (err instanceof UpstreamError && err.status === 409) {
@@ -217,179 +220,224 @@ export function UsersPage() {
 
   return (
     <main className="page">
-      <h1>Users</h1>
+      <PageHeader
+        title="Users"
+        subtitle="Create accounts and manage each person's group, two-factor requirement, and IP access in one place."
+        actions={
+          <button type="button" onClick={() => setShowCreate((v) => !v)}>
+            {showCreate ? "Cancel" : "+ Add user"}
+          </button>
+        }
+      />
 
-      {error && (
-        <p role="alert" className="login-form__error">
-          {error}
-        </p>
-      )}
+      {error && <Alert kind="error">{error}</Alert>}
 
       {justCreated && qrDataUrl && (
-        <div className="callout">
-          <strong>{justCreated.displayName}</strong> ({justCreated.email}) created as {justCreated.role}.
-          <p>
-            Share the password with them directly (shown once, not stored anywhere for retrieval). They also need
-            this authenticator QR code to sign in at all — every login requires a second factor, so scan it now,
-            before this screen is closed:
+        <div className="card card--padded" style={{ marginBottom: 24 }}>
+          <h3 className="card__title">
+            {justCreated.displayName} <StatusBadge tone="success">Created</StatusBadge>
+          </h3>
+          <p className="card__desc">
+            {justCreated.email} was created as {justCreated.role}. Share the password with them directly (shown once,
+            not stored for retrieval). They also need this authenticator QR code to sign in, since every login
+            requires a second factor. Scan it now, before this screen is closed.
           </p>
           <div className="qr-wrap">
             <img src={qrDataUrl} alt="TOTP QR code" width={180} height={180} />
           </div>
-          <p>
+          <p className="hint">
             Can't scan right now? Manual key (time-based): <code>{justCreated.totpSecret}</code>
           </p>
-          <p>They can enroll additional/replacement devices themselves later on the "My Security" page.</p>
+          <p className="hint">They can enroll additional or replacement devices later on the "My Security" page.</p>
           {justCreated.googleWorkspaceProvisioned && (
-            <p className="hint">Also created in Google Workspace — no separate Google password needed to sign in.</p>
+            <Alert kind="success">Also created in Google Workspace. No separate Google password is needed to sign in.</Alert>
           )}
           {justCreated.googleWorkspaceError && (
-            <p role="alert" className="login-form__error">
-              Google Workspace account creation failed: {justCreated.googleWorkspaceError}
-            </p>
+            <Alert kind="error">Google Workspace account creation failed: {justCreated.googleWorkspaceError}</Alert>
           )}
+          <div className="form-actions">
+            <button type="button" className="btn-secondary" onClick={() => setJustCreated(null)}>
+              Done
+            </button>
+          </div>
         </div>
       )}
 
-      <form className="login-form" onSubmit={(e) => void handleCreate(e)}>
-        <label className="login-form__field">
-          Email
-          <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} required />
-        </label>
+      {showCreate && (
+        <form className="card card--padded" style={{ marginBottom: 24 }} onSubmit={(e) => void handleCreate(e)}>
+          <h3 className="card__title">New user</h3>
+          <p className="card__desc">They'll sign in with these credentials plus an authenticator app.</p>
 
-        <label className="login-form__field">
-          Display name
-          <input type="text" value={displayName} onChange={(e) => setDisplayName(e.target.value)} required />
-        </label>
+          <div className="form-grid">
+            <label className="login-form__field">
+              Email
+              <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} required />
+            </label>
 
-        <label className="login-form__field">
-          Temporary password
-          <input
-            type="text"
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            required
-            minLength={8}
-            placeholder="At least 8 characters"
-          />
-        </label>
+            <label className="login-form__field">
+              Display name
+              <input type="text" value={displayName} onChange={(e) => setDisplayName(e.target.value)} required />
+            </label>
 
-        <label className="login-form__field">
-          Role
-          <select value={role} onChange={(e) => setRole(e.target.value as "ADMIN" | "USER")}>
-            <option value="USER">User</option>
-            <option value="ADMIN">Admin</option>
-          </select>
-        </label>
+            <label className="login-form__field">
+              Temporary password
+              <input
+                type="text"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                required
+                minLength={8}
+                placeholder="At least 8 characters"
+              />
+            </label>
 
-        {googleWorkspaceConfigured && (
-          <label className="checkbox-field">
-            <input
-              type="checkbox"
-              checked={createInGoogleWorkspace}
-              onChange={(e) => setCreateInGoogleWorkspace(e.target.checked)}
-            />
-            Also create this user in Google Workspace
-          </label>
-        )}
+            <label className="login-form__field">
+              Role
+              <select value={role} onChange={(e) => setRole(e.target.value as "ADMIN" | "USER")}>
+                <option value="USER">User</option>
+                <option value="ADMIN">Admin</option>
+              </select>
+            </label>
+          </div>
 
-        <div className="login-form__buttons">
-          <button type="submit" disabled={pending}>
-            {pending ? "Creating…" : "Create user"}
-          </button>
-        </div>
-      </form>
+          {googleWorkspaceConfigured && (
+            <label className="checkbox-field" style={{ marginTop: 16 }}>
+              <input
+                type="checkbox"
+                checked={createInGoogleWorkspace}
+                onChange={(e) => setCreateInGoogleWorkspace(e.target.checked)}
+              />
+              Also create this user in Google Workspace
+            </label>
+          )}
 
-      <h2>Manage users</h2>
-      <p className="hint">
-        Set each user's group (controls which apps they can launch — see Applications and Groups), their own 2FA
-        override, and IP access, all right here. "Allow sign-in from any IP" exempts a user from every IP
-        restriction (tenant or group policy) — use it to unblock someone locked out, or for an account that needs
-        to sign in from anywhere. Neither override applies if the tenant policy marks that setting as a hard cap,
-        which is designed to allow no exceptions at all.
+          <div className="form-actions">
+            <button type="button" className="btn-secondary" onClick={() => setShowCreate(false)} disabled={pending}>
+              Cancel
+            </button>
+            <button type="submit" disabled={pending}>
+              <PendingLabel pending={pending} idle="Create user" busy="Creating…" />
+            </button>
+          </div>
+        </form>
+      )}
+
+      <div className="section-title">
+        <h2>All users {!loadingUsers && <span className="hint">({users.length})</span>}</h2>
+      </div>
+      <p className="hint" style={{ marginTop: 0 }}>
+        "Allow from any IP" exempts a user from every IP restriction (tenant or group policy), useful to unblock
+        someone who is locked out. It has no effect if the tenant policy marks that setting as a hard cap.
       </p>
+
       {loadingUsers ? (
-        <p>Loading…</p>
+        <SkeletonRows rows={5} />
       ) : users.length === 0 ? (
-        <p>No users yet.</p>
+        <EmptyState
+          title="No users yet"
+          description="Add your first user to get started."
+          action={
+            <button type="button" onClick={() => setShowCreate(true)}>
+              + Add user
+            </button>
+          }
+        />
       ) : (
-        <table>
-          <thead>
-            <tr>
-              <th>Name</th>
-              <th>Email</th>
-              <th>Role</th>
-              <th>Group</th>
-              <th>2FA</th>
-              <th>Allow sign-in from any IP</th>
-              <th></th>
-            </tr>
-          </thead>
-          <tbody>
-            {users.map((u) => {
-              const mfaValue: TriState =
-                userPolicies.get(u.id)?.mfaRequired === null || userPolicies.get(u.id)?.mfaRequired === undefined
-                  ? ""
-                  : userPolicies.get(u.id)!.mfaRequired
-                    ? "true"
-                    : "false";
-              const anyIpAllowed = userPolicies.get(u.id)?.allowedCidrs?.includes(ALLOW_ANY_IP) ?? false;
-              return (
-                <tr key={u.id}>
-                  <td>{u.displayName}</td>
-                  <td>{u.email}</td>
-                  <td>{u.role}</td>
-                  <td>
-                    <select
-                      value={u.groupId ?? ""}
-                      disabled={savingGroupUserId === u.id}
-                      onChange={(e) => void handleGroupChange(u.id, e.target.value)}
-                    >
-                      <option value="">No group</option>
-                      {groups.map((g) => (
-                        <option key={g.id} value={g.id}>
-                          {g.name}
-                        </option>
-                      ))}
-                    </select>
-                  </td>
-                  <td>
-                    <select
-                      value={mfaValue}
-                      disabled={savingMfaUserId === u.id}
-                      onChange={(e) => void handleMfaChange(u.id, e.target.value as TriState)}
-                    >
-                      <option value="">Inherit from group/tenant</option>
-                      <option value="true">Required</option>
-                      <option value="false">Not required</option>
-                    </select>
-                  </td>
-                  <td>
-                    <label className="checkbox-field">
-                      <input
-                        type="checkbox"
-                        checked={anyIpAllowed}
-                        disabled={togglingUserId === u.id}
-                        onChange={(e) => void toggleAllowAnyIp(u.id, e.target.checked)}
-                      />
-                      {anyIpAllowed ? "Allowed from anywhere" : "Restricted"}
-                    </label>
-                  </td>
-                  <td>
-                    <button
-                      type="button"
-                      className="login-form__button--secondary"
-                      disabled={deletingUserId === u.id}
-                      onClick={() => void handleDelete(u.id, `${u.displayName} (${u.email})`)}
-                    >
-                      {deletingUserId === u.id ? "Deleting…" : "Delete"}
-                    </button>
-                  </td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
+        <div className="card table-card">
+          <table>
+            <thead>
+              <tr>
+                <th>User</th>
+                <th>Role</th>
+                <th>Status</th>
+                <th>Group</th>
+                <th>2FA</th>
+                <th>Any IP</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody>
+              {users.map((u) => {
+                const mfaValue: TriState =
+                  userPolicies.get(u.id)?.mfaRequired === null || userPolicies.get(u.id)?.mfaRequired === undefined
+                    ? ""
+                    : userPolicies.get(u.id)!.mfaRequired
+                      ? "true"
+                      : "false";
+                const anyIpAllowed = userPolicies.get(u.id)?.allowedCidrs?.includes(ALLOW_ANY_IP) ?? false;
+                return (
+                  <tr key={u.id}>
+                    <td>
+                      <div className="cell-user">
+                        <Avatar name={u.displayName} />
+                        <div>
+                          <div className="cell-user__name">{u.displayName}</div>
+                          <div className="cell-user__sub">{u.email}</div>
+                        </div>
+                      </div>
+                    </td>
+                    <td>
+                      <StatusBadge tone={u.role === "ADMIN" ? "info" : "neutral"}>{u.role}</StatusBadge>
+                    </td>
+                    <td>
+                      <StatusBadge tone={u.status === "ACTIVE" ? "success" : "warning"}>
+                        {u.status === "ACTIVE" ? "Active" : "Suspended"}
+                      </StatusBadge>
+                    </td>
+                    <td>
+                      <select
+                        value={u.groupId ?? ""}
+                        disabled={savingGroupUserId === u.id}
+                        onChange={(e) => void handleGroupChange(u.id, e.target.value)}
+                      >
+                        <option value="">No group</option>
+                        {groups.map((g) => (
+                          <option key={g.id} value={g.id}>
+                            {g.name}
+                          </option>
+                        ))}
+                      </select>
+                    </td>
+                    <td>
+                      <select
+                        value={mfaValue}
+                        disabled={savingMfaUserId === u.id}
+                        onChange={(e) => void handleMfaChange(u.id, e.target.value as TriState)}
+                      >
+                        <option value="">Inherit</option>
+                        <option value="true">Required</option>
+                        <option value="false">Not required</option>
+                      </select>
+                    </td>
+                    <td>
+                      <label className="checkbox-field">
+                        <input
+                          type="checkbox"
+                          checked={anyIpAllowed}
+                          disabled={togglingUserId === u.id}
+                          onChange={(e) => void toggleAllowAnyIp(u.id, e.target.checked)}
+                        />
+                        {anyIpAllowed ? "Allowed" : "Restricted"}
+                      </label>
+                    </td>
+                    <td>
+                      <div className="row-actions">
+                        <button
+                          type="button"
+                          className="btn-danger btn-sm"
+                          disabled={deletingUserId === u.id}
+                          onClick={() => void handleDelete(u.id, `${u.displayName} (${u.email})`)}
+                        >
+                          <PendingLabel pending={deletingUserId === u.id} idle="Delete" busy="Deleting…" />
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
       )}
     </main>
   );

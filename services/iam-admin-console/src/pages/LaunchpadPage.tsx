@@ -3,6 +3,7 @@ import { listMyApps, type MyAppTile } from "@/lib/myApps";
 import { loadSession } from "@/lib/session";
 import { UpstreamError } from "@/lib/http";
 import { config } from "@/lib/config";
+import { Alert, EmptyState, PageHeader, SkeletonTiles } from "@/components/ui";
 
 /**
  * "Click the app icon, you're in" -- lists every app this user is allowed
@@ -43,23 +44,19 @@ export function LaunchpadPage() {
 
   return (
     <main className="page">
-      <h1>My Apps</h1>
+      <PageHeader title="My Apps" subtitle="Open any app you have access to. You're already signed in." />
 
-      {error && (
-        <p role="alert" className="login-form__error">
-          {error}
-        </p>
-      )}
+      {error && <Alert kind="error">{error}</Alert>}
 
       {loading ? (
-        <p>Loading…</p>
+        <SkeletonTiles count={4} />
       ) : apps.length === 0 ? (
-        <p>
-          No apps are set up to launch from here yet. An admin can add a "Launch URL" when connecting an app on the
-          Applications page.
-        </p>
+        <EmptyState
+          title="No apps available yet"
+          description="Apps appear here once an administrator adds your group to them. An admin can also set a Launch URL when connecting an app."
+        />
       ) : (
-        <div className="app-tiles">
+        <div className="app-tiles" style={{ marginTop: 0 }}>
           {apps.map((app) => (
             <form
               key={app.id}

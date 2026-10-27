@@ -6,6 +6,7 @@ import { getAppGroups, setAppGroups, type AppKind } from "@/lib/appGroups";
 import { listGroups, type Group } from "@/lib/groups";
 import { loadSession } from "@/lib/session";
 import { UpstreamError } from "@/lib/http";
+import { Alert, EmptyState, PageHeader, PendingLabel, SkeletonRows, StatusBadge } from "@/components/ui";
 
 // A few enterprise/dev tools that plausibly support a custom OIDC login
 // (unlike consumer services like real Gmail, which don't let a third party
@@ -87,14 +88,17 @@ export function ClientsPage() {
 
   return (
     <main className="page">
-      <h1>Applications</h1>
-      <p className="hint">Connect a third-party app via OIDC or SAML so your users can reach it with the login they already have.</p>
+      <PageHeader
+        title="Applications"
+        subtitle="Connect a third-party app via OIDC or SAML so your users can reach it with the login they already have."
+        actions={
+          <button type="button" onClick={() => navigate("/clients/setup")}>
+            + Add custom app
+          </button>
+        }
+      />
 
-      {error && (
-        <p role="alert" className="login-form__error">
-          {error}
-        </p>
-      )}
+      {error && <Alert kind="error">{error}</Alert>}
 
       <div className="catalog-grid">
         {CATALOG.map((app) => (
@@ -122,12 +126,18 @@ export function ClientsPage() {
         </div>
       </div>
 
-      <h2>Connected apps</h2>
+      <div className="section-title">
+        <h2>Connected apps {!loading && <span className="hint">({apps.length})</span>}</h2>
+      </div>
       {loading ? (
-        <p>Loading…</p>
+        <SkeletonRows rows={3} />
       ) : apps.length === 0 ? (
-        <p>No apps connected yet for this tenant.</p>
+        <EmptyState
+          title="No apps connected yet"
+          description="Pick an app from the catalog above, or add a custom one. Connected apps show up here and in every group's app list automatically."
+        />
       ) : (
+        <div className="card table-card">
         <table>
           <thead>
             <tr>
@@ -145,7 +155,7 @@ export function ClientsPage() {
                   <tr>
                     <td>{app.name}</td>
                     <td>
-                      <span className="badge">{app.type}</span>
+                      <StatusBadge tone={app.type === "SAML" ? "info" : "neutral"}>{app.type}</StatusBadge>
                     </td>
                     <td>{new Date(app.createdAt).toLocaleString()}</td>
                     <td>
@@ -201,6 +211,7 @@ export function ClientsPage() {
             })}
           </tbody>
         </table>
+        </div>
       )}
     </main>
   );
@@ -305,8 +316,8 @@ function AppGroupAssignment({ kind, appId, groups }: { kind: AppKind; appId: str
               </label>
             ))}
           </div>
-          <button type="button" onClick={() => void save()} disabled={saving}>
-            {saving ? "Saving…" : saved ? "Saved" : "Save group access"}
+          <button type="button" className="btn-sm" onClick={() => void save()} disabled={saving}>
+            {saved ? "Saved" : <PendingLabel pending={saving} idle="Save group access" busy="Saving…" />}
           </button>
         </>
       )}

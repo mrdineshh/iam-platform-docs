@@ -7,6 +7,7 @@ import { listClients } from "@/lib/oidcClients";
 import { listSamlSps } from "@/lib/samlSps";
 import { loadSession } from "@/lib/session";
 import { UpstreamError } from "@/lib/http";
+import { Alert, Avatar, EmptyState, PageHeader, PendingLabel, SkeletonRows, StatusBadge } from "@/components/ui";
 
 // Same "connected app" shape ClientsPage builds, just the minimum this page
 // needs: id/name/kind to drive the per-group app checkboxes below.
@@ -99,27 +100,25 @@ export function GroupsPage() {
 
   return (
     <main className="page">
-      <h1>Groups</h1>
-      <p className="hint">
-        Each group can require 2FA (or not) and restrict sign-in to specific IP ranges — independently from the
-        tenant-wide policy, unless the tenant policy marks a setting as a hard cap.
-      </p>
+      <PageHeader
+        title="Groups"
+        subtitle="A group decides which apps its members can open, whether they need 2FA, and which IP ranges they can sign in from. These apply on top of the tenant-wide policy unless it marks a setting as a hard cap."
+      />
 
-      {error && (
-        <p role="alert" className="login-form__error">
-          {error}
-        </p>
-      )}
+      {error && <Alert kind="error">{error}</Alert>}
 
-      <form className="inline-form" onSubmit={(e) => void handleCreateGroup(e)}>
+      <form className="inline-form" style={{ marginTop: 0 }} onSubmit={(e) => void handleCreateGroup(e)}>
         <input placeholder="New group name (e.g. Finance)" value={newGroupName} onChange={(e) => setNewGroupName(e.target.value)} />
-        <button type="submit">Create group</button>
+        <button type="submit">+ Create group</button>
       </form>
 
       {loading ? (
-        <p>Loading…</p>
+        <SkeletonRows rows={3} />
       ) : groups.length === 0 ? (
-        <p>No groups yet.</p>
+        <EmptyState
+          title="No groups yet"
+          description="Create a group above, then tick the apps its members should be able to open."
+        />
       ) : (
         groups.map((g) => (
           <GroupCard
@@ -136,38 +135,52 @@ export function GroupsPage() {
         ))
       )}
 
-      <h2>Users with no group</h2>
-      <table>
-        <thead>
-          <tr>
-            <th>Name</th>
-            <th>Email</th>
-            <th>Assign to group</th>
-          </tr>
-        </thead>
-        <tbody>
-          {users
-            .filter((u) => !u.groupId)
-            .map((u) => (
-              <tr key={u.id}>
-                <td>{u.displayName}</td>
-                <td>{u.email}</td>
-                <td>
-                  <select defaultValue="" onChange={(e) => void handleAssign(u.id, e.target.value)}>
-                    <option value="" disabled>
-                      Choose a group…
-                    </option>
-                    {groups.map((g) => (
-                      <option key={g.id} value={g.id}>
-                        {g.name}
-                      </option>
-                    ))}
-                  </select>
-                </td>
+      <div className="section-title">
+        <h2>Users with no group</h2>
+      </div>
+      {loading ? null : users.filter((u) => !u.groupId).length === 0 ? (
+        <EmptyState title="Everyone is in a group" description="Users without a group can't open any apps." />
+      ) : (
+        <div className="card table-card">
+          <table>
+            <thead>
+              <tr>
+                <th>User</th>
+                <th>Assign to group</th>
               </tr>
-            ))}
-        </tbody>
-      </table>
+            </thead>
+            <tbody>
+              {users
+                .filter((u) => !u.groupId)
+                .map((u) => (
+                  <tr key={u.id}>
+                    <td>
+                      <div className="cell-user">
+                        <Avatar name={u.displayName} />
+                        <div>
+                          <div className="cell-user__name">{u.displayName}</div>
+                          <div className="cell-user__sub">{u.email}</div>
+                        </div>
+                      </div>
+                    </td>
+                    <td>
+                      <select defaultValue="" onChange={(e) => void handleAssign(u.id, e.target.value)}>
+                        <option value="" disabled>
+                          Choose a group…
+                        </option>
+                        {groups.map((g) => (
+                          <option key={g.id} value={g.id}>
+                            {g.name}
+                          </option>
+                        ))}
+                      </select>
+                    </td>
+                  </tr>
+                ))}
+            </tbody>
+          </table>
+        </div>
+      )}
     </main>
   );
 }
@@ -196,6 +209,7 @@ function GroupCard({
   const [allowedCidrs, setAllowedCidrs] = useState("");
   const [blockedCidrs, setBlockedCidrs] = useState("");
   const [saved, setSaved] = useState(false);
+  const [savingPolicy, setSavingPolicy] = useState(false);
 
   // Per-app "is this app assigned to this group" state, keyed by app id.
   // Loaded from the same getAppGroups/setAppGroups endpoints ClientsPage
@@ -260,6 +274,7 @@ function GroupCard({
   async function savePolicy(e: React.FormEvent) {
     e.preventDefault();
     setSaved(false);
+    setSavingPolicy(true);
     try {
       await putPolicy(
         {
@@ -275,6 +290,8 @@ function GroupCard({
       setSaved(true);
     } catch (err) {
       onError(errorMessage(err));
+    } finally {
+      setSavingPolicy(false);
     }
   }
 
@@ -282,89 +299,111 @@ function GroupCard({
   const nonMembers = users.filter((u) => u.groupId !== group.id);
 
   return (
-    <div className="callout">
-      <h3>
-        {group.name}{" "}
-        <button type="button" onClick={() => onDelete(group)}>
+    <section className="card card--padded group-card">
+      <div className="group-card__header">
+        <h3>
+          {group.name} <StatusBadge tone="neutral">{members.length} member{members.length === 1 ? "" : "s"}</StatusBadge>
+        </h3>
+        <button type="button" className="btn-danger btn-sm" onClick={() => onDelete(group)}>
           Delete group
         </button>
-      </h3>
-      {saved && <p>Saved.</p>}
-      <form onSubmit={(e) => void savePolicy(e)} className="policy-form">
-        <label className="login-form__field">
-          2FA for this group
-          <select value={mfaRequired} onChange={(e) => setMfaRequired(e.target.value as "" | "true" | "false")}>
-            <option value="">Inherit from tenant policy</option>
-            <option value="true">Required (2FA)</option>
-            <option value="false">Not required (password only)</option>
-          </select>
-        </label>
-        <label className="login-form__field">
-          Allowed IP ranges (CIDR, comma-separated — leave blank to allow any IP)
-          <input value={allowedCidrs} onChange={(e) => setAllowedCidrs(e.target.value)} placeholder="203.0.113.0/24" />
-        </label>
-        <label className="login-form__field">
-          Blocked IP ranges (CIDR, comma-separated)
-          <input value={blockedCidrs} onChange={(e) => setBlockedCidrs(e.target.value)} />
-        </label>
-        <button type="submit">Save group policy</button>
-      </form>
+      </div>
 
-      <p className="hint">Apps this group can access:</p>
-      {appError && (
-        <p role="alert" className="login-form__error">
-          {appError}
-        </p>
-      )}
-      {appAssigned === null ? (
-        <p className="hint">Loading…</p>
-      ) : apps.length === 0 ? (
-        <p className="hint">No apps connected yet — add one on the Applications page first.</p>
-      ) : (
-        <div className="checkbox-list">
-          {apps.map((app) => (
-            <label key={app.id} className="checkbox-list__item">
-              <input
-                type="checkbox"
-                checked={appAssigned.get(app.id) ?? false}
-                disabled={savingApp === app.id}
-                onChange={(e) => void toggleApp(app, e.target.checked)}
-              />
-              {app.name}
+      <div className="group-card__section" style={{ marginTop: 0, paddingTop: 0, borderTop: "none" }}>
+        <h4 className="group-card__section-title">Apps this group can open</h4>
+        {appError && <Alert kind="error">{appError}</Alert>}
+        {appAssigned === null ? (
+          <div className="skeleton skeleton--row" />
+        ) : apps.length === 0 ? (
+          <p className="hint">No apps connected yet. Add one on the Applications page and it will appear here.</p>
+        ) : (
+          <div className="checkbox-list">
+            {apps.map((app) => (
+              <label key={app.id} className="checkbox-list__item">
+                <input
+                  type="checkbox"
+                  checked={appAssigned.get(app.id) ?? false}
+                  disabled={savingApp === app.id}
+                  onChange={(e) => void toggleApp(app, e.target.checked)}
+                />
+                {app.name}
+              </label>
+            ))}
+          </div>
+        )}
+      </div>
+
+      <div className="group-card__section">
+        <h4 className="group-card__section-title">Sign-in policy</h4>
+        {saved && <Alert kind="success">Group policy saved.</Alert>}
+        <form onSubmit={(e) => void savePolicy(e)} className="policy-form" style={{ maxWidth: "none" }}>
+          <div className="form-grid">
+            <label className="login-form__field">
+              2FA for this group
+              <select value={mfaRequired} onChange={(e) => setMfaRequired(e.target.value as "" | "true" | "false")}>
+                <option value="">Inherit from tenant policy</option>
+                <option value="true">Required (2FA)</option>
+                <option value="false">Not required (password only)</option>
+              </select>
             </label>
-          ))}
-        </div>
-      )}
+            <span />
+            <label className="login-form__field">
+              Allowed IP ranges (CIDR, comma-separated; blank allows any IP)
+              <input value={allowedCidrs} onChange={(e) => setAllowedCidrs(e.target.value)} placeholder="203.0.113.0/24" />
+            </label>
+            <label className="login-form__field">
+              Blocked IP ranges (CIDR, comma-separated)
+              <input value={blockedCidrs} onChange={(e) => setBlockedCidrs(e.target.value)} />
+            </label>
+          </div>
+          {policy === null && (
+            <p className="hint" style={{ margin: 0 }}>
+              No policy saved yet for this group, so it follows the tenant-wide policy.
+            </p>
+          )}
+          <div className="form-actions" style={{ marginTop: 4 }}>
+            <button type="submit" disabled={savingPolicy}>
+              <PendingLabel pending={savingPolicy} idle="Save group policy" busy="Saving…" />
+            </button>
+          </div>
+        </form>
+      </div>
 
-      <p className="hint">Members:</p>
-      {members.length === 0 ? (
-        <p className="hint">No members yet.</p>
-      ) : (
-        <ul>
-          {members.map((u) => (
-            <li key={u.id}>
-              {u.displayName} ({u.email}){" "}
-              <button type="button" onClick={() => onAssign(u.id, "")}>
-                Remove
-              </button>
-            </li>
-          ))}
-        </ul>
-      )}
-
-      <p className="hint">Add a member:</p>
-      <select defaultValue="" onChange={(e) => e.target.value && onAssign(e.target.value, group.id)}>
-        <option value="" disabled>
-          Choose a user…
-        </option>
-        {nonMembers.map((u) => (
-          <option key={u.id} value={u.id}>
-            {u.displayName} ({u.email})
+      <div className="group-card__section">
+        <h4 className="group-card__section-title">Members</h4>
+        {members.length === 0 ? (
+          <p className="hint">No members yet.</p>
+        ) : (
+          <ul className="member-list">
+            {members.map((u) => (
+              <li key={u.id}>
+                <span className="cell-user">
+                  <Avatar name={u.displayName} />
+                  <span>
+                    <span className="cell-user__name">{u.displayName}</span>
+                    <br />
+                    <span className="cell-user__sub">{u.email}</span>
+                  </span>
+                </span>
+                <button type="button" className="btn-secondary btn-sm" onClick={() => onAssign(u.id, "")}>
+                  Remove
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
+        <select defaultValue="" onChange={(e) => e.target.value && onAssign(e.target.value, group.id)}>
+          <option value="" disabled>
+            + Add a member…
           </option>
-        ))}
-      </select>
-      {policy === null && <p className="hint">No policy saved yet for this group — defaults to the tenant-wide policy.</p>}
-    </div>
+          {nonMembers.map((u) => (
+            <option key={u.id} value={u.id}>
+              {u.displayName} ({u.email})
+            </option>
+          ))}
+        </select>
+      </div>
+    </section>
   );
 }
 
