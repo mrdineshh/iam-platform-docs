@@ -6,7 +6,7 @@ import { findTenantBySubdomain, resolveTenantSubdomain } from "@/lib/tenant";
 import { UpstreamError } from "@/lib/http";
 import { saveSession } from "@/lib/session";
 import { denialMessage } from "@/lib/errorCodes";
-import { ThemeToggle } from "@/components/ThemeToggle";
+import { Typewriter } from "@/components/Typewriter";
 import { detectRealIp } from "@/lib/clientIp";
 import { applyBranding, type Branding } from "@/lib/branding";
 
@@ -143,12 +143,10 @@ export function LoginPage() {
       <aside className="login-split__art" aria-hidden="true">
         <img src="/login-art.jpg" alt="" />
         <div className="login-split__caption">
-          <h2>Secure access for every app, user and device</h2>
-          <p>Single sign-on, adaptive multi-factor and continuous policy enforcement, managed from one console.</p>
+          <Typewriter lines={["One sign-in. Every app.", "Secure by policy, on every request."]} />
         </div>
       </aside>
       <section className="login-page login-split__panel">
-      <ThemeToggle className="login-page__theme-toggle" />
       <div className="login-page__brand">
         {brand?.branding?.logoUrl ? (
           <img src={brand.branding.logoUrl} alt={brand.name} className="login-page__brand-logo" />
