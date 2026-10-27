@@ -6,6 +6,7 @@ import { findTenantBySubdomain, resolveTenantSubdomain } from "@/lib/tenant";
 import { brandStyle, safeLogoUrl } from "@/lib/branding";
 import { listMyApps, type MyAppTile } from "@/lib/myApps";
 import { UpstreamError } from "@/lib/http";
+import { Launchpad } from "./Launchpad";
 
 interface SearchParams {
   tenant?: string;
@@ -68,31 +69,14 @@ export default async function AppsPage({
   }
 
   return (
-    <main className="login-page" style={brandStyle(tenant.branding)}>
-      <div className="apps-page">
-        {safeLogoUrl(tenant.branding) && (
-          // eslint-disable-next-line @next/next/no-img-element
-          <img src={safeLogoUrl(tenant.branding)!} alt={tenant.name} className="login-page__brand-logo" />
-        )}
-        <h1>{tenant.name}</h1>
-        <p className="hint">Your apps</p>
-
-        {apps.length === 0 ? (
-          <p>No apps are set up to launch from here yet.</p>
-        ) : (
-          <div className="app-tiles">
-            {apps.map((app) => (
-              <a key={app.id} href={app.launchUrl} target="_blank" rel="noopener noreferrer" className="app-tile">
-                <span className="app-tile__icon" aria-hidden="true">
-                  {app.name.charAt(0).toUpperCase()}
-                </span>
-                <span className="app-tile__name">{app.name}</span>
-              </a>
-            ))}
-          </div>
-        )}
-      </div>
-    </main>
+    <div style={brandStyle(tenant.branding)}>
+      <Launchpad
+        tenantName={tenant.name}
+        logoUrl={safeLogoUrl(tenant.branding)}
+        apps={apps}
+        tenantOverride={tenantOverride}
+      />
+    </div>
   );
 }
 
