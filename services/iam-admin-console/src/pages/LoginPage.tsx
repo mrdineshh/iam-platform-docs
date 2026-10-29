@@ -298,9 +298,13 @@ export function LoginPage() {
         )}
 
         {step === "credentials" && (
-          <p>
-            <Link to="/onboard">Onboard a new organization</Link>
-          </p>
+          <div className="login-form__alt">
+            <span className="login-form__alt-label">New to the platform?</span>
+            <Link to="/onboard" className="login-form__cta">
+              <span className="login-form__cta-icon">+</span>
+              Onboard a new organization
+            </Link>
+          </div>
         )}
       </form>
       </section>

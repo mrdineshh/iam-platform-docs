@@ -84,7 +84,7 @@ const TILES: Array<{ name: string; logo: ReactNode }> = [
   {
     name: "ServiceNow",
     logo: (
-      <span className="int-tile__word int-tile__word--lg" style={{ color: "#111", fontWeight: 700 }}>
+      <span className="int-tile__word" style={{ color: "#111", fontWeight: 700, fontSize: "1.05rem" }}>
         servicen<span style={{ color: "#62d84e" }}>o</span>w
       </span>
     ),
