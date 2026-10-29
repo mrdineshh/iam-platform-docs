@@ -37,8 +37,10 @@ export default async function LoginPage({
   const state = params.state ?? "";
   const tenantOverride = params.tenant ?? null;
 
+  // Opened directly (a bookmark or typed address) rather than sent here by an app: there is no app to
+  // return to, so use the normal sign-in page instead of an error.
   if (!clientId || !redirectUri) {
-    redirect("/login/error?reason=missing_params");
+    redirect(tenantOverride ? `/portal?tenant=${encodeURIComponent(tenantOverride)}` : "/portal");
   }
 
   const correlationId = randomUUID();

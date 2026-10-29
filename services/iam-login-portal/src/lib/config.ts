@@ -14,6 +14,9 @@ export const config = {
   // fallback that covers that case, matching iam-geo-svc's private-IP
   // fixture pattern (docs/specs/iam-login-portal-SPEC.md Section 3).
   rootDomain: process.env.LOGIN_PORTAL_ROOT_DOMAIN ?? "platform.example.com",
+  // Single-tenant demos only: the tenant to use when the address carries neither a tenant subdomain nor
+  // ?tenant=. Leave unset on a real multi-tenant deployment (then those addresses are an error, as before).
+  defaultTenant: process.env.LOGIN_PORTAL_DEFAULT_TENANT ?? "",
 
   // The push-approval second-factor path blocks synchronously in
   // iam-auth-svc for up to 60s (contracts/iam-device-svc.yaml). This must

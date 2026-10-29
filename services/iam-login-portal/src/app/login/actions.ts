@@ -43,6 +43,7 @@ export async function precheckAction(input: PrecheckActionInput): Promise<Preche
   const correlationId = randomUUID();
   const requestHeaders = await headers();
   const sourceIp = requestHeaders.get("x-iam-internal-real-ip") ?? "";
+  const userAgent = requestHeaders.get("user-agent") ?? undefined;
 
   const tenant = await resolveTenant(input.tenantOverride, correlationId);
   if ("error" in tenant) {
@@ -51,7 +52,7 @@ export async function precheckAction(input: PrecheckActionInput): Promise<Preche
 
   try {
     const result = await precheck(
-      { tenantId: tenant.id, email: input.email, password: input.password, sourceIp },
+      { tenantId: tenant.id, email: input.email, password: input.password, sourceIp, userAgent },
       correlationId,
     );
     if (!result.mfaRequired) {
@@ -95,6 +96,7 @@ export async function loginAction(_prevState: LoginFormState, formData: FormData
   // Never a client-supplied field -- overwritten unconditionally by
   // server.js off the raw TCP socket before Next ever sees the request.
   const sourceIp = requestHeaders.get("x-iam-internal-real-ip") ?? "";
+  const userAgent = requestHeaders.get("user-agent") ?? undefined;
 
   const clientId = str(formData.get("clientId"));
   const redirectUri = str(formData.get("redirectUri"));
@@ -133,6 +135,7 @@ export async function loginAction(_prevState: LoginFormState, formData: FormData
         email,
         password,
         sourceIp,
+        userAgent,
         totpCode: intent === "totp" ? totpCode : undefined,
       },
       correlationId,

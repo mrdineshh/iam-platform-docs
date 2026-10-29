@@ -6,6 +6,8 @@ export interface LoginRequest {
   email: string;
   password: string;
   sourceIp: string;
+  // The person's browser User-Agent: this service's own request to iam-auth-svc carries the portal's.
+  userAgent?: string;
   totpCode?: string;
 }
 
@@ -26,6 +28,7 @@ export interface PrecheckRequest {
   email: string;
   password: string;
   sourceIp: string;
+  userAgent?: string;
 }
 
 export interface PrecheckResponse {

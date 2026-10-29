@@ -742,3 +742,272 @@ h1 {
     padding: 28px 16px 48px;
   }
 }
+
+/* ---------- Sign-in: orbit of connected apps around the IAM hub ----------
+   One animated angle (--t) drives every badge: each sits at angle --a + --t on the ring and is
+   rotated back by the same amount, so the logos stay upright and evenly spaced as it turns. */
+
+@property --t {
+  syntax: "<angle>";
+  inherits: true;
+  initial-value: 0deg;
+}
+
+.orbit-wrap {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 26px;
+}
+
+.orbit-title {
+  margin: 0;
+  font-size: 1.2rem;
+  font-weight: 500;
+  letter-spacing: -0.01em;
+  color: #c9d6e6;
+  text-align: center;
+}
+
+.orbit {
+  --s: min(520px, 40vw, 56vh);
+  --r: calc(var(--s) * 0.37);
+  --d: calc(var(--s) * 0.21);
+  position: relative;
+  width: var(--s);
+  height: var(--s);
+  animation: orbit-turn 70s linear infinite;
+}
+
+.orbit:hover {
+  animation-play-state: paused;
+}
+
+.orbit__ring {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  border-radius: 50%;
+  transform: translate(-50%, -50%);
+}
+
+.orbit__ring--outer {
+  width: calc(var(--r) * 2);
+  height: calc(var(--r) * 2);
+  border: 1px solid rgba(94, 234, 212, 0.4);
+  box-shadow: 0 0 40px rgba(20, 184, 166, 0.14), inset 0 0 40px rgba(20, 184, 166, 0.08);
+}
+
+.orbit__ring--inner {
+  width: calc(var(--r) * 1.2);
+  height: calc(var(--r) * 1.2);
+  border: 1px dashed rgba(140, 200, 230, 0.25);
+}
+
+.orbit__spoke {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: var(--r);
+  height: 1px;
+  transform-origin: 0 50%;
+  transform: rotate(calc(var(--a) + var(--t) - 90deg));
+  background: linear-gradient(90deg, rgba(94, 234, 212, 0.45), rgba(99, 102, 241, 0.05));
+}
+
+.orbit__chip {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--d);
+  height: var(--d);
+  margin: calc(var(--d) / -2) 0 0 calc(var(--d) / -2);
+  border-radius: 50%;
+  background: rgba(255, 253, 248, 0.97);
+  border: 2px solid rgba(255, 255, 255, 0.6);
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.45), 0 0 24px rgba(94, 234, 212, 0.18);
+  overflow: hidden;
+  transform: rotate(calc(var(--a) + var(--t))) translateY(calc(var(--r) * -1))
+    rotate(calc((var(--a) + var(--t)) * -1));
+}
+
+.orbit__chip:hover {
+  box-shadow: 0 14px 34px rgba(0, 0, 0, 0.5), 0 0 34px rgba(94, 234, 212, 0.5);
+}
+
+.orbit__chip-in {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  transform: scale(0.8);
+}
+
+.orbit__hub {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+}
+
+.orbit__core {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  width: calc(var(--s) * 0.27);
+  height: calc(var(--s) * 0.27);
+  border-radius: 50%;
+  color: #fff;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  background: linear-gradient(135deg, #14b8a6 0%, #4f46e5 100%);
+  box-shadow: 0 0 60px rgba(20, 184, 166, 0.5), inset 0 0 24px rgba(255, 255, 255, 0.2);
+}
+
+.orbit__pulse {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: calc(var(--s) * 0.27);
+  height: calc(var(--s) * 0.27);
+  margin: calc(var(--s) * -0.135) 0 0 calc(var(--s) * -0.135);
+  border-radius: 50%;
+  border: 2px solid rgba(94, 234, 212, 0.5);
+  animation: orbit-pulse 3.6s ease-out infinite;
+}
+
+.orbit__pulse--b {
+  animation-delay: 1.8s;
+}
+
+@keyframes orbit-turn {
+  to {
+    --t: 360deg;
+  }
+}
+
+@keyframes orbit-pulse {
+  from {
+    transform: scale(1);
+    opacity: 0.8;
+  }
+  to {
+    transform: scale(2);
+    opacity: 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .orbit,
+  .orbit__pulse {
+    animation: none;
+  }
+}
+
+.int-tile__word {
+  font-size: 1rem;
+}
+
+@keyframes orbit-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes orbit-pulse {
+  from {
+    transform: scale(1);
+    opacity: 0.8;
+  }
+  to {
+    transform: scale(2);
+    opacity: 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .orbit__spin,
+  .orbit__counter,
+  .orbit__pulse {
+    animation: none;
+  }
+}
+
+.int-tile__word {
+  font-size: 0.95rem;
+  line-height: 1;
+  white-space: nowrap;
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+}
+
+.int-tile__word--lg {
+  font-size: 1.35rem;
+}
+
+.int-tile__word--xl {
+  font-size: 1.9rem;
+  line-height: 0.9;
+}
+
+.int-tile__stack {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+}
+
+/* ---------- Sign-in: interactive security backdrop ---------- */
+
+.login-split {
+  position: relative;
+}
+
+.sec-backdrop {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  z-index: 0;
+}
+
+.login-split__art,
+.login-split__panel {
+  position: relative;
+  z-index: 1;
+}
+
+/* ---------- Back buttons in the sign-in forms ---------- */
+
+.login-form__buttons .login-form__button--back {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  background: transparent;
+  color: var(--iam-text-muted);
+  border: 1px solid var(--iam-border);
+}
+
+.login-form__buttons .login-form__button--back::before {
+  content: "\2190";
+  font-size: 1.05em;
+  transition: transform 0.15s;
+}
+
+.login-form__buttons .login-form__button--back:hover:not(:disabled) {
+  background: var(--iam-surface-alt);
+  color: var(--iam-text);
+}
+
+.login-form__buttons .login-form__button--back:hover:not(:disabled)::before {
+  transform: translateX(-3px);
+}

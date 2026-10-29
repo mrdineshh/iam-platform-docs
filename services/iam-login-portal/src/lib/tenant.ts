@@ -30,7 +30,8 @@ export function resolveTenantSubdomain(host: string | null, tenantOverride: stri
   }
   // Dev-only fallback -- only reached when the Host header didn't carry a
   // real subdomain under rootDomain.
-  return tenantOverride && tenantOverride.length > 0 ? tenantOverride : null;
+  if (tenantOverride && tenantOverride.length > 0) return tenantOverride;
+  return config.defaultTenant.length > 0 ? config.defaultTenant : null;
 }
 
 export async function findTenantBySubdomain(subdomain: string, correlationId: string): Promise<Tenant | null> {

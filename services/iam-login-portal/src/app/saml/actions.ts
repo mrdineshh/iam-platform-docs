@@ -23,6 +23,7 @@ export async function samlLoginAction(_prevState: SamlLoginFormState, formData: 
   const correlationId = randomUUID();
   const requestHeaders = await headers();
   const sourceIp = requestHeaders.get("x-iam-internal-real-ip") ?? "";
+  const userAgent = requestHeaders.get("user-agent") ?? undefined;
 
   const samlRequestId = str(formData.get("samlRequestId"));
   const tenantOverride = str(formData.get("tenantOverride")) || null;
@@ -54,6 +55,7 @@ export async function samlLoginAction(_prevState: SamlLoginFormState, formData: 
         email,
         password,
         sourceIp,
+        userAgent,
         totpCode: intent === "totp" ? totpCode : undefined,
       },
       correlationId,

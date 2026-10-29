@@ -566,6 +566,8 @@ services:
       # matches a real local Host header, so tenant resolution always falls
       # back to the "?tenant=" override iam-oidcprovider-svc appends.
       LOGIN_PORTAL_ROOT_DOMAIN: platform.example.com
+      # Single-tenant demo convenience; leave empty on a real multi-tenant deployment.
+      LOGIN_PORTAL_DEFAULT_TENANT: ${LOGIN_PORTAL_DEFAULT_TENANT:-}
     # Host port 3001, not 3000 -- 3000 was already bound by an unrelated
     # local process on the dev machine this was verified on.
     ports: ["3001:3000"]

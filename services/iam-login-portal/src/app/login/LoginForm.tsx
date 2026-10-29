@@ -155,7 +155,7 @@ export function LoginForm({ clientId, redirectUri, scope, state, tenantOverride,
             </button>
             <button
               type="button"
-              className="login-form__button--secondary"
+              className="login-form__button--secondary login-form__button--back"
               disabled={checking}
               onClick={() => setStep("username")}
             >
@@ -250,7 +250,7 @@ function EnrollSubmitButtons({ onBack }: { onBack: () => void }) {
       <button type="submit" name="intent" value="totp">
         Verify and sign in
       </button>
-      <button type="button" className="login-form__button--secondary" onClick={onBack}>
+      <button type="button" className="login-form__button--secondary login-form__button--back" onClick={onBack}>
         Back
       </button>
     </div>
@@ -297,7 +297,7 @@ function SubmitButtons({
       >
         Send a push to my phone
       </button>
-      <button type="button" className="login-form__button--secondary" onClick={onBack}>
+      <button type="button" className="login-form__button--secondary login-form__button--back" onClick={onBack}>
         Back
       </button>
     </div>
