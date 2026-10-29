@@ -1,0 +1,787 @@
+/* Console skin, loaded after polish.css. Carries the sign-in page's look (deep navy canvas,
+   teal/indigo accents, glass surfaces) into the signed-in pages. It only restyles existing
+   classes and tokens, so every page picks it up without markup changes. */
+
+:root {
+  --iam-accent: #0d9488;
+  --iam-grad: linear-gradient(135deg, #0d9488 0%, #4f46e5 100%);
+}
+
+[data-theme="dark"] {
+  --iam-bg: #020a17;
+  --iam-surface: rgba(16, 28, 48, 0.72);
+  --iam-surface-alt: rgba(255, 255, 255, 0.05);
+  --iam-text: #e8eef6;
+  --iam-text-muted: #93a3b8;
+  --iam-primary: #6c72f5;
+  --iam-primary-hover: #8a8ff8;
+  --iam-border: rgba(140, 200, 230, 0.15);
+  --iam-shadow: 0 2px 10px rgba(0, 0, 0, 0.25);
+  --iam-shadow-md: 0 10px 34px rgba(0, 0, 0, 0.4);
+  --iam-accent: #5eead4;
+  --iam-grad: linear-gradient(135deg, #14b8a6 0%, #6366f1 100%);
+}
+
+body {
+  background:
+    radial-gradient(ellipse 55% 45% at 18% 0%, rgba(20, 150, 130, 0.14) 0%, transparent 70%),
+    radial-gradient(ellipse 45% 40% at 100% 100%, rgba(80, 90, 220, 0.12) 0%, transparent 70%),
+    var(--iam-bg);
+  background-attachment: fixed;
+}
+
+[data-theme="light"] body {
+  background:
+    radial-gradient(ellipse 55% 45% at 18% 0%, rgba(20, 184, 166, 0.1) 0%, transparent 70%),
+    radial-gradient(ellipse 45% 40% at 100% 100%, rgba(99, 102, 241, 0.09) 0%, transparent 70%),
+    var(--iam-bg);
+  background-attachment: fixed;
+}
+
+/* ---------- Sidebar ---------- */
+
+.shell__sidebar {
+  background: var(--iam-surface);
+  -webkit-backdrop-filter: blur(16px);
+  backdrop-filter: blur(16px);
+  padding: 22px 14px;
+}
+
+.shell__brand-mark {
+  background: var(--iam-grad);
+  box-shadow: 0 6px 16px rgba(20, 184, 166, 0.3);
+}
+
+.shell__nav-link {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  position: relative;
+  color: var(--iam-text-muted);
+  transition: background-color 0.15s, color 0.15s, transform 0.15s;
+}
+
+.shell__nav-link .icon {
+  flex-shrink: 0;
+  opacity: 0.85;
+}
+
+.shell__nav-link:hover {
+  color: var(--iam-text);
+  transform: translateX(2px);
+}
+
+.shell__nav-link--active {
+  color: var(--iam-text);
+  background: linear-gradient(90deg, rgba(20, 184, 166, 0.2), rgba(99, 102, 241, 0.14));
+}
+
+.shell__nav-link--active .icon {
+  color: var(--iam-accent);
+  opacity: 1;
+}
+
+.shell__nav-link--active::before {
+  content: "";
+  position: absolute;
+  left: -14px;
+  top: 8px;
+  bottom: 8px;
+  width: 3px;
+  border-radius: 0 3px 3px 0;
+  background: var(--iam-grad);
+}
+
+.shell__avatar {
+  background: var(--iam-grad);
+  color: #fff;
+}
+
+/* ---------- Page headers, cards, tables ---------- */
+
+.page {
+  animation: iam-fade-in 0.35s ease both;
+}
+
+.page-header h1,
+.hero h1 {
+  background: linear-gradient(90deg, var(--iam-text) 30%, var(--iam-accent) 140%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+
+.card,
+.table-card,
+.stat-card,
+.group-card,
+.catalog-card,
+.quick-link-card,
+table {
+  -webkit-backdrop-filter: blur(10px);
+  backdrop-filter: blur(10px);
+}
+
+.card,
+.catalog-card,
+.group-card {
+  border-radius: var(--iam-radius-lg);
+}
+
+th {
+  background: transparent;
+}
+
+[data-theme="dark"] .modal {
+  background: #0b1628;
+  border: 1px solid var(--iam-border);
+}
+
+/* Default action buttons: a solid teal that white text reads clearly on. :where() keeps this at the
+   same specificity as the base `button` rule, so tabs, secondary, danger and icon buttons keep
+   their own colours. */
+:root {
+  --iam-btn: #0f766e;
+  --iam-btn-hover: #115e59;
+}
+
+button {
+  background: var(--iam-btn);
+  color: #ffffff;
+}
+
+button:where(:not(:disabled)):hover {
+  background: var(--iam-btn-hover);
+}
+
+[data-theme="dark"] input,
+[data-theme="dark"] select,
+[data-theme="dark"] textarea {
+  background: rgba(255, 255, 255, 0.05);
+}
+
+/* ---------- Stat cards ---------- */
+
+.stat-card {
+  position: relative;
+  overflow: hidden;
+  padding: 20px 22px;
+  border-radius: var(--iam-radius-lg);
+  transition: transform 0.18s, border-color 0.18s, box-shadow 0.18s;
+}
+
+.stat-card::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 0;
+  height: 3px;
+  background: var(--iam-grad);
+  opacity: 0.85;
+}
+
+.stat-card--link:hover {
+  transform: translateY(-3px);
+  border-color: var(--iam-accent);
+}
+
+.stat-card__icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 38px;
+  height: 38px;
+  margin-bottom: 8px;
+  border-radius: 10px;
+  color: var(--iam-accent);
+  background: rgba(20, 184, 166, 0.14);
+}
+
+/* ---------- Dashboard hero + quick actions ---------- */
+
+.hero {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+  margin-bottom: 24px;
+  padding: 34px 38px;
+  overflow: hidden;
+  border: 1px solid var(--iam-border);
+  border-radius: 20px;
+  background:
+    radial-gradient(ellipse 60% 120% at 100% 0%, rgba(99, 102, 241, 0.28) 0%, transparent 70%),
+    radial-gradient(ellipse 50% 120% at 0% 100%, rgba(20, 184, 166, 0.2) 0%, transparent 70%),
+    var(--iam-surface);
+  box-shadow: var(--iam-shadow-md);
+}
+
+.hero__eyebrow {
+  display: inline-block;
+  margin-bottom: 10px;
+  padding: 4px 12px;
+  border-radius: 100px;
+  border: 1px solid var(--iam-border);
+  background: var(--iam-surface-alt);
+  color: var(--iam-accent);
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.hero h1 {
+  margin: 0 0 8px;
+  font-size: 2rem;
+  letter-spacing: -0.02em;
+}
+
+.hero p {
+  margin: 0;
+  max-width: 56ch;
+  color: var(--iam-text-muted);
+  line-height: 1.55;
+}
+
+.hero__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 22px;
+}
+
+.hero__btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 18px;
+  border-radius: 10px;
+  border: 1px solid var(--iam-border);
+  background: var(--iam-surface-alt);
+  color: var(--iam-text);
+  font-size: 0.9rem;
+  font-weight: 600;
+  text-decoration: none;
+  transition: transform 0.15s, filter 0.15s;
+}
+
+.hero__btn:hover {
+  transform: translateY(-2px);
+}
+
+.hero__btn--primary {
+  border-color: transparent;
+  background: var(--iam-grad);
+  color: #fff;
+  box-shadow: 0 6px 18px rgba(20, 184, 166, 0.28);
+}
+
+.hero__orb {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 128px;
+  height: 128px;
+  border-radius: 50%;
+  color: var(--iam-accent);
+  background: radial-gradient(circle, rgba(20, 184, 166, 0.28) 0%, rgba(99, 102, 241, 0.08) 70%);
+  box-shadow: 0 0 60px rgba(20, 184, 166, 0.25);
+  animation: console-float 6s ease-in-out infinite;
+}
+
+@keyframes console-float {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-8px);
+  }
+}
+
+.action-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+  gap: 16px;
+}
+
+.action-card {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 20px;
+  border: 1px solid var(--iam-border);
+  border-radius: var(--iam-radius-lg);
+  background: var(--iam-surface);
+  color: var(--iam-text);
+  text-decoration: none;
+  box-shadow: var(--iam-shadow);
+  transition: transform 0.18s, border-color 0.18s, box-shadow 0.18s;
+}
+
+.action-card:hover {
+  transform: translateY(-3px);
+  border-color: var(--iam-accent);
+  box-shadow: var(--iam-shadow-md);
+}
+
+.action-card__icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 38px;
+  height: 38px;
+  margin-bottom: 6px;
+  border-radius: 10px;
+  color: #fff;
+  background: var(--iam-grad);
+}
+
+.action-card__title {
+  font-weight: 600;
+}
+
+.action-card__desc {
+  color: var(--iam-text-muted);
+  font-size: 0.85rem;
+  line-height: 1.45;
+}
+
+@media (max-width: 720px) {
+  .hero {
+    padding: 24px;
+  }
+  .hero__orb {
+    display: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .hero__orb,
+  .page {
+    animation: none;
+  }
+}
+
+/* ---------- Sign-in: orbit of connected apps around the IAM hub ----------
+   One animated angle (--t) drives every badge: each sits at angle --a + --t on the ring and is
+   rotated back by the same amount, so the logos stay upright and evenly spaced as it turns. */
+
+@property --t {
+  syntax: "<angle>";
+  inherits: true;
+  initial-value: 0deg;
+}
+
+.orbit-wrap {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 26px;
+}
+
+.orbit-title {
+  margin: 0;
+  font-size: 1.2rem;
+  font-weight: 500;
+  letter-spacing: -0.01em;
+  color: #c9d6e6;
+  text-align: center;
+}
+
+.orbit {
+  --s: min(520px, 40vw, 56vh);
+  --r: calc(var(--s) * 0.37);
+  --d: calc(var(--s) * 0.21);
+  position: relative;
+  width: var(--s);
+  height: var(--s);
+  animation: orbit-turn 70s linear infinite;
+}
+
+.orbit:hover {
+  animation-play-state: paused;
+}
+
+.orbit__ring {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  border-radius: 50%;
+  transform: translate(-50%, -50%);
+}
+
+.orbit__ring--outer {
+  width: calc(var(--r) * 2);
+  height: calc(var(--r) * 2);
+  border: 1px solid rgba(94, 234, 212, 0.4);
+  box-shadow: 0 0 40px rgba(20, 184, 166, 0.14), inset 0 0 40px rgba(20, 184, 166, 0.08);
+}
+
+.orbit__ring--inner {
+  width: calc(var(--r) * 1.2);
+  height: calc(var(--r) * 1.2);
+  border: 1px dashed rgba(140, 200, 230, 0.25);
+}
+
+.orbit__spoke {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: var(--r);
+  height: 1px;
+  transform-origin: 0 50%;
+  transform: rotate(calc(var(--a) + var(--t) - 90deg));
+  background: linear-gradient(90deg, rgba(94, 234, 212, 0.45), rgba(99, 102, 241, 0.05));
+}
+
+.orbit__chip {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--d);
+  height: var(--d);
+  margin: calc(var(--d) / -2) 0 0 calc(var(--d) / -2);
+  border-radius: 50%;
+  background: rgba(255, 253, 248, 0.97);
+  border: 2px solid rgba(255, 255, 255, 0.6);
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.45), 0 0 24px rgba(94, 234, 212, 0.18);
+  overflow: hidden;
+  transform: rotate(calc(var(--a) + var(--t))) translateY(calc(var(--r) * -1))
+    rotate(calc((var(--a) + var(--t)) * -1));
+}
+
+.orbit__chip:hover {
+  box-shadow: 0 14px 34px rgba(0, 0, 0, 0.5), 0 0 34px rgba(94, 234, 212, 0.5);
+}
+
+.orbit__chip-in {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  transform: scale(0.8);
+}
+
+.orbit__hub {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+}
+
+.orbit__core {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  width: calc(var(--s) * 0.27);
+  height: calc(var(--s) * 0.27);
+  border-radius: 50%;
+  color: #fff;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  background: linear-gradient(135deg, #14b8a6 0%, #4f46e5 100%);
+  box-shadow: 0 0 60px rgba(20, 184, 166, 0.5), inset 0 0 24px rgba(255, 255, 255, 0.2);
+}
+
+.orbit__pulse {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: calc(var(--s) * 0.27);
+  height: calc(var(--s) * 0.27);
+  margin: calc(var(--s) * -0.135) 0 0 calc(var(--s) * -0.135);
+  border-radius: 50%;
+  border: 2px solid rgba(94, 234, 212, 0.5);
+  animation: orbit-pulse 3.6s ease-out infinite;
+}
+
+.orbit__pulse--b {
+  animation-delay: 1.8s;
+}
+
+@keyframes orbit-turn {
+  to {
+    --t: 360deg;
+  }
+}
+
+@keyframes orbit-pulse {
+  from {
+    transform: scale(1);
+    opacity: 0.8;
+  }
+  to {
+    transform: scale(2);
+    opacity: 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .orbit,
+  .orbit__pulse {
+    animation: none;
+  }
+}
+
+.int-tile__word {
+  font-size: 1rem;
+}
+
+@keyframes orbit-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes orbit-pulse {
+  from {
+    transform: scale(1);
+    opacity: 0.8;
+  }
+  to {
+    transform: scale(2);
+    opacity: 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .orbit__spin,
+  .orbit__counter,
+  .orbit__pulse {
+    animation: none;
+  }
+}
+
+.int-tile__word {
+  font-size: 0.95rem;
+  line-height: 1;
+  white-space: nowrap;
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+}
+
+.int-tile__word--lg {
+  font-size: 1.35rem;
+}
+
+.int-tile__word--xl {
+  font-size: 1.9rem;
+  line-height: 0.9;
+}
+
+.int-tile__stack {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+}
+
+/* ---------- Sign-in: interactive security backdrop ---------- */
+
+.login-split {
+  position: relative;
+}
+
+.sec-backdrop {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  z-index: 0;
+}
+
+.login-split__art,
+.login-split__panel {
+  position: relative;
+  z-index: 1;
+}
+
+/* ---------- Application setup page: card form, segmented tabs ---------- */
+
+.setup-form {
+  max-width: 680px;
+  padding: 26px;
+  gap: 18px;
+  background: var(--iam-surface);
+  border: 1px solid var(--iam-border);
+  border-radius: var(--iam-radius-lg);
+  box-shadow: var(--iam-shadow);
+}
+
+.setup-form__repeat-row {
+  margin-top: 8px;
+  align-items: stretch;
+}
+
+.setup-form__repeat-row .btn-secondary {
+  width: 44px;
+  padding: 0;
+  font-size: 1.1rem;
+}
+
+.setup-form .btn-secondary {
+  align-self: flex-start;
+  margin-top: 8px;
+}
+
+.setup-form > button[type="submit"] {
+  margin-top: 6px;
+  padding: 12px 16px;
+}
+
+/* Tabs as a segmented control, so the active one reads clearly in light and dark. */
+.tabs {
+  display: inline-flex;
+  gap: 4px;
+  padding: 4px;
+  margin: 18px 0 18px;
+  background: var(--iam-surface-alt);
+  border: 1px solid var(--iam-border);
+  border-radius: 12px;
+}
+
+.tabs button {
+  padding: 8px 18px;
+  border: none;
+  border-radius: 9px;
+  color: var(--iam-text-muted);
+}
+
+.tabs button:hover:not(:disabled) {
+  background: transparent;
+  color: var(--iam-text);
+}
+
+.tabs button.active {
+  background: var(--iam-btn);
+  color: #ffffff;
+  border: none;
+  box-shadow: 0 2px 8px rgba(15, 118, 110, 0.35);
+}
+
+.tabs button:disabled {
+  opacity: 0.45;
+}
+
+/* Google Workspace card on the Applications page: same size as the others, with an accent edge. */
+.catalog-card--featured {
+  border-color: rgba(20, 184, 166, 0.45);
+  box-shadow: 0 0 0 1px rgba(20, 184, 166, 0.15), var(--iam-shadow);
+}
+
+/* ---------- Back links and Back buttons ---------- */
+
+.back-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 14px;
+  padding: 5px 16px 5px 5px;
+  border: 1px solid var(--iam-border);
+  border-radius: 999px;
+  background: var(--iam-surface-alt);
+  color: var(--iam-text-muted);
+  font-size: 0.86rem;
+  font-weight: 600;
+  text-decoration: none;
+  transition: color 0.15s, border-color 0.15s, background-color 0.15s;
+}
+
+.back-link__icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  background: var(--iam-btn);
+  color: #ffffff;
+  transition: transform 0.15s;
+}
+
+.back-link__icon .icon {
+  transform: scaleX(-1);
+}
+
+.back-link:hover {
+  color: var(--iam-text);
+  border-color: var(--iam-accent);
+  background: var(--iam-surface);
+}
+
+.back-link:hover .back-link__icon {
+  transform: translateX(-3px);
+}
+
+.back-link:focus-visible {
+  outline: 2px solid var(--iam-accent);
+  outline-offset: 2px;
+}
+
+.login-form__buttons .login-form__button--back {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  background: transparent;
+  color: var(--iam-text-muted);
+  border: 1px solid var(--iam-border);
+}
+
+.login-form__buttons .login-form__button--back::before {
+  content: "\2190";
+  font-size: 1.05em;
+  transition: transform 0.15s;
+}
+
+.login-form__buttons .login-form__button--back:hover:not(:disabled) {
+  background: var(--iam-surface-alt);
+  color: var(--iam-text);
+}
+
+.login-form__buttons .login-form__button--back:hover:not(:disabled)::before {
+  transform: translateX(-3px);
+}
+
+/* Back link shown above every page except the dashboard, rendered once by the shell. */
+.shell__back {
+  max-width: 1180px;
+  padding: 26px 40px 0;
+}
+
+.shell__back + .page {
+  padding-top: 18px;
+}
+
+.shell__back .back-link {
+  margin-bottom: 0;
+}
+
+/* With the sidebar hidden, leave room for the fixed "show sidebar" button. */
+.shell__body--full .shell__back {
+  padding-left: 72px;
+}
+
+/* Native dropdown lists open on the browser's own background, which my dark fields don't change:
+   without this the options render as light text on white and are unreadable. */
+[data-theme="dark"] select option,
+[data-theme="dark"] select optgroup {
+  background: #0b1628;
+  color: #e8eef6;
+}
+
+[data-theme="dark"] select {
+  color-scheme: dark;
+}

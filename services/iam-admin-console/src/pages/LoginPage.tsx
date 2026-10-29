@@ -6,7 +6,8 @@ import { findTenantBySubdomain, rememberTenantSubdomain, resolveTenantSubdomain 
 import { UpstreamError } from "@/lib/http";
 import { saveSession } from "@/lib/session";
 import { denialMessage } from "@/lib/errorCodes";
-import { Typewriter } from "@/components/Typewriter";
+import { SecurityBackdrop } from "@/components/SecurityBackdrop";
+import { IntegrationGrid } from "@/components/IntegrationGrid";
 import { detectRealIp } from "@/lib/clientIp";
 import { applyBranding, type Branding } from "@/lib/branding";
 
@@ -143,11 +144,9 @@ export function LoginPage() {
 
   return (
     <main className="login-split">
+      <SecurityBackdrop />
       <aside className="login-split__art" aria-hidden="true">
-        <img src="/login-art.jpg" alt="" />
-        <div className="login-split__caption">
-          <Typewriter lines={["One sign-in. Every app.", "Secure by policy, on every request."]} />
-        </div>
+        <IntegrationGrid />
       </aside>
       <section className="login-page login-split__panel">
       <div className="login-page__brand">
@@ -254,7 +253,7 @@ export function LoginPage() {
             ) : (
               <div className="login-form__buttons">
                 <button type="submit">Verify and sign in</button>
-                <button type="button" className="login-form__button--secondary" onClick={() => setStep("credentials")}>
+                <button type="button" className="login-form__button--secondary login-form__button--back" onClick={() => setStep("credentials")}>
                   Back
                 </button>
               </div>
@@ -290,7 +289,7 @@ export function LoginPage() {
                 <button type="button" className="login-form__button--secondary" onClick={() => void submitCode("push")}>
                   Send a push to my phone
                 </button>
-                <button type="button" className="login-form__button--secondary" onClick={() => setStep("credentials")}>
+                <button type="button" className="login-form__button--secondary login-form__button--back" onClick={() => setStep("credentials")}>
                   Back
                 </button>
               </div>

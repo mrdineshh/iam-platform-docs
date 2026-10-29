@@ -124,6 +124,19 @@ export function ClientsPage() {
       {error && <Alert kind="error">{error}</Alert>}
 
       <div className="catalog-grid">
+        <div className="catalog-card catalog-card--featured">
+          <div className="catalog-card__header">
+            <AppIcon name="Google Workspace" size={40} />
+            <strong>Google Workspace</strong>
+          </div>
+          <p className="catalog-card__desc">
+            Create, suspend and remove Google accounts automatically when users change here. Connect your domain and service account.
+          </p>
+          <button type="button" onClick={() => navigate("/google-workspace")}>
+            Configure
+          </button>
+        </div>
+
         {CATALOG.map((app) => (
           <div key={app.name} className="catalog-card">
             <div className="catalog-card__header">

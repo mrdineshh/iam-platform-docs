@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { Link } from "react-router-dom";
 import { isAdmin, loadSession } from "@/lib/session";
 import { listTenantUsers } from "@/lib/impersonate";
 import { listGroups } from "@/lib/groups";
@@ -6,7 +7,8 @@ import { listClients } from "@/lib/oidcClients";
 import { listSamlSps } from "@/lib/samlSps";
 import { listMyApps } from "@/lib/myApps";
 import { getGoogleWorkspaceConfig } from "@/lib/googleWorkspace";
-import { PageHeader, StatCard, StatusBadge } from "@/components/ui";
+import { StatCard, StatusBadge } from "@/components/ui";
+import { Icon, type IconName } from "@/components/icons";
 
 interface Counts {
   users: number;
@@ -16,6 +18,13 @@ interface Counts {
   myApps: number;
   googleConfigured: boolean;
 }
+
+const ADMIN_ACTIONS: Array<{ to: string; icon: IconName; title: string; desc: string }> = [
+  { to: "/users", icon: "users", title: "Add or manage users", desc: "Create accounts, suspend or reactivate access." },
+  { to: "/clients", icon: "plug", title: "Connect an application", desc: "OIDC, SAML and SCIM provisioning for your apps." },
+  { to: "/groups", icon: "groups", title: "Set group access", desc: "Choose which groups can open which apps." },
+  { to: "/policy", icon: "lock", title: "Review access policy", desc: "Sign-in rules, MFA and network controls." },
+];
 
 export function DashboardPage() {
   const session = loadSession()!;
@@ -54,18 +63,39 @@ export function DashboardPage() {
 
   return (
     <main className="page">
-      <PageHeader
-        title={`Welcome back${session.tenantName ? `, ${session.tenantName}` : ""}`}
-        subtitle={`You're signed in as ${admin ? "an administrator" : "a user"} for this tenant.`}
-      />
+      <section className="hero">
+        <div className="hero__text">
+          <span className="hero__eyebrow">{admin ? "Administrator console" : "Your workspace"}</span>
+          <h1>Welcome back{session.tenantName ? `, ${session.tenantName}` : ""}</h1>
+          <p>
+            {admin
+              ? "Manage who can sign in, which apps they can open, and how access is provisioned — all in one place."
+              : "Open your apps and keep your account secure from here."}
+          </p>
+          <div className="hero__actions">
+            <Link to="/apps" className="hero__btn hero__btn--primary">
+              Open my apps <Icon name="arrow" size={16} />
+            </Link>
+            {admin && (
+              <Link to="/users" className="hero__btn">
+                Manage users
+              </Link>
+            )}
+          </div>
+        </div>
+        <div className="hero__orb" aria-hidden="true">
+          <Icon name="shield" size={64} />
+        </div>
+      </section>
 
       <div className="stat-grid">
         {admin ? (
           <>
-            <StatCard label="Users" value={show(counts?.users)} hint={counts?.activeUsers === undefined ? undefined : `${counts.activeUsers} active`} to="/users" />
-            <StatCard label="Groups" value={show(counts?.groups)} hint="Control app access per group" to="/groups" />
-            <StatCard label="Connected apps" value={show(counts?.apps)} hint="OIDC and SAML" to="/clients" />
+            <StatCard icon="users" label="Users" value={show(counts?.users)} hint={counts?.activeUsers === undefined ? undefined : `${counts.activeUsers} active`} to="/users" />
+            <StatCard icon="groups" label="Groups" value={show(counts?.groups)} hint="Control app access per group" to="/groups" />
+            <StatCard icon="plug" label="Connected apps" value={show(counts?.apps)} hint="OIDC and SAML" to="/clients" />
             <StatCard
+              icon="cloud"
               label="Google Workspace"
               value={
                 counts?.googleConfigured === undefined ? (
@@ -81,9 +111,28 @@ export function DashboardPage() {
             />
           </>
         ) : (
-          <StatCard label="My apps" value={show(counts?.myApps)} hint="Apps you can launch" to="/apps" />
+          <StatCard icon="apps" label="My apps" value={show(counts?.myApps)} hint="Apps you can launch" to="/apps" />
         )}
       </div>
+
+      {admin && (
+        <>
+          <div className="section-title">
+            <h2>Quick actions</h2>
+          </div>
+          <div className="action-grid">
+            {ADMIN_ACTIONS.map((a) => (
+              <Link key={a.to} to={a.to} className="action-card">
+                <span className="action-card__icon">
+                  <Icon name={a.icon} size={20} />
+                </span>
+                <span className="action-card__title">{a.title}</span>
+                <span className="action-card__desc">{a.desc}</span>
+              </Link>
+            ))}
+          </div>
+        </>
+      )}
     </main>
   );
 }

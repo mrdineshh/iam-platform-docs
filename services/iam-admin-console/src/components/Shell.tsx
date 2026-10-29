@@ -5,6 +5,22 @@ import { logout } from "@/lib/auth";
 import { useIdleTimeout } from "@/lib/useIdleTimeout";
 import { ThemeToggle } from "@/components/ThemeToggle";
 import { loadStoredBranding } from "@/lib/branding";
+import { Icon, type IconName } from "@/components/icons";
+import { BackLink } from "@/components/ui";
+
+// Where the "back" link on each page leads. The dashboard is the top level, so it has none.
+const BACK_TARGETS: Record<string, { to: string; label: string }> = {
+  "/apps": { to: "/", label: "Dashboard" },
+  "/my-security": { to: "/", label: "Dashboard" },
+  "/users": { to: "/", label: "Dashboard" },
+  "/groups": { to: "/", label: "Dashboard" },
+  "/switch-user": { to: "/", label: "Dashboard" },
+  "/clients": { to: "/", label: "Dashboard" },
+  "/policy": { to: "/", label: "Dashboard" },
+  "/branding": { to: "/", label: "Dashboard" },
+  "/clients/setup": { to: "/clients", label: "Applications" },
+  "/google-workspace": { to: "/clients", label: "Applications" },
+};
 
 const SIDEBAR_COLLAPSED_KEY = "iam-admin-console:sidebar-collapsed";
 const ADMIN_SECTION_OPEN_KEY = "iam-admin-console:admin-nav-open";
@@ -59,6 +75,13 @@ export function Shell({ children }: { children: ReactNode }) {
     navigate(reason === "idle" ? "/login?reason=idle" : "/login");
   }
 
+  const back = BACK_TARGETS[location.pathname.replace(/\/+$/, "") || "/"];
+  const backBar = back ? (
+    <div className="shell__back">
+      <BackLink to={back.to}>{back.label}</BackLink>
+    </div>
+  ) : null;
+
   const branding = loadStoredBranding();
   const identityLabel = session?.email ?? session?.tenantName ?? "Signed in";
   const adminIsCurrentSection =
@@ -82,7 +105,10 @@ export function Shell({ children }: { children: ReactNode }) {
         >
           »
         </button>
-        <div className="shell__body shell__body--full">{children}</div>
+        <div className="shell__body shell__body--full">
+          {backBar}
+          {children}
+        </div>
       </div>
     );
   }
@@ -114,9 +140,9 @@ export function Shell({ children }: { children: ReactNode }) {
 
         <nav className="shell__nav">
           <NavSection>
-            <NavLink to="/" label="Dashboard" active={location.pathname === "/"} />
-            <NavLink to="/apps" label="My Apps" active={location.pathname === "/apps"} />
-            <NavLink to="/my-security" label="My Security" active={location.pathname === "/my-security"} />
+            <NavLink to="/" icon="dashboard" label="Dashboard" active={location.pathname === "/"} />
+            <NavLink to="/apps" icon="apps" label="My Apps" active={location.pathname === "/apps"} />
+            <NavLink to="/my-security" icon="shield" label="My Security" active={location.pathname === "/my-security"} />
           </NavSection>
 
           {admin && (
@@ -132,17 +158,12 @@ export function Shell({ children }: { children: ReactNode }) {
               </button>
               {(adminOpen || adminIsCurrentSection) && (
                 <div className="shell__nav-collapsible-body">
-                  <NavLink to="/users" label="Users" active={location.pathname === "/users"} />
-                  <NavLink to="/groups" label="Groups" active={location.pathname === "/groups"} />
-                  <NavLink to="/switch-user" label="Switch to user" active={location.pathname === "/switch-user"} />
-                  <NavLink to="/clients" label="Applications" active={location.pathname.startsWith("/clients")} />
-                  <NavLink to="/policy" label="Access policy" active={location.pathname === "/policy"} />
-                  <NavLink
-                    to="/google-workspace"
-                    label="Google Workspace"
-                    active={location.pathname === "/google-workspace"}
-                  />
-                  <NavLink to="/branding" label="Branding" active={location.pathname === "/branding"} />
+                  <NavLink to="/users" icon="users" label="Users" active={location.pathname === "/users"} />
+                  <NavLink to="/groups" icon="groups" label="Groups" active={location.pathname === "/groups"} />
+                  <NavLink to="/switch-user" icon="switch" label="Switch to user" active={location.pathname === "/switch-user"} />
+                  <NavLink to="/clients" icon="plug" label="Applications" active={location.pathname.startsWith("/clients") || location.pathname === "/google-workspace"} />
+                  <NavLink to="/policy" icon="lock" label="Access policy" active={location.pathname === "/policy"} />
+                  <NavLink to="/branding" icon="palette" label="Branding" active={location.pathname === "/branding"} />
                 </div>
               )}
             </div>
@@ -167,7 +188,10 @@ export function Shell({ children }: { children: ReactNode }) {
         </div>
       </aside>
 
-      <div className="shell__body">{children}</div>
+      <div className="shell__body">
+        {backBar}
+        {children}
+      </div>
     </div>
   );
 }
@@ -176,10 +200,11 @@ function NavSection({ children }: { children: ReactNode }) {
   return <div className="shell__nav-section">{children}</div>;
 }
 
-function NavLink({ to, label, active }: { to: string; label: string; active: boolean }) {
+function NavLink({ to, label, icon, active }: { to: string; label: string; icon: IconName; active: boolean }) {
   return (
     <Link to={to} className={active ? "shell__nav-link shell__nav-link--active" : "shell__nav-link"}>
-      {label}
+      <Icon name={icon} />
+      <span>{label}</span>
     </Link>
   );
 }

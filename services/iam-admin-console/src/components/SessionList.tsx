@@ -1,5 +1,6 @@
 import type { SessionSummary } from "@/lib/sessions";
 import { EmptyState, PendingLabel, StatusBadge } from "@/components/ui";
+import { describeLocation, describeUserAgent } from "@/lib/userAgent";
 
 /**
  * Table of live sessions with a per-row "Sign out" button. Shared by the
@@ -24,6 +25,8 @@ export function SessionList({
         <thead>
           <tr>
             <th>IP address</th>
+            <th>Location</th>
+            <th>Device</th>
             <th>Signed in</th>
             <th>Expires</th>
             <th></th>
@@ -35,6 +38,8 @@ export function SessionList({
               <td>
                 {s.sourceIp ?? "Unknown"} {s.current && <StatusBadge tone="success">This session</StatusBadge>}
               </td>
+              <td>{describeLocation(s.city, s.region, s.country) ?? <span className="hint">Not recorded</span>}</td>
+              <td title={s.userAgent ?? undefined}>{s.userAgent ? describeUserAgent(s.userAgent) : <span className="hint">Not recorded</span>}</td>
               <td>{new Date(s.issuedAt).toLocaleString()}</td>
               <td>{new Date(s.expiresAt).toLocaleString()}</td>
               <td>

@@ -3,6 +3,7 @@ import { createRoot } from "react-dom/client";
 import { App } from "./App";
 import "./index.css";
 import "./polish.css";
+import "./console.css";
 import { applyStoredBranding } from "./lib/branding";
 
 applyStoredBranding();

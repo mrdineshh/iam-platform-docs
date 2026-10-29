@@ -1,8 +1,9 @@
 import { useState } from "react";
-import { Link } from "react-router-dom";
+
 import { createTenant, type Tenant } from "@/lib/tenant";
 import { UpstreamError } from "@/lib/http";
 import { ThemeToggle } from "@/components/ThemeToggle";
+import { BackLink } from "@/components/ui";
 
 /**
  * Public (no session) tenant self-onboarding -- there's no session to hold
@@ -70,7 +71,7 @@ export function OnboardTenantPage() {
             (it requires mTLS, so no browser page can do it yet) — use the same API call as any other user
             enrollment for now.
           </p>
-          <Link to="/login">Back to sign in</Link>
+          <BackLink to="/login">Back to sign in</BackLink>
         </div>
       </main>
     );
@@ -118,7 +119,7 @@ export function OnboardTenantPage() {
         </div>
 
         <p>
-          <Link to="/login">Back to sign in</Link>
+          <BackLink to="/login">Back to sign in</BackLink>
         </p>
       </form>
     </main>

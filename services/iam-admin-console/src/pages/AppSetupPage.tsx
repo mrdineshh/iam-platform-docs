@@ -99,9 +99,6 @@ export function AppSetupPage() {
 
   return (
     <main className="page">
-      <p>
-        <Link to="/clients">&larr; Applications</Link>
-      </p>
       <h1>{name.trim() || "Connect an app"}</h1>
 
       {!created && (
@@ -161,12 +158,12 @@ export function AppSetupPage() {
                   onChange={(e) => updateRedirectUri(i, e.target.value)}
                   placeholder="https://app.example.com/auth/callback"
                 />
-                <button type="button" onClick={() => removeRedirectUriField(i)} disabled={redirectUris.length === 1}>
+                <button type="button" className="btn-secondary" onClick={() => removeRedirectUriField(i)} disabled={redirectUris.length === 1}>
                   &minus;
                 </button>
               </div>
             ))}
-            <button type="button" onClick={addRedirectUriField}>
+            <button type="button" className="btn-secondary" onClick={addRedirectUriField}>
               + Add another redirect URI
             </button>
           </div>

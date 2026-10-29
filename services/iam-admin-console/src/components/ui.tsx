@@ -1,5 +1,6 @@
 import type { ReactNode } from "react";
 import { Link } from "react-router-dom";
+import { Icon, type IconName } from "@/components/icons";
 
 export function PageHeader({
   title,
@@ -102,14 +103,21 @@ export function StatCard({
   value,
   hint,
   to,
+  icon,
 }: {
   label: string;
   value: ReactNode;
   hint?: string;
   to?: string;
+  icon?: IconName;
 }) {
   const body = (
     <>
+      {icon && (
+        <span className="stat-card__icon">
+          <Icon name={icon} size={20} />
+        </span>
+      )}
       <span className="stat-card__label">{label}</span>
       <span className="stat-card__value">{value}</span>
       {hint && <span className="stat-card__hint">{hint}</span>}
@@ -261,5 +269,17 @@ export function Pagination({
         </button>
       </div>
     </div>
+  );
+}
+
+/** "← Applications"-style link back to the parent page: a small arrow badge plus the destination name. */
+export function BackLink({ to, children }: { to: string; children: ReactNode }) {
+  return (
+    <Link to={to} className="back-link">
+      <span className="back-link__icon">
+        <Icon name="arrow" size={14} />
+      </span>
+      {children}
+    </Link>
   );
 }

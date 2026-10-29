@@ -8,6 +8,11 @@ export interface SessionSummary {
   issuedAt: string;
   expiresAt: string;
   current: boolean;
+  // Captured server-side at sign-in; absent on sessions opened before this was recorded.
+  userAgent?: string | null;
+  country?: string | null;
+  region?: string | null;
+  city?: string | null;
 }
 
 const base = () => config.tenantSvcUrl;

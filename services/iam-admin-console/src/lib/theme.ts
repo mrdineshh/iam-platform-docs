@@ -5,7 +5,8 @@ const KEY = "iam-admin-console:theme";
 export function getTheme(): Theme {
   const stored = localStorage.getItem(KEY);
   if (stored === "light" || stored === "dark") return stored;
-  return window.matchMedia?.("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+  // Dark by default: it matches the sign-in page.
+  return "dark";
 }
 
 export function applyTheme(theme: Theme): void {
