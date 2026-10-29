@@ -13,6 +13,7 @@ in its own repo per `CLAUDE.md`'s polyrepo model.
 | `CLAUDE.md` | Original architecture principles (AP-1–AP-8), tech stack, repo list — still authoritative for AP-1–AP-8 and tech stack choices, superseded on service/module breakdown by `BUILD_PLAN.md` |
 | `docs/BRD.md` | Business Requirements Document — full numbered FR/NFR set |
 | `docs/ENGINEERING_GUARDRAILS.md` | Tier 1/2/3 decision framework, error-handling standard, audit schema, Definition of Done |
+| `docs/DEPLOYMENT.md` | **Team handover:** how the platform is deployed, how to ship a change (`scripts/deploy-vm.sh`), access, gotchas, backlog |
 | `docs/DECISIONS.md` | Log of Tier-2/Tier-3 architectural decisions, with rationale and FR/BUILD_PLAN references |
 | `docs/OPEN_QUESTIONS.md` | Tier-3 items awaiting human input — must be empty before a module/service is marked done |
 | `docs/specs/` | Per-module specs written under the original `CLAUDE.md` workflow (pre-pivot) |
