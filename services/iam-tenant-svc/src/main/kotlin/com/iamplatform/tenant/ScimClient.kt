@@ -51,7 +51,9 @@ class ScimClient(
             .followRedirects(HttpClient.Redirect.NEVER)
             .connectTimeout(Duration.ofSeconds(5))
             .build(),
-    ).apply { setReadTimeout(Duration.ofSeconds(10)) }
+    // 30s, not 10: apps that scale to zero (Cloud Run and similar) can take ~11s to answer the first
+    // call after idling. A shorter wait reports "Failed" for a change the app then applies anyway.
+    ).apply { setReadTimeout(Duration.ofSeconds(30)) }
 
     /** Reads the app's ServiceProviderConfig: proves the URL and token work. */
     fun testConnection(baseUrl: String, token: String) {
