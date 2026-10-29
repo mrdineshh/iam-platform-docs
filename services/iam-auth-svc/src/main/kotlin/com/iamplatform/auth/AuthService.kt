@@ -9,7 +9,9 @@ import com.iamplatform.auth.client.RemoteDeviceStatus
 import com.iamplatform.auth.client.RemotePushResult
 import com.iamplatform.auth.client.RemoteUserRole
 import com.iamplatform.auth.client.RemoteUserStatus
+import com.iamplatform.auth.client.GeoResolution
 import com.iamplatform.auth.client.SessionClient
+import com.iamplatform.auth.client.SessionContext
 import com.iamplatform.servicekit.audit.ActorType
 import com.iamplatform.servicekit.audit.AuditEvent
 import com.iamplatform.servicekit.audit.AuditPublisher
@@ -63,7 +65,7 @@ class AuthService(
             throw LoginDeniedException("account suspended", AuthErrorCode.ACCOUNT_SUSPENDED)
         }
 
-        val (country, decision) = resolvePolicy(request.tenantId, userId, verified.groupId, request.sourceIp)
+        val (country, decision, geo) = resolvePolicy(request.tenantId, userId, verified.groupId, request.sourceIp)
         if (!decision.allowed) {
             audit(
                 request.tenantId, userId.toString(), "auth.login_denied", AuditResult.DENIED,
@@ -125,9 +127,13 @@ class AuthService(
         // Not caught -- an issuance failure propagates to GlobalExceptionHandler
         // as a 503 (BUILD_PLAN.md Service 7 TEST GATE: "login fails cleanly
         // with a 503, not a hang or a partial state").
-        val session = sessionClient.issue(request.tenantId, userId, request.sourceIp, idempotencyKey = correlationId)
+        val context = SessionContext(request.userAgent, country, geo?.region, geo?.city)
+        val session = sessionClient.issue(request.tenantId, userId, request.sourceIp, idempotencyKey = correlationId, context = context)
 
-        audit(request.tenantId, userId.toString(), "auth.login_success", AuditResult.SUCCESS, null, request.sourceIp, geo = country)
+        // Where and on what the person signed in, so the audit trail shows it alongside the IP.
+        val place = listOfNotNull(geo?.city, geo?.region, country).joinToString(", ")
+        val where = listOf(place, request.userAgent?.take(120).orEmpty()).filter { it.isNotBlank() }.joinToString(" | ").ifBlank { null }
+        audit(request.tenantId, userId.toString(), "auth.login_success", AuditResult.SUCCESS, where, request.sourceIp, geo = country)
 
         return LoginResponse(session.token, session.sessionId, session.expiresAt, role = (verified.role ?: RemoteUserRole.USER).name)
     }
@@ -161,7 +167,7 @@ class AuthService(
             throw LoginDeniedException("account suspended", AuthErrorCode.ACCOUNT_SUSPENDED)
         }
 
-        val (country, decision) = resolvePolicy(request.tenantId, userId, verified.groupId, request.sourceIp)
+        val (country, decision, _) = resolvePolicy(request.tenantId, userId, verified.groupId, request.sourceIp)
         if (!decision.allowed) {
             audit(
                 request.tenantId, userId.toString(), "auth.login_denied", AuditResult.DENIED,
@@ -203,7 +209,7 @@ class AuthService(
     }
 
     /** Shared by login() and precheck() -- resolves geo + merged policy, including mfaRequired. */
-    private fun resolvePolicy(tenantId: UUID, userId: UUID, groupId: UUID?, sourceIp: String): Pair<String?, PolicyDecision> {
+    private fun resolvePolicy(tenantId: UUID, userId: UUID, groupId: UUID?, sourceIp: String): Triple<String?, PolicyDecision, GeoResolution?> {
         // Section 4.6: iam-geo-svc unreachable -> unresolved/high-risk, never
         // an automatic pass. Caught here, not left to propagate, so an
         // infra blip on the geo lookup degrades to a denial, not a 503.
@@ -223,7 +229,7 @@ class AuthService(
                 )
             }
         }
-        return country to decision
+        return Triple(country, decision, geo)
     }
 
     /** Null return means the second factor passed; a non-null pair is (reason, errorCode) for the denial. */

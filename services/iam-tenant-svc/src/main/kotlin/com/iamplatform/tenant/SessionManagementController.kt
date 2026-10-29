@@ -26,6 +26,12 @@ data class SessionSummary(
     // True for the session making this very request -- lets the UI label it
     // "This session" and keeps users from signing themselves out by accident.
     val current: Boolean,
+    // Where and on what the session was opened, captured server-side at sign-in. Null for sessions
+    // opened before this was recorded.
+    val userAgent: String? = null,
+    val country: String? = null,
+    val region: String? = null,
+    val city: String? = null,
 )
 
 data class RevokedSessionsResponse(val revoked: Int)
@@ -136,7 +142,10 @@ class SessionManagementController(
     }
 
     private fun RemoteSessionRecord.toSummary(callerSessionId: UUID) =
-        SessionSummary(sessionId, sourceIp, deviceId, issuedAt, expiresAt, current = sessionId == callerSessionId)
+        SessionSummary(
+            sessionId, sourceIp, deviceId, issuedAt, expiresAt, current = sessionId == callerSessionId,
+            userAgent = userAgent, country = country, region = region, city = city,
+        )
 
     private fun audit(tenantId: UUID, adminId: UUID, action: String, reason: String, httpRequest: HttpServletRequest) {
         auditPublisher.publish(

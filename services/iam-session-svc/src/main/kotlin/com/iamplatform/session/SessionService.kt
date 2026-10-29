@@ -41,6 +41,10 @@ class SessionService(
             deviceId = request.deviceId,
             issuedAt = now,
             expiresAt = now.plus(properties.ttl),
+            userAgent = request.userAgent,
+            country = request.country,
+            region = request.region,
+            city = request.city,
         )
         redis.opsForValue().set(sessionKey(token), objectMapper.writeValueAsString(session), properties.ttl)
 
@@ -51,7 +55,7 @@ class SessionService(
         redis.opsForSet().add(indexKey, SessionTokens.hash(token))
         redis.expire(indexKey, properties.ttl)
 
-        publish("session.issued", session, reason = "sessionId=${session.sessionId}")
+        publish("session.issued", session, reason = "sessionId=${session.sessionId}" + contextSuffix(session))
         return IssueResult(token, session, replayed = false)
     }
 
@@ -135,6 +139,13 @@ class SessionService(
             throw IdempotencyConflictException("Idempotency-Key was already used with a different request")
         }
         return IssueResult(originalToken, original, replayed = true)
+    }
+
+    /** " | Chennai, Tamil Nadu, IN | Chrome on Windows" -- where and on what the session was opened. */
+    private fun contextSuffix(session: SessionRecord): String {
+        val place = listOfNotNull(session.city, session.region, session.country).joinToString(", ")
+        val parts = listOf(place, session.userAgent?.take(120).orEmpty()).filter { it.isNotBlank() }
+        return if (parts.isEmpty()) "" else " | " + parts.joinToString(" | ")
     }
 
     private fun publish(action: String, session: SessionRecord, reason: String) {

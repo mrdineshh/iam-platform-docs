@@ -18,13 +18,17 @@ class AuthController(
 ) {
 
     @PostMapping("/login")
-    fun login(@Valid @RequestBody request: LoginRequest): ResponseEntity<LoginResponse> =
-        ResponseEntity.ok(authService.login(request))
+    fun login(@Valid @RequestBody request: LoginRequest, servletRequest: HttpServletRequest): ResponseEntity<LoginResponse> {
+        val (ip, userAgent) = ClientContext.resolve(servletRequest, request.sourceIp, request.userAgent)
+        return ResponseEntity.ok(authService.login(request.copy(sourceIp = ip, userAgent = userAgent)))
+    }
 
     // Added for iam-login-portal's multi-step wizard -- see AuthService.precheck.
     @PostMapping("/login/precheck")
-    fun precheck(@Valid @RequestBody request: PrecheckRequest): ResponseEntity<PrecheckResponse> =
-        ResponseEntity.ok(authService.precheck(request))
+    fun precheck(@Valid @RequestBody request: PrecheckRequest, servletRequest: HttpServletRequest): ResponseEntity<PrecheckResponse> {
+        val (ip, userAgent) = ClientContext.resolve(servletRequest, request.sourceIp, request.userAgent)
+        return ResponseEntity.ok(authService.precheck(request.copy(sourceIp = ip, userAgent = userAgent)))
+    }
 
     @PostMapping("/logout")
     fun logout(@RequestHeader("X-Session-Token") token: String): ResponseEntity<Void> {

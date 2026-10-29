@@ -56,7 +56,7 @@ class AuthServiceTest {
         whenever(deviceClient.sendPush(tenantId, userId))
             .thenReturn(PushSendResult(UUID.randomUUID(), RemotePushResult.APPROVED))
         val expiresAt = Instant.now()
-        whenever(sessionClient.issue(eq(tenantId), eq(userId), eq("8.8.8.8"), any()))
+        whenever(sessionClient.issue(eq(tenantId), eq(userId), eq("8.8.8.8"), any(), any()))
             .thenReturn(IssuedSession("tok-123", UUID.randomUUID(), expiresAt))
 
         val result = service.login(request)
@@ -81,7 +81,7 @@ class AuthServiceTest {
         assertEquals("auth.login_failure", captor.firstValue.action)
         assertEquals(AuditResult.FAILURE, captor.firstValue.result)
         verify(geoClient, never()).resolve(any())
-        verify(sessionClient, never()).issue(any(), any(), any(), any())
+        verify(sessionClient, never()).issue(any(), any(), any(), any(), any())
     }
 
     @Test
@@ -109,7 +109,7 @@ class AuthServiceTest {
         val ex = assertThrows<LoginDeniedException> { service.login(request) }
         assertEquals("location could not be verified", ex.message)
         verify(policyClient, never()).evaluate(any(), any(), anyOrNull(), any(), anyOrNull())
-        verify(sessionClient, never()).issue(any(), any(), any(), any())
+        verify(sessionClient, never()).issue(any(), any(), any(), any(), any())
     }
 
     @Test
@@ -124,7 +124,7 @@ class AuthServiceTest {
 
         val ex = assertThrows<LoginDeniedException> { service.login(request) }
         assertEquals("location could not be verified", ex.message)
-        verify(sessionClient, never()).issue(any(), any(), any(), any())
+        verify(sessionClient, never()).issue(any(), any(), any(), any(), any())
     }
 
     @Test
@@ -141,7 +141,7 @@ class AuthServiceTest {
         val captor = argumentCaptor<AuditEvent>()
         verify(auditPublisher).publish(captor.capture())
         assertEquals("TENANT", captor.firstValue.policyScopeApplied)
-        verify(sessionClient, never()).issue(any(), any(), any(), any())
+        verify(sessionClient, never()).issue(any(), any(), any(), any(), any())
     }
 
     @Test
@@ -166,7 +166,7 @@ class AuthServiceTest {
         whenever(policyClient.evaluate(tenantId, userId, null, "US", "8.8.8.8")).thenReturn(EvaluateResponse(allowed = true))
         whenever(deviceClient.sendPush(tenantId, userId))
             .thenReturn(PushSendResult(UUID.randomUUID(), RemotePushResult.APPROVED))
-        whenever(sessionClient.issue(eq(tenantId), eq(userId), eq("8.8.8.8"), any()))
+        whenever(sessionClient.issue(eq(tenantId), eq(userId), eq("8.8.8.8"), any(), any()))
             .thenThrow(CallNotPermittedException.createCallNotPermittedException(
                 io.github.resilience4j.circuitbreaker.CircuitBreaker.ofDefaults("session-svc"),
             ))
@@ -184,7 +184,7 @@ class AuthServiceTest {
         whenever(policyClient.evaluate(tenantId, userId, null, "US", "8.8.8.8")).thenReturn(EvaluateResponse(allowed = true))
         whenever(deviceClient.verifyTotp(tenantId, userId, "123456"))
             .thenReturn(TotpVerifyResult(valid = true, status = RemoteDeviceStatus.ACTIVE))
-        whenever(sessionClient.issue(eq(tenantId), eq(userId), eq("8.8.8.8"), any()))
+        whenever(sessionClient.issue(eq(tenantId), eq(userId), eq("8.8.8.8"), any(), any()))
             .thenReturn(IssuedSession("tok-456", UUID.randomUUID(), Instant.now()))
 
         val result = service.login(totpRequest)
@@ -200,7 +200,7 @@ class AuthServiceTest {
         whenever(geoClient.resolve("8.8.8.8")).thenReturn(GeoResolution("8.8.8.8", resolved = true, country = "US"))
         whenever(policyClient.evaluate(tenantId, userId, null, "US", "8.8.8.8")).thenReturn(EvaluateResponse(allowed = true))
         whenever(deviceClient.sendPush(tenantId, userId)).thenReturn(PushSendResult(UUID.randomUUID(), RemotePushResult.APPROVED))
-        whenever(sessionClient.issue(eq(tenantId), eq(userId), eq("8.8.8.8"), any()))
+        whenever(sessionClient.issue(eq(tenantId), eq(userId), eq("8.8.8.8"), any(), any()))
             .thenReturn(IssuedSession("tok-role", UUID.randomUUID(), Instant.now()))
 
         val result = service.login(request)
@@ -222,7 +222,7 @@ class AuthServiceTest {
 
         assertEquals("invalid second factor code", ex.message)
         assertEquals(AuthErrorCode.TOTP_INVALID, ex.errorCode)
-        verify(sessionClient, never()).issue(any(), any(), any(), any())
+        verify(sessionClient, never()).issue(any(), any(), any(), any(), any())
     }
 
     @Test
@@ -253,7 +253,7 @@ class AuthServiceTest {
 
         assertEquals("second factor denied", ex.message)
         assertEquals(AuthErrorCode.PUSH_DENIED, ex.errorCode)
-        verify(sessionClient, never()).issue(any(), any(), any(), any())
+        verify(sessionClient, never()).issue(any(), any(), any(), any(), any())
     }
 
     @Test
@@ -285,7 +285,7 @@ class AuthServiceTest {
         val ex = assertThrows<LoginDeniedException> { service.login(request) }
 
         assertEquals("second factor unavailable", ex.message)
-        verify(sessionClient, never()).issue(any(), any(), any(), any())
+        verify(sessionClient, never()).issue(any(), any(), any(), any(), any())
     }
 
     @Test
@@ -325,7 +325,7 @@ class AuthServiceTest {
         assertEquals("auth.login_denied", captor.firstValue.action)
         assertEquals(AuditResult.DENIED, captor.firstValue.result)
         verify(geoClient, never()).resolve(any())
-        verify(sessionClient, never()).issue(any(), any(), any(), any())
+        verify(sessionClient, never()).issue(any(), any(), any(), any(), any())
     }
 
     @Test

@@ -21,11 +21,12 @@ MaxMind DB binary format), read via the open-source `com.maxmind.db:maxmind-db`
 reader library. Only `GeoLookupService`'s data source changed — API contract,
 resilience behavior, and every downstream caller are unaffected.
 
-- **Country only, no region/city.** DB-IP's free tier only ships country
-  granularity; `region`/`city` in `GeoResolution` are always `null` now. This
-  matches actual usage — `iam-policy-svc` only implements country-based
-  policy (see its own scope-narrowing note), so no caller currently reads
-  region/city anyway.
+- **City-level data (added 2026-10-29).** The Docker image downloads DB-IP "IP to City Lite" at build
+  time (see the Dockerfile, `GEOIP_DB_PATH`, default `/app/geoip/dbip-city-lite.mmdb`; ~130 MB, so it is
+  not committed) and `GeoResolution` then carries `region` and `city` as well as `country`. Without that file
+  (local runs, tests) the service falls back to the country-only database bundled in the jar and
+  `region`/`city` stay `null`. City accuracy from a free database is approximate: it often points at the
+  nearest large city or the ISP's hub. Rebuild the image monthly to refresh the data.
 - **License:** DB-IP Lite is CC BY 4.0 — attribution required. This product
   includes IP geolocation data created by DB-IP, available from
   https://db-ip.com.

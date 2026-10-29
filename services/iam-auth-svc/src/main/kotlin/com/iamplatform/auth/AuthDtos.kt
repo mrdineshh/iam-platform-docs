@@ -16,16 +16,20 @@ data class LoginRequest(
     @field:NotBlank
     val password: String,
 
-    // MVP-TEMPORARY: client-supplied, not server-derived -- see
-    // docs/DECISIONS.md, Service 7 entry, and contracts/iam-auth-svc.yaml.
-    @field:NotBlank
-    val sourceIp: String,
+    // Only a fallback for trusted internal callers (iam-login-portal derives it server-side). Requests
+    // that arrive through the public reverse proxy carry X-Forwarded-For, which always wins -- see
+    // ClientContext. Optional so clients no longer need to supply (or be trusted for) their own IP.
+    val sourceIp: String = "",
 
     // Added for Service 9 (docs/DECISIONS.md, confirmed with product owner).
     // Present -> TOTP path; absent -> blocking push path. See
     // contracts/iam-auth-svc.yaml for why there's no separate MFA endpoint.
     @field:Pattern(regexp = "^\\d{6}$")
     val totpCode: String? = null,
+
+    // The browser's User-Agent, forwarded by iam-login-portal (whose own request to this service
+    // carries the portal's User-Agent, not the person's). Direct browser callers need not send it.
+    val userAgent: String? = null,
 )
 
 data class LoginResponse(
@@ -62,8 +66,9 @@ data class PrecheckRequest(
     @field:NotBlank
     val password: String,
 
-    @field:NotBlank
-    val sourceIp: String,
+    val sourceIp: String = "",
+
+    val userAgent: String? = null,
 )
 
 data class PrecheckResponse(

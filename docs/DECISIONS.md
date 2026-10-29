@@ -2039,3 +2039,22 @@ any login work itself.
   push, because storing a connection's token needs `secret/data/scim/*` added to
   the `cert-issuer` OpenBao policy (done in `infra/openbao/bootstrap.py`, not yet
   applied on the server; see OQ-11).
+- **2026-10-29 -- Sign-in context is captured on the server: real IP, browser/OS, country, region, city (Tier 2,
+  user-approved; replaces the "MVP-TEMPORARY: client-supplied sourceIp" decision from Service 7).**
+  (1) **IP.** `iam-auth-svc` no longer trusts the `sourceIp` in the login body. `ClientContext` takes the
+  last hop of `X-Forwarded-For` (Caddy overwrites whatever the client sent with the address it saw); only when
+  that header is absent -- a trusted internal caller such as iam-login-portal, which derives the IP itself in
+  server.js -- does it use the body value, then the socket address. The body field stays optional for
+  compatibility. (2) **Browser/OS.** The User-Agent (forwarded by the portal, read from the header for direct
+  browser callers) is stored on the session. (3) **Location.** `iam-geo-svc` now loads DB-IP "IP to City
+  Lite" (CC BY 4.0, attribution required; ~130 MB so downloaded at image build time, not committed; falls
+  back to the bundled country-only file if absent) and returns region and city; auth-svc stores country,
+  region and city on the session, session-svc/tenant-svc pass them through, the admin Sessions dialog and My
+  Security show Location and Device, and the `auth.login_success` / `session.issued` audit reasons carry them.
+  Old sessions show "Not recorded". City accuracy from a free database is approximate (often the nearest big
+  city or the ISP hub); VPN or mobile-carrier addresses show the exit point, not the person.
+  **Residual risk, needs an infrastructure change:** the VM firewall rule `allow-iam-platform-demo` exposes the
+  raw service ports (8082 tenant, 8085 policy, 8087 auth, 8089, 8090, 5173, 3001, 3002) to 0.0.0.0/0, so a caller
+  that skips Caddy and hits e.g. http://<vm-ip>:8087 directly can still send any X-Forwarded-For or sourceIp.
+  Until those ports are closed (only 80/443 should be public; Caddy reaches the services on localhost) the
+  server-side IP is only as trustworthy as that network boundary.

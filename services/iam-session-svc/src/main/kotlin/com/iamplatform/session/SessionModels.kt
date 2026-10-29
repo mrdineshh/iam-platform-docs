@@ -1,6 +1,7 @@
 package com.iamplatform.session
 
 import jakarta.validation.constraints.NotNull
+import jakarta.validation.constraints.Size
 import org.springframework.boot.context.properties.ConfigurationProperties
 import java.time.Duration
 import java.time.Instant
@@ -21,6 +22,12 @@ data class SessionRecord(
     val deviceId: String?,
     val issuedAt: Instant,
     val expiresAt: Instant,
+    // Sign-in context, captured server-side by iam-auth-svc. Added after the first release, so they
+    // are optional: sessions already stored in Valkey simply have none.
+    val userAgent: String? = null,
+    val country: String? = null,
+    val region: String? = null,
+    val city: String? = null,
 )
 
 data class IssueSessionRequest(
@@ -32,6 +39,14 @@ data class IssueSessionRequest(
 
     val sourceIp: String? = null,
     val deviceId: String? = null,
+    @field:Size(max = 512)
+    val userAgent: String? = null,
+    @field:Size(max = 8)
+    val country: String? = null,
+    @field:Size(max = 128)
+    val region: String? = null,
+    @field:Size(max = 128)
+    val city: String? = null,
 )
 
 data class IssueResult(

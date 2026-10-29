@@ -79,6 +79,10 @@ data class RemoteSessionRecord(
     val deviceId: String?,
     val issuedAt: Instant,
     val expiresAt: Instant,
+    val userAgent: String? = null,
+    val country: String? = null,
+    val region: String? = null,
+    val city: String? = null,
 )
 
 class SessionNotFoundForRevokeException : RuntimeException("Session not found, expired, or already ended")

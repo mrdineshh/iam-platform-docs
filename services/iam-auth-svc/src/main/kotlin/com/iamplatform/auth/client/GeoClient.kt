@@ -8,7 +8,13 @@ import org.springframework.beans.factory.annotation.Value
 import org.springframework.stereotype.Component
 import org.springframework.web.client.RestClient
 
-data class GeoResolution(val ip: String, val resolved: Boolean, val country: String? = null)
+data class GeoResolution(
+    val ip: String,
+    val resolved: Boolean,
+    val country: String? = null,
+    val region: String? = null,
+    val city: String? = null,
+)
 
 @Component
 class GeoClient(
