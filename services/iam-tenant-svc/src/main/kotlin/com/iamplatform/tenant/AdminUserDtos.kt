@@ -27,6 +27,11 @@ data class CreateUserRequest(
     // Workspace happens to be configured for the tenant. Default true so
     // existing callers (and the common case) keep working unchanged.
     val createInGoogleWorkspace: Boolean = true,
+
+    // Added 2026-11-04 so the admin picks the Workspace plan instead of it always being Business
+    // Starter -- null (or an unrecognized skuId) falls back to GoogleWorkspaceLicensePlan.DEFAULT,
+    // so existing callers keep getting today's behavior unchanged.
+    val googleWorkspaceLicenseSkuId: String? = null,
 )
 
 data class CreatedUserResponse(
@@ -46,6 +51,10 @@ data class CreatedUserResponse(
     // best-effort, not a hard dependency of the core flow.
     val googleWorkspaceProvisioned: Boolean = false,
     val googleWorkspaceError: String? = null,
+    // Best-effort, same contract as googleWorkspaceProvisioned above: only attempted when the
+    // Workspace account itself was created successfully, and never fails user creation on its own.
+    val googleWorkspaceLicenseAssigned: Boolean = false,
+    val googleWorkspaceLicenseError: String? = null,
     // One entry per SCIM-connected app the new user was pushed to.
     val appProvisioning: List<TargetResult> = emptyList(),
 )

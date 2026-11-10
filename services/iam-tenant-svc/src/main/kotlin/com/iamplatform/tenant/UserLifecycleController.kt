@@ -48,6 +48,7 @@ class UserLifecycleController(
     private val provisioningService: ProvisioningService,
     private val scimConnectionService: ScimConnectionService,
     private val auditPublisher: AuditPublisher,
+    private val deviceClient: DeviceClient,
 ) {
     @PostMapping("/{id}/suspend")
     fun suspend(
@@ -64,6 +65,42 @@ class UserLifecycleController(
         @RequestHeader("X-Session-Token") sessionToken: String,
         httpRequest: HttpServletRequest,
     ): ResponseEntity<LifecycleResponse> = ResponseEntity.ok(change(id, tenantId, sessionToken, httpRequest, suspend = false))
+
+    /**
+     * "Lost phone" recovery: deletes the user's enrolled authenticator without ever decrypting or
+     * returning the old secret to the admin or anyone else -- see DeviceClient.resetDevice and
+     * DeviceService.resetDevice for why that boundary matters. The user is left with no second factor;
+     * iam-auth-svc's existing first-login enrollment path shows THEM a fresh QR the next time they sign
+     * in needing one, same as original setup. Does not end sessions or change status -- unlike suspend,
+     * this isn't a security action against the user, so an admin may use it on their own account too.
+     */
+    @PostMapping("/{id}/reset-2fa")
+    fun resetTwoFactor(
+        @PathVariable id: UUID,
+        @RequestParam tenantId: UUID,
+        @RequestHeader("X-Session-Token") sessionToken: String,
+        httpRequest: HttpServletRequest,
+    ): ResponseEntity<Void> {
+        adminAccessGuard.requireTenantAdmin(sessionToken, tenantId)
+        val admin = adminAccessGuard.requireValidSession(sessionToken)
+        val user = requireUserInTenant(id, tenantId)
+
+        deviceClient.resetDevice(tenantId, id)
+
+        auditPublisher.publish(
+            AuditEvent(
+                correlationId = CorrelationId.get(),
+                tenantId = tenantId,
+                actorType = ActorType.ADMIN,
+                actorId = admin.userId.toString(),
+                action = "identity.2fa_reset_by_admin",
+                result = AuditResult.SUCCESS,
+                reason = "targetUser=$id (${user.email})",
+                sourceIp = httpRequest.remoteAddr,
+            ),
+        )
+        return ResponseEntity.noContent().build()
+    }
 
     // Where each integrated app stands for one user, with the last error if a push failed.
     @GetMapping("/{id}/provisioning")

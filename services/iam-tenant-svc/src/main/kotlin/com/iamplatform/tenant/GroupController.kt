@@ -1,5 +1,6 @@
 package com.iamplatform.tenant
 
+import jakarta.servlet.http.HttpServletRequest
 import jakarta.validation.Valid
 import jakarta.validation.constraints.NotBlank
 import jakarta.validation.constraints.NotNull
@@ -45,6 +46,7 @@ class GroupController(
     private val adminAccessGuard: AdminAccessGuard,
     private val oidcClientGroupRepository: OidcClientGroupRepository,
     private val samlSpGroupRepository: SamlSpGroupRepository,
+    private val groupPushService: GoogleWorkspaceGroupPushService,
 ) {
     @PostMapping
     fun createGroup(
@@ -72,7 +74,13 @@ class GroupController(
         @RequestHeader("X-Session-Token") sessionToken: String,
     ): ResponseEntity<RemoteUser> {
         adminAccessGuard.requireTenantAdmin(sessionToken, tenantId)
-        return ResponseEntity.ok(groupClient.assignGroup(userId, request.groupId))
+        val result = groupClient.assignGroup(userId, request.groupId)
+        // Best-effort, never fails this request -- see onMemberAssigned's own doc comment. Only fires
+        // when actually JOINING a group (a non-null groupId), not when leaving one.
+        if (request.groupId != null) {
+            groupPushService.onMemberAssigned(tenantId, request.groupId, result.email)
+        }
+        return ResponseEntity.ok(result)
     }
 
     // Also drops this group's oidc_client_groups / saml_sp_groups rows --
@@ -88,6 +96,23 @@ class GroupController(
         groupClient.deleteGroup(id)
         oidcClientGroupRepository.deleteByGroupId(id)
         samlSpGroupRepository.deleteByGroupId(id)
+        return ResponseEntity.noContent().build()
+    }
+
+    // Separate from deleteGroup above on purpose -- deleting the IAM group never touches Google on
+    // its own (see GoogleWorkspaceGroupPushService's doc comment); this is the explicit, admin-chosen
+    // cleanup step for the matching Google OU, callable independently of whether the IAM group itself
+    // is deleted. Google refuses to delete a non-empty OU -- that surfaces as a normal error here.
+    @DeleteMapping("/{id}/org-unit")
+    fun deleteGroupOrgUnit(
+        @PathVariable id: UUID,
+        @RequestParam tenantId: UUID,
+        @RequestHeader("X-Session-Token") sessionToken: String,
+        httpRequest: HttpServletRequest,
+    ): ResponseEntity<Void> {
+        adminAccessGuard.requireTenantAdmin(sessionToken, tenantId)
+        val admin = adminAccessGuard.requireValidSession(sessionToken)
+        groupPushService.deleteOrgUnitForGroup(tenantId, id, admin.userId, httpRequest.remoteAddr)
         return ResponseEntity.noContent().build()
     }
 }

@@ -12,9 +12,27 @@ export interface CreatedUser {
   provisioningUri: string;
   googleWorkspaceProvisioned: boolean;
   googleWorkspaceError: string | null;
+  googleWorkspaceLicenseAssigned: boolean;
+  googleWorkspaceLicenseError: string | null;
   // One entry per SCIM-connected app the new user was pushed to.
   appProvisioning: TargetResult[];
 }
+
+// Mirrors GoogleWorkspaceLicensePlan in iam-tenant-svc -- keep in sync if a plan is added there.
+export const GOOGLE_WORKSPACE_LICENSE_PLANS = [
+  { skuId: "1010020027", label: "Business Starter" },
+  { skuId: "1010020028", label: "Business Standard" },
+  { skuId: "1010020025", label: "Business Plus" },
+  { skuId: "1010020029", label: "Enterprise Starter" },
+  { skuId: "1010020026", label: "Enterprise Standard" },
+  { skuId: "1010020020", label: "Enterprise Plus" },
+  { skuId: "1010060003", label: "Enterprise Essentials" },
+  { skuId: "1010060005", label: "Enterprise Essentials Plus" },
+  { skuId: "1010020030", label: "Frontline Starter" },
+  { skuId: "1010020031", label: "Frontline Standard" },
+] as const;
+
+export const DEFAULT_GOOGLE_WORKSPACE_LICENSE_SKU_ID = "1010020027"; // Business Starter
 
 /**
  * Proxies through iam-tenant-svc's new admin-gated /api/v1/admin/users
@@ -29,10 +47,11 @@ export async function createUser(
   role: "ADMIN" | "USER",
   sessionToken: string,
   createInGoogleWorkspace: boolean = true,
+  googleWorkspaceLicenseSkuId: string = DEFAULT_GOOGLE_WORKSPACE_LICENSE_SKU_ID,
 ): Promise<CreatedUser> {
   return http.post<CreatedUser>(
     `${config.tenantSvcUrl}/api/v1/admin/users`,
-    { tenantId, email, displayName, password, role, createInGoogleWorkspace },
+    { tenantId, email, displayName, password, role, createInGoogleWorkspace, googleWorkspaceLicenseSkuId },
     // Longer than the default: creating a user also contacts Google and each connected app.
     { sessionToken, timeoutMs: 60_000 },
   );
@@ -78,6 +97,17 @@ export function reactivateUser(tenantId: string, userId: string, sessionToken: s
     `${config.tenantSvcUrl}/api/v1/admin/users/${userId}/reactivate?tenantId=${encodeURIComponent(tenantId)}`,
     {},
     { sessionToken, timeoutMs: 60_000 },
+  );
+}
+
+// "Lost phone" recovery: deletes this user's enrolled authenticator. Nobody -- not this admin, not
+// anyone -- ever sees the old secret; the user gets a brand-new QR, unseen by us, the next time they
+// sign in needing a code. Doesn't suspend them or end their sessions.
+export async function resetUserTwoFactor(tenantId: string, userId: string, sessionToken: string): Promise<void> {
+  await http.post<void>(
+    `${config.tenantSvcUrl}/api/v1/admin/users/${userId}/reset-2fa?tenantId=${encodeURIComponent(tenantId)}`,
+    {},
+    { sessionToken },
   );
 }
 

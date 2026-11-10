@@ -39,3 +39,13 @@ export async function deleteGroup(tenantId: string, groupId: string, sessionToke
     { sessionToken },
   );
 }
+
+// Separate from deleteGroup above -- deleting the IAM group never touches Google on its own. This is
+// the explicit cleanup step for the matching Google OU (see GroupController.deleteGroupOrgUnit).
+// Google refuses to delete a non-empty OU -- that comes back as a normal error from this call.
+export async function deleteGroupOrgUnit(tenantId: string, groupId: string, sessionToken: string): Promise<void> {
+  await http.delete(
+    `${config.tenantSvcUrl}/api/v1/admin/groups/${groupId}/org-unit?tenantId=${encodeURIComponent(tenantId)}`,
+    { sessionToken },
+  );
+}

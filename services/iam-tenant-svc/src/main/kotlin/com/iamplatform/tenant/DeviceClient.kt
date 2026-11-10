@@ -40,4 +40,9 @@ class DeviceClient(
 
     fun verifyTotp(tenantId: UUID, userId: UUID, code: String): RemoteTotpVerifyResponse =
         client.post("/api/v1/devices/totp/verify", RemoteTotpVerifyRequest(tenantId, userId, code), RemoteTotpVerifyResponse::class.java)
+
+    // Admin "lost phone" reset -- see UserLifecycleController.resetTwoFactor. Never returns or reveals
+    // the old secret; the user just gets a fresh QR from the normal first-login path next time they sign in.
+    fun resetDevice(tenantId: UUID, userId: UUID): Unit =
+        client.delete("/api/v1/devices/$tenantId/$userId")
 }

@@ -8,4 +8,8 @@ interface DeviceRepository : JpaRepository<DeviceEntity, UUID> {
     fun findFirstByTenantIdAndUserIdOrderByCreatedAtDesc(tenantId: UUID, userId: UUID): DeviceEntity?
 
     fun findFirstByTenantIdAndUserIdAndFcmTokenIsNotNullOrderByCreatedAtDesc(tenantId: UUID, userId: UUID): DeviceEntity?
+
+    /** Admin-triggered "lost phone" reset -- deletes every row for this user (active or pending), not just
+     *  the newest, so no stray secret is left behind. Returns how many were deleted (0 is not an error). */
+    fun deleteByTenantIdAndUserId(tenantId: UUID, userId: UUID): Long
 }

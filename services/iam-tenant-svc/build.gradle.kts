@@ -39,6 +39,12 @@ dependencies {
     implementation("org.jetbrains.kotlin:kotlin-reflect")
     implementation("tools.jackson.module:jackson-module-kotlin")
     implementation("org.springframework.security:spring-security-crypto")
+    // Renders the QR code embedded in an OU-sync invite email (GoogleWorkspaceOuProvisioningService).
+    // A real QR/barcode encoder, not hand-rolled (unlike this service's small hand-rolled JWT/JSON
+    // helpers elsewhere) -- the 2D barcode spec itself is substantial, well-standardized, and this is
+    // the de-facto standard Java implementation; writing one from scratch would be needless risk for
+    // something that must scan correctly on a phone camera.
+    implementation("com.google.zxing:core:3.5.3")
     // Argon2PasswordEncoder needs BouncyCastle at runtime -- spring-security-crypto
     // declares it optional (same fix as iam-identity-svc, Service 7).
     runtimeOnly("org.bouncycastle:bcprov-jdk18on:1.79")

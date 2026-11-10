@@ -1,8 +1,10 @@
 import { useEffect, useState } from "react";
+import { Link } from "react-router-dom";
 import { getGoogleWorkspaceConfig, setGoogleWorkspaceConfig, type GoogleWorkspaceConfig } from "@/lib/googleWorkspace";
 import { loadSession } from "@/lib/session";
 import { UpstreamError } from "@/lib/http";
 import { Alert, PageHeader, PendingLabel, SkeletonRows, StatusBadge } from "@/components/ui";
+import { Icon } from "@/components/icons";
 import { useToast } from "@/components/feedback";
 
 /**
@@ -96,6 +98,19 @@ export function GoogleWorkspaceSettingsPage() {
               ) : null}
               . To change anything, re-enter the service account key below and save.
             </Alert>
+          )}
+
+          {existing && (
+            <Link to="/google-workspace/organizational-units" className="card card--padded ou-link">
+              <span className="ou-link__icon">
+                <Icon name="groups" size={20} />
+              </span>
+              <span>
+                <strong className="card__title">Browse organizational units</strong>
+                <span className="card__desc">A live, read-only view of your org units and who's in each one.</span>
+              </span>
+              <Icon name="arrow" size={16} />
+            </Link>
           )}
 
           {error && <Alert kind="error">{error}</Alert>}

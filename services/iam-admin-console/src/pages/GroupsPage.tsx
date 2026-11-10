@@ -1,8 +1,9 @@
 import { useEffect, useState } from "react";
-import { listGroups, createGroup, assignUserToGroup, deleteGroup, type Group } from "@/lib/groups";
+import { listGroups, createGroup, assignUserToGroup, deleteGroup, deleteGroupOrgUnit, type Group } from "@/lib/groups";
 import { getPolicy, putPolicy, type Policy } from "@/lib/policy";
 import { listTenantUsers, type AdminUserListEntry } from "@/lib/impersonate";
 import { getAppGroups, setAppGroups, type AppKind } from "@/lib/appGroups";
+import { pushGroupToOrgUnit } from "@/lib/googleWorkspace";
 import { listClients } from "@/lib/oidcClients";
 import { listSamlSps } from "@/lib/samlSps";
 import { loadSession } from "@/lib/session";
@@ -80,13 +81,13 @@ export function GroupsPage() {
     e.preventDefault();
     setError(null);
     if (!newGroupName.trim()) {
-      setError("Enter a group name.");
+      setError("Enter an OU name.");
       return;
     }
     try {
       await createGroup(session.tenantId, newGroupName.trim(), session.token);
       setNewGroupName("");
-      toast.success("Group created.");
+      toast.success("OU created.");
       await refresh(false);
     } catch (err) {
       toast.error(errorMessage(err));
@@ -107,13 +108,13 @@ export function GroupsPage() {
     const ok = await confirm({
       title: `Delete "${group.name}"?`,
       message: "Its members will be unassigned and its app access removed. The users and apps themselves are not deleted.",
-      confirmLabel: "Delete group",
+      confirmLabel: "Delete OU",
       danger: true,
     });
     if (!ok) return;
     try {
       await deleteGroup(session.tenantId, group.id, session.token);
-      toast.success("Group deleted.");
+      toast.success("OU deleted.");
       await refresh(false);
     } catch (err) {
       toast.error(errorMessage(err));
@@ -131,23 +132,23 @@ export function GroupsPage() {
   return (
     <main className="page">
       <PageHeader
-        title="Groups"
-        subtitle="A group decides which apps its members can open, whether they need 2FA, and which IP ranges they can sign in from. These apply on top of the tenant-wide policy unless it marks a setting as a hard cap."
+        title="OUs"
+        subtitle="An OU decides which apps its members can open, whether they need 2FA, and which IP ranges they can sign in from. These apply on top of the tenant-wide policy unless it marks a setting as a hard cap."
       />
 
       {error && <Alert kind="error">{error}</Alert>}
 
       <form className="inline-form" style={{ marginTop: 0 }} onSubmit={(e) => void handleCreateGroup(e)}>
-        <input placeholder="New group name (e.g. Finance)" value={newGroupName} onChange={(e) => setNewGroupName(e.target.value)} />
-        <button type="submit">+ Create group</button>
+        <input placeholder="New OU name (e.g. Finance)" value={newGroupName} onChange={(e) => setNewGroupName(e.target.value)} />
+        <button type="submit">+ Create OU</button>
       </form>
 
       {loading ? (
         <SkeletonRows rows={3} />
       ) : groups.length === 0 ? (
         <EmptyState
-          title="No groups yet"
-          description="Create a group above, then tick the apps its members should be able to open."
+          title="No OUs yet"
+          description="Create an OU above, then tick the apps its members should be able to open."
         />
       ) : (
         groups.map((g) => (
@@ -166,16 +167,16 @@ export function GroupsPage() {
       )}
 
       <div className="section-title">
-        <h2>Users with no group</h2>
+        <h2>Users with no OU</h2>
       </div>
       {loading ? null : unassigned.length === 0 ? (
-        <EmptyState title="Everyone is in a group" description="Users without a group can't open any apps." />
+        <EmptyState title="Everyone is in an OU" description="Users without an OU can't open any apps." />
       ) : (
         <>
         <TableToolbar
           query={unassignedTable.query}
           onQuery={unassignedTable.setQuery}
-          placeholder="Search users without a group"
+          placeholder="Search users without an OU"
           summary={`${unassignedTable.filteredCount} of ${unassignedTable.total}`}
         />
         <div className="card table-card">
@@ -183,7 +184,7 @@ export function GroupsPage() {
             <thead>
               <tr>
                 <th>User</th>
-                <th>Assign to group</th>
+                <th>Assign to OU</th>
               </tr>
             </thead>
             <tbody>
@@ -206,7 +207,7 @@ export function GroupsPage() {
                     <td>
                       <select defaultValue="" onChange={(e) => void handleAssign(u.id, e.target.value)}>
                         <option value="" disabled>
-                          Choose a group…
+                          Choose an OU…
                         </option>
                         {groups.map((g) => (
                           <option key={g.id} value={g.id}>
@@ -255,10 +256,13 @@ function GroupCard({
 }) {
   const [policy, setPolicy] = useState<Policy | null>(null);
   const [mfaRequired, setMfaRequired] = useState<"" | "true" | "false">("");
-  const [allowedCidrs, setAllowedCidrs] = useState("");
-  const [blockedCidrs, setBlockedCidrs] = useState("");
+  const [allowedCidrs, setAllowedCidrs] = useState<string[]>([""]);
+  const [blockedCidrs, setBlockedCidrs] = useState<string[]>([""]);
   const toast = useToast();
+  const confirm = useConfirm();
   const [savingPolicy, setSavingPolicy] = useState(false);
+  const [pushingToGoogle, setPushingToGoogle] = useState(false);
+  const [deletingOu, setDeletingOu] = useState(false);
 
   // Per-app "is this app assigned to this group" state, keyed by app id.
   // Loaded from the same getAppGroups/setAppGroups endpoints ClientsPage
@@ -274,8 +278,8 @@ function GroupCard({
       setPolicy(p);
       if (p) {
         setMfaRequired(p.mfaRequired === null ? "" : p.mfaRequired ? "true" : "false");
-        setAllowedCidrs((p.allowedCidrs ?? []).join(", "));
-        setBlockedCidrs((p.blockedCidrs ?? []).join(", "));
+        setAllowedCidrs(p.allowedCidrs && p.allowedCidrs.length > 0 ? p.allowedCidrs : [""]);
+        setBlockedCidrs(p.blockedCidrs && p.blockedCidrs.length > 0 ? p.blockedCidrs : [""]);
       }
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -331,16 +335,84 @@ function GroupCard({
           scope: "OU",
           scopeId: group.id,
           mfaRequired: mfaRequired === "" ? null : mfaRequired === "true",
-          allowedCidrs: toList(allowedCidrs),
-          blockedCidrs: toList(blockedCidrs),
+          allowedCidrs: toList(allowedCidrs.join(", ")),
+          blockedCidrs: toList(blockedCidrs.join(", ")),
         },
         sessionToken,
       );
-      toast.success("Group policy saved.");
+      toast.success("OU policy saved.");
     } catch (err) {
       onError(errorMessage(err));
     } finally {
       setSavingPolicy(false);
+    }
+  }
+
+  // Pushes this group INTO Google as an OU -- the reverse of the Organizational units page's sync
+  // button. See GoogleWorkspaceGroupPushService's doc comment (iam-tenant-svc): moves current members
+  // into the OU (creating it first if needed), never creates a Google account, never removes anyone
+  // from the OU later just because they left the group. A real structural move on Google's side --
+  // OU-scoped Google policies (2-Step Verification, SSO profiles) can apply differently afterward.
+  async function pushToGoogle() {
+    const ok = await confirm({
+      title: "Push this OU to Google Workspace?",
+      message: (
+        <>
+          Every current member of <strong>{group.name}</strong> who has a Google account on your configured
+          domain will be moved into a Google org unit named <strong>{group.name}</strong> (created if it
+          doesn't exist yet). This changes their real organizational unit in Google, which can change which
+          Google-side policies apply to them (2-Step Verification, SSO). Members without a matching Google
+          account are skipped, not created.
+        </>
+      ),
+      confirmLabel: "Push to Google",
+      danger: true,
+    });
+    if (!ok) return;
+
+    setPushingToGoogle(true);
+    try {
+      const result = await pushGroupToOrgUnit(tenantId, group.id, sessionToken);
+      const lead = `${result.created ? "Created" : "Reused"} ${result.orgUnitPath} in Google; moved ${result.moved.length} member${result.moved.length === 1 ? "" : "s"}.`;
+      if (result.skipped.length > 0) {
+        toast.error(`${lead} ${result.skipped.length} member${result.skipped.length === 1 ? "" : "s"} skipped (no matching Google account): ${result.skipped.join(", ")}.`);
+      } else {
+        toast.success(lead);
+      }
+    } catch (err) {
+      onError(errorMessage(err));
+    } finally {
+      setPushingToGoogle(false);
+    }
+  }
+
+  // Separate from deleting the IAM group -- deleting the group never touches Google on its own (see
+  // GroupController.deleteGroup / GoogleWorkspaceGroupPushService). Google refuses to delete a
+  // non-empty OU, so this will fail with a clear message unless everyone's already been moved out.
+  async function deleteOu() {
+    const ok = await confirm({
+      title: "Delete this OU's Google org unit?",
+      message: (
+        <>
+          Deletes the Google org unit named <strong>{group.name}</strong>, if one exists. This does not delete
+          or suspend anyone's Google account, and does not delete this OU in IAM. Google will refuse this if the
+          org unit still has anyone in it -- move everyone out first (push them to a different OU's Google org
+          unit, or move them in Google directly).
+        </>
+      ),
+      confirmLabel: "Delete org unit",
+      danger: true,
+    });
+    if (!ok) return;
+
+    setDeletingOu(true);
+    try {
+      await deleteGroupOrgUnit(tenantId, group.id, sessionToken);
+      toast.success(`Deleted (or confirmed absent) the Google org unit for ${group.name}.`);
+    } catch (err) {
+      onError(errorMessage(err));
+    } finally {
+      setDeletingOu(false);
     }
   }
 
@@ -353,13 +425,21 @@ function GroupCard({
         <h3>
           {group.name} <StatusBadge tone="neutral">{members.length} member{members.length === 1 ? "" : "s"}</StatusBadge>
         </h3>
-        <button type="button" className="btn-danger btn-sm" onClick={() => onDelete(group)}>
-          Delete group
-        </button>
+        <div className="row-actions">
+          <button type="button" className="btn-secondary btn-sm" disabled={pushingToGoogle} onClick={() => void pushToGoogle()}>
+            <PendingLabel pending={pushingToGoogle} idle="Push to Google as OU" busy="Pushing…" />
+          </button>
+          <button type="button" className="btn-danger btn-sm" disabled={deletingOu} onClick={() => void deleteOu()}>
+            <PendingLabel pending={deletingOu} idle="Delete Google OU" busy="Deleting…" />
+          </button>
+          <button type="button" className="btn-danger btn-sm" onClick={() => onDelete(group)}>
+            Delete OU
+          </button>
+        </div>
       </div>
 
       <div className="group-card__section" style={{ marginTop: 0, paddingTop: 0, borderTop: "none" }}>
-        <h4 className="group-card__section-title">Apps this group can open</h4>
+        <h4 className="group-card__section-title">Apps this OU can open</h4>
         {appError && <Alert kind="error">{appError}</Alert>}
         {appAssigned === null ? (
           <div className="skeleton skeleton--row" />
@@ -388,7 +468,7 @@ function GroupCard({
         <form onSubmit={(e) => void savePolicy(e)} className="policy-form" style={{ maxWidth: "none" }}>
           <div className="form-grid">
             <label className="login-form__field">
-              2FA for this group
+              2FA for this OU
               <select value={mfaRequired} onChange={(e) => setMfaRequired(e.target.value as "" | "true" | "false")}>
                 <option value="">Inherit from tenant policy</option>
                 <option value="true">Required (2FA)</option>
@@ -396,23 +476,23 @@ function GroupCard({
               </select>
             </label>
             <span />
-            <label className="login-form__field">
-              Allowed IP ranges (CIDR, comma-separated; blank allows any IP)
-              <input value={allowedCidrs} onChange={(e) => setAllowedCidrs(e.target.value)} placeholder="203.0.113.0/24" />
-            </label>
-            <label className="login-form__field">
-              Blocked IP ranges (CIDR, comma-separated)
-              <input value={blockedCidrs} onChange={(e) => setBlockedCidrs(e.target.value)} />
-            </label>
+            <div className="login-form__field form-grid__full">
+              Allowed IP ranges (blank allows any IP)
+              <CidrRangeRows values={allowedCidrs} onChange={setAllowedCidrs} placeholder="203.0.113.0/24" />
+            </div>
+            <div className="login-form__field form-grid__full">
+              Blocked IP ranges
+              <CidrRangeRows values={blockedCidrs} onChange={setBlockedCidrs} placeholder="198.51.100.0/24" />
+            </div>
           </div>
           {policy === null && (
             <p className="hint" style={{ margin: 0 }}>
-              No policy saved yet for this group, so it follows the tenant-wide policy.
+              No policy saved yet for this OU, so it follows the tenant-wide policy.
             </p>
           )}
           <div className="form-actions" style={{ marginTop: 4 }}>
             <button type="submit" disabled={savingPolicy}>
-              <PendingLabel pending={savingPolicy} idle="Save group policy" busy="Saving…" />
+              <PendingLabel pending={savingPolicy} idle="Save OU policy" busy="Saving…" />
             </button>
           </div>
         </form>
@@ -453,6 +533,47 @@ function GroupCard({
         </select>
       </div>
     </section>
+  );
+}
+
+/**
+ * One row per IP range instead of a single comma-separated box -- makes it practical to build up a
+ * list of office/location ranges (Delhi, Mumbai, a VPN exit, ...) one at a time without having to
+ * punctuate a long string by hand. Still saved as the same plain comma-separated list the policy
+ * engine has always taken; this only changes how it's edited, not how it's stored.
+ */
+function CidrRangeRows({
+  values,
+  onChange,
+  placeholder,
+}: {
+  values: string[];
+  onChange: (next: string[]) => void;
+  placeholder?: string;
+}) {
+  return (
+    <>
+      {values.map((v, i) => (
+        <div className="setup-form__repeat-row" key={i}>
+          <input
+            value={v}
+            onChange={(e) => onChange(values.map((old, idx) => (idx === i ? e.target.value : old)))}
+            placeholder={placeholder}
+          />
+          <button
+            type="button"
+            className="btn-secondary"
+            onClick={() => onChange(values.filter((_, idx) => idx !== i))}
+            disabled={values.length === 1}
+          >
+            &minus;
+          </button>
+        </div>
+      ))}
+      <button type="button" className="btn-secondary" onClick={() => onChange([...values, ""])}>
+        + Add another range
+      </button>
+    </>
   );
 }
 

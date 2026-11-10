@@ -12,6 +12,8 @@ import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.assertThrows
 import org.mockito.kotlin.any
 import org.mockito.kotlin.mock
+import org.mockito.kotlin.verify
+import org.mockito.kotlin.verifyNoInteractions
 import org.mockito.kotlin.whenever
 import java.time.Instant
 import java.util.UUID
@@ -63,7 +65,7 @@ class DeviceServiceTest {
 
     @Test
     fun `enroll rejects a user that belongs to a different tenant`() {
-        whenever(identityClient.findUser(userId)).thenReturn(RemoteUser(userId, UUID.randomUUID()))
+        whenever(identityClient.findUser(userId)).thenReturn(RemoteUser(userId, UUID.randomUUID(), "ada@econz.net"))
 
         assertThrows<UserNotFoundException> {
             service.enroll(EnrollDeviceRequest(tenantId, userId))
@@ -72,7 +74,7 @@ class DeviceServiceTest {
 
     @Test
     fun `enroll creates a PENDING device and returns the raw secret exactly once`() {
-        whenever(identityClient.findUser(userId)).thenReturn(RemoteUser(userId, tenantId))
+        whenever(identityClient.findUser(userId)).thenReturn(RemoteUser(userId, tenantId, "ada@econz.net"))
         whenever(totpCrypto.encrypt(eq(tenantId), any())).thenReturn(EncryptedSecret(ByteArray(1), ByteArray(1)))
         whenever(repository.save(any())).thenAnswer { it.arguments[0] }
 
@@ -203,6 +205,24 @@ class DeviceServiceTest {
         assertThrows<ChallengeNotFoundException> {
             service.respondToPush(PushRespondRequest(challengeId, true))
         }
+    }
+
+    @Test
+    fun `resetDevice deletes every row for the user and never touches the crypto or audit layer`() {
+        service.resetDevice(tenantId, userId)
+
+        verify(repository).deleteByTenantIdAndUserId(tenantId, userId)
+        verifyNoInteractions(totpCrypto)
+        verifyNoInteractions(auditPublisher)
+    }
+
+    @Test
+    fun `resetDevice is not an error when the user has no device enrolled`() {
+        whenever(repository.deleteByTenantIdAndUserId(tenantId, userId)).thenReturn(0L)
+
+        service.resetDevice(tenantId, userId)
+
+        verify(repository).deleteByTenantIdAndUserId(tenantId, userId)
     }
 
     private fun <T> eq(value: T): T = org.mockito.kotlin.eq(value)

@@ -204,6 +204,20 @@ class DeviceService(
         return PushSendResponse(challenge.challengeId, result)
     }
 
+    /**
+     * Admin-triggered "lost phone" reset (iam-tenant-svc only -- there is no self-service or end-user
+     * path to this). Deletes every device row for the user, active or pending, WITHOUT ever decrypting
+     * or returning the old secret to anyone -- that distinction is the whole point: this lets an admin
+     * recover a locked-out user without ever being able to see or export a live authenticator secret.
+     * The user is simply left with no second factor enrolled; iam-auth-svc's existing first-login
+     * enrollment path (ensurePending) then shows THEM a brand-new QR, unseen by the admin, the next
+     * time they sign in -- the same flow as a first-time setup. Idempotent: a user with no device at
+     * all is not an error.
+     */
+    fun resetDevice(tenantId: UUID, userId: UUID) {
+        repository.deleteByTenantIdAndUserId(tenantId, userId)
+    }
+
     fun respondToPush(request: PushRespondRequest) {
         val challenge = pushChallengeService.find(request.challengeId)
             ?: throw ChallengeNotFoundException(request.challengeId)

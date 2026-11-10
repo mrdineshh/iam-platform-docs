@@ -22,7 +22,7 @@ interface Counts {
 const ADMIN_ACTIONS: Array<{ to: string; icon: IconName; title: string; desc: string }> = [
   { to: "/users", icon: "users", title: "Add or manage users", desc: "Create accounts, suspend or reactivate access." },
   { to: "/clients", icon: "plug", title: "Connect an application", desc: "OIDC, SAML and SCIM provisioning for your apps." },
-  { to: "/groups", icon: "groups", title: "Set group access", desc: "Choose which groups can open which apps." },
+  { to: "/groups", icon: "groups", title: "Set OU access", desc: "Choose which OUs can open which apps." },
   { to: "/policy", icon: "lock", title: "Review access policy", desc: "Sign-in rules, MFA and network controls." },
 ];
 
@@ -92,7 +92,7 @@ export function DashboardPage() {
         {admin ? (
           <>
             <StatCard icon="users" label="Users" value={show(counts?.users)} hint={counts?.activeUsers === undefined ? undefined : `${counts.activeUsers} active`} to="/users" />
-            <StatCard icon="groups" label="Groups" value={show(counts?.groups)} hint="Control app access per group" to="/groups" />
+            <StatCard icon="groups" label="OUs" value={show(counts?.groups)} hint="Control app access per OU" to="/groups" />
             <StatCard icon="plug" label="Connected apps" value={show(counts?.apps)} hint="OIDC and SAML" to="/clients" />
             <StatCard
               icon="cloud"

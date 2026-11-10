@@ -1,6 +1,16 @@
 import { useEffect, useState } from "react";
 import QRCode from "qrcode";
-import { createUser, deleteUser, reactivateUser, suspendUser, unlockUser, type CreatedUser } from "@/lib/identity";
+import {
+  createUser,
+  deleteUser,
+  reactivateUser,
+  resetUserTwoFactor,
+  suspendUser,
+  unlockUser,
+  DEFAULT_GOOGLE_WORKSPACE_LICENSE_SKU_ID,
+  GOOGLE_WORKSPACE_LICENSE_PLANS,
+  type CreatedUser,
+} from "@/lib/identity";
 import { summarizeTargets } from "@/lib/provisioning";
 import { listTenantUsers, type AdminUserListEntry } from "@/lib/impersonate";
 import { getPolicy, putPolicy, type Policy } from "@/lib/policy";
@@ -81,6 +91,9 @@ export function UsersPage() {
   const [role, setRole] = useState<"ADMIN" | "USER">("USER");
   const [createInGoogleWorkspace, setCreateInGoogleWorkspace] = useState(true);
   const [googleWorkspaceConfigured, setGoogleWorkspaceConfigured] = useState(false);
+  const [googleWorkspaceLicenseSkuId, setGoogleWorkspaceLicenseSkuId] = useState(
+    DEFAULT_GOOGLE_WORKSPACE_LICENSE_SKU_ID,
+  );
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
   const [showCreate, setShowCreate] = useState(false);
@@ -89,6 +102,7 @@ export function UsersPage() {
   const [sessionsFor, setSessionsFor] = useState<{ id: string; label: string } | null>(null);
   const [provisioningFor, setProvisioningFor] = useState<{ id: string; label: string } | null>(null);
   const [changingStatusId, setChangingStatusId] = useState<string | null>(null);
+  const [resettingTwoFactorId, setResettingTwoFactorId] = useState<string | null>(null);
   const [justCreated, setJustCreated] = useState<CreatedUser | null>(null);
   const [qrDataUrl, setQrDataUrl] = useState<string | null>(null);
 
@@ -187,6 +201,28 @@ export function UsersPage() {
     }
   }
 
+  // Lost-phone recovery: deletes the user's enrolled authenticator. Nobody -- not this admin, not
+  // anyone -- ever sees the old secret or a new one here; the user gets a fresh QR themselves the
+  // next time they sign in needing a code. Doesn't suspend them or touch their sessions.
+  async function handleResetTwoFactor(userId: string, label: string) {
+    const ok = await confirm({
+      title: "Reset two-factor authentication?",
+      message: `${label} will be asked to set up a new authenticator the next time they sign in with a code. Use this if they lost their phone. This does not sign them out or suspend their account.`,
+      confirmLabel: "Reset 2FA",
+      danger: true,
+    });
+    if (!ok) return;
+    setResettingTwoFactorId(userId);
+    try {
+      await resetUserTwoFactor(session.tenantId, userId, session.token);
+      toast.success(`${label}'s two-factor authentication was reset. They'll set up a new one at their next sign-in.`);
+    } catch (err) {
+      toast.error(errorMessage(err));
+    } finally {
+      setResettingTwoFactorId(null);
+    }
+  }
+
   async function handleUnlock(userId: string, label: string) {
     setUnlockingUserId(userId);
     try {
@@ -238,7 +274,7 @@ export function UsersPage() {
     try {
       await assignUserToGroup(session.tenantId, userId, groupId || null, session.token);
       setUsers((prev) => prev.map((u) => (u.id === userId ? { ...u, groupId: groupId || null } : u)));
-      toast.success("Group updated.");
+      toast.success("OU updated.");
     } catch (err) {
       toast.error(errorMessage(err));
     } finally {
@@ -320,6 +356,7 @@ export function UsersPage() {
       const created = await createUser(
         session.tenantId, email, displayName, password, role, session.token,
         googleWorkspaceConfigured && createInGoogleWorkspace,
+        googleWorkspaceLicenseSkuId,
       );
       setJustCreated(created);
       setQrDataUrl(await QRCode.toDataURL(created.provisioningUri));
@@ -328,6 +365,7 @@ export function UsersPage() {
       setPassword("");
       setRole("USER");
       setCreateInGoogleWorkspace(true);
+      setGoogleWorkspaceLicenseSkuId(DEFAULT_GOOGLE_WORKSPACE_LICENSE_SKU_ID);
       setShowCreate(false);
       await refreshUsers();
     } catch (err) {
@@ -360,7 +398,7 @@ export function UsersPage() {
     <main className="page">
       <PageHeader
         title="Users"
-        subtitle="Create accounts and manage each person's group, two-factor requirement, and IP access in one place."
+        subtitle="Create accounts and manage each person's OU, two-factor requirement, and IP access in one place."
         actions={
           <button type="button" onClick={() => setShowCreate((v) => !v)}>
             {showCreate ? "Cancel" : "+ Add user"}
@@ -392,6 +430,12 @@ export function UsersPage() {
           )}
           {justCreated.googleWorkspaceError && (
             <Alert kind="error">Google Workspace account creation failed: {justCreated.googleWorkspaceError}</Alert>
+          )}
+          {justCreated.googleWorkspaceProvisioned && justCreated.googleWorkspaceLicenseAssigned && (
+            <Alert kind="success">Google Workspace plan assigned.</Alert>
+          )}
+          {justCreated.googleWorkspaceProvisioned && justCreated.googleWorkspaceLicenseError && (
+            <Alert kind="error">Google Workspace plan assignment failed: {justCreated.googleWorkspaceLicenseError}</Alert>
           )}
           {summarizeTargets(justCreated.appProvisioning).done && (
             <Alert kind="success">{summarizeTargets(justCreated.appProvisioning).done}.</Alert>
@@ -449,14 +493,33 @@ export function UsersPage() {
           </div>
 
           {googleWorkspaceConfigured && (
-            <label className="checkbox-field" style={{ marginTop: 16 }}>
-              <input
-                type="checkbox"
-                checked={createInGoogleWorkspace}
-                onChange={(e) => setCreateInGoogleWorkspace(e.target.checked)}
-              />
-              Also create this user in Google Workspace
-            </label>
+            <>
+              <label className="checkbox-field" style={{ marginTop: 16 }}>
+                <input
+                  type="checkbox"
+                  checked={createInGoogleWorkspace}
+                  onChange={(e) => setCreateInGoogleWorkspace(e.target.checked)}
+                />
+                Also create this user in Google Workspace
+              </label>
+
+              {createInGoogleWorkspace && (
+                <label className="login-form__field" style={{ marginTop: 12, maxWidth: 320 }}>
+                  Google Workspace plan
+                  <select
+                    value={googleWorkspaceLicenseSkuId}
+                    onChange={(e) => setGoogleWorkspaceLicenseSkuId(e.target.value)}
+                  >
+                    {GOOGLE_WORKSPACE_LICENSE_PLANS.map((plan) => (
+                      <option key={plan.skuId} value={plan.skuId}>
+                        {plan.label}
+                      </option>
+                    ))}
+                  </select>
+                  <span className="field-hint">Defaults to Business Starter. Only plans your Workspace account is entitled to will succeed.</span>
+                </label>
+              )}
+            </>
           )}
 
           <div className="form-actions">
@@ -491,7 +554,7 @@ export function UsersPage() {
         <TableToolbar
           query={table.query}
           onQuery={table.setQuery}
-          placeholder="Search by name, email, role or group"
+          placeholder="Search by name, email, role or OU"
           summary={`${table.filteredCount} of ${table.total} users`}
         />
         <div className="card table-card">
@@ -501,7 +564,7 @@ export function UsersPage() {
                 <SortableTh label="User" sortKey="name" sort={table.sort} onSort={table.toggleSort} />
                 <SortableTh label="Role" sortKey="role" sort={table.sort} onSort={table.toggleSort} />
                 <SortableTh label="Status" sortKey="status" sort={table.sort} onSort={table.toggleSort} />
-                <SortableTh label="Group" sortKey="group" sort={table.sort} onSort={table.toggleSort} />
+                <SortableTh label="OU" sortKey="group" sort={table.sort} onSort={table.toggleSort} />
                 <th>2FA</th>
                 <th title="Exempt from every IP restriction">Any IP</th>
                 <th></th>
@@ -550,7 +613,7 @@ export function UsersPage() {
                         disabled={savingGroupUserId === u.id}
                         onChange={(e) => void handleGroupChange(u.id, e.target.value)}
                       >
-                        <option value="">No group</option>
+                        <option value="">No OU</option>
                         {groups.map((g) => (
                           <option key={g.id} value={g.id}>
                             {g.name}
@@ -605,6 +668,15 @@ export function UsersPage() {
                           onClick={() => setProvisioningFor({ id: u.id, label: `${u.displayName} (${u.email})` })}
                         >
                           Apps
+                        </button>
+                        <button
+                          type="button"
+                          className="btn-secondary btn-sm"
+                          disabled={resettingTwoFactorId === u.id}
+                          title="Use this if they lost their phone"
+                          onClick={() => void handleResetTwoFactor(u.id, `${u.displayName} (${u.email})`)}
+                        >
+                          <PendingLabel pending={resettingTwoFactorId === u.id} idle="Reset 2FA" busy="Resetting…" />
                         </button>
                         {u.status === "ACTIVE" ? (
                           <button

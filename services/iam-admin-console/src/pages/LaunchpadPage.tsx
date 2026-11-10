@@ -53,7 +53,7 @@ export function LaunchpadPage() {
       ) : apps.length === 0 ? (
         <EmptyState
           title="No apps available yet"
-          description="Apps appear here once an administrator adds your group to them. An admin can also set a Launch URL when connecting an app."
+          description="Apps appear here once an administrator adds your OU to them. An admin can also set a Launch URL when connecting an app."
         />
       ) : (
         <div className="app-tiles" style={{ marginTop: 0 }}>

@@ -170,7 +170,7 @@ export function ClientsPage() {
       ) : apps.length === 0 ? (
         <EmptyState
           title="No apps connected yet"
-          description="Pick an app from the catalog above, or add a custom one. Connected apps show up here and in every group's app list automatically."
+          description="Pick an app from the catalog above, or add a custom one. Connected apps show up here and in every OU's app list automatically."
         />
       ) : (
         <>
@@ -362,7 +362,7 @@ function AppGroupAssignment({ kind, appId, groups }: { kind: AppKind; appId: str
 
   return (
     <div className="table-details__groups">
-      <strong>Visible to groups</strong>
+      <strong>Visible to OUs</strong>
       {loadError && (
         <p role="alert" className="login-form__error">
           {loadError}
@@ -371,7 +371,7 @@ function AppGroupAssignment({ kind, appId, groups }: { kind: AppKind; appId: str
       {selected === null ? (
         <p className="hint">Loading…</p>
       ) : groups.length === 0 ? (
-        <p className="hint">No groups yet — this app is only visible to admins until you create a group on the Groups page.</p>
+        <p className="hint">No OUs yet — this app is only visible to admins until you create an OU on the OUs page.</p>
       ) : (
         <>
           <div className="checkbox-list">
@@ -383,7 +383,7 @@ function AppGroupAssignment({ kind, appId, groups }: { kind: AppKind; appId: str
             ))}
           </div>
           <button type="button" className="btn-sm" onClick={() => void save()} disabled={saving}>
-            {saved ? "Saved" : <PendingLabel pending={saving} idle="Save group access" busy="Saving…" />}
+            {saved ? "Saved" : <PendingLabel pending={saving} idle="Save OU access" busy="Saving…" />}
           </button>
         </>
       )}

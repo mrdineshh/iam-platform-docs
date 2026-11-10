@@ -160,7 +160,7 @@ export function PolicyPage() {
     <main className="page page--narrow">
       <PageHeader
         title="Access policy"
-        subtitle="Tenant-wide sign-in rules. They apply to everyone unless a group or user overrides them, except settings marked as a hard cap, which nothing more specific can override."
+        subtitle="Tenant-wide sign-in rules. They apply to everyone unless an OU or user overrides them, except settings marked as a hard cap, which nothing more specific can override."
       />
 
       {error && <Alert kind="error">{error}</Alert>}
@@ -342,7 +342,7 @@ function HardCap({ checked, onChange }: { checked: boolean; onChange: (v: boolea
   return (
     <label className="checkbox-field" style={{ marginTop: 4 }}>
       <input type="checkbox" checked={checked} onChange={(e) => onChange(e.target.checked)} />
-      <span className="field-hint">Hard cap: groups and users cannot override this</span>
+      <span className="field-hint">Hard cap: OUs and users cannot override this</span>
     </label>
   );
 }

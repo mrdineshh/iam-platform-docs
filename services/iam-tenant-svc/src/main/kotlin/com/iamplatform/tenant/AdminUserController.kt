@@ -74,6 +74,8 @@ class AdminUserController(
         // redirect mode is set on the account's OU.
         var googleProvisioned = false
         var googleError: String? = null
+        var googleLicenseAssigned = false
+        var googleLicenseError: String? = null
         val googleConfig = if (request.createInGoogleWorkspace) {
             googleWorkspaceConfigService.loadProvisioningConfig(request.tenantId)
         } else {
@@ -100,6 +102,37 @@ class AdminUserController(
                     reason = googleError,
                 ),
             )
+
+            // Only attempted once the Workspace account itself exists -- same best-effort contract as
+            // provisionUser above: a licensing failure (e.g. this plan isn't available on this
+            // Workspace's billing account) never undoes or fails the account/user creation that
+            // already succeeded.
+            if (googleProvisioned) {
+                val plan = GoogleWorkspaceLicensePlan.fromSkuId(request.googleWorkspaceLicenseSkuId)
+                try {
+                    googleWorkspaceDirectoryClient.assignLicense(
+                        googleConfig.adminEmail,
+                        googleConfig.serviceAccountKey,
+                        GoogleWorkspaceLicensePlan.PRODUCT_ID,
+                        plan.skuId,
+                        request.email,
+                    )
+                    googleLicenseAssigned = true
+                } catch (ex: GoogleProvisioningException) {
+                    googleLicenseError = ex.message
+                }
+                auditPublisher.publish(
+                    AuditEvent(
+                        correlationId = CorrelationId.get(),
+                        tenantId = request.tenantId,
+                        actorType = ActorType.SYSTEM,
+                        actorId = "iam-tenant-svc",
+                        action = "google_workspace_user.license_assigned",
+                        result = if (googleLicenseAssigned) AuditResult.SUCCESS else AuditResult.FAILURE,
+                        reason = googleLicenseError ?: "plan=${plan.name}",
+                    ),
+                )
+            }
         }
 
         // Push the new user to every SCIM-connected app (best effort, like Google above).
@@ -118,6 +151,8 @@ class AdminUserController(
                 provisioningUri = device.provisioningUri,
                 googleWorkspaceProvisioned = googleProvisioned,
                 googleWorkspaceError = googleError,
+                googleWorkspaceLicenseAssigned = googleLicenseAssigned,
+                googleWorkspaceLicenseError = googleLicenseError,
                 appProvisioning = appProvisioning,
             ),
         )

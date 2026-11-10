@@ -30,9 +30,10 @@ class UserLifecycleControllerTest {
     private val provisioning = mock<ProvisioningService>()
     private val scimConnections = mock<ScimConnectionService>()
     private val auditPublisher = mock<AuditPublisher>()
+    private val deviceClient = mock<DeviceClient>()
     private val httpRequest = mock<HttpServletRequest>()
     private val controller = UserLifecycleController(
-        identityClient, sessionClient, adminAccessGuard, googleConfigService, googleClient, provisioning, scimConnections, auditPublisher,
+        identityClient, sessionClient, adminAccessGuard, googleConfigService, googleClient, provisioning, scimConnections, auditPublisher, deviceClient,
     )
 
     private val tenantId = UUID.randomUUID()
@@ -187,5 +188,47 @@ class UserLifecycleControllerTest {
         controller.retry(targetId, tenantId, "tok")
 
         verify(provisioning).reconcile(ProvisionUser(targetId, tenantId, "ada@econz.net", "Ada Lovelace", active = false))
+    }
+
+    @Test
+    fun `resetting 2FA deletes the user's device and never touches sessions, status or the connected apps`() {
+        givenAdmin()
+
+        val response = controller.resetTwoFactor(targetId, tenantId, "tok", httpRequest)
+
+        assertEquals(204, response.statusCode.value())
+        verify(deviceClient).resetDevice(tenantId, targetId)
+        verify(identityClient, never()).updateStatus(any(), any())
+        verify(sessionClient, never()).terminateAllForUser(any(), any(), any())
+        verify(provisioning, never()).reconcile(any())
+    }
+
+    @Test
+    fun `resetting 2FA is audited with the admin as actor, and never logs anything about the old secret`() {
+        givenAdmin("ada@econz.net")
+
+        controller.resetTwoFactor(targetId, tenantId, "tok", httpRequest)
+
+        val captor = argumentCaptor<AuditEvent>()
+        verify(auditPublisher).publish(captor.capture())
+        val event = captor.firstValue
+        assertEquals("identity.2fa_reset_by_admin", event.action)
+        assertEquals(ActorType.ADMIN, event.actorType)
+        assertEquals(adminId.toString(), event.actorId)
+        assertTrue(event.reason!!.contains(targetId.toString()))
+        assertTrue(event.reason!!.contains("ada@econz.net"))
+    }
+
+    @Test
+    fun `an admin can reset their own 2FA -- unlike suspend, this isn't a lockout risk`() {
+        whenever(adminAccessGuard.requireValidSession("tok"))
+            .thenReturn(RemoteSession(UUID.randomUUID(), tenantId, adminId, Instant.now().plusSeconds(3600)))
+        whenever(identityClient.findUser(adminId)).thenReturn(
+            RemoteUser(adminId, tenantId, RemoteUserRole.ADMIN, email = "admin@econz.net", displayName = "Admin", status = RemoteUserStatus.ACTIVE),
+        )
+
+        controller.resetTwoFactor(adminId, tenantId, "tok", httpRequest)
+
+        verify(deviceClient).resetDevice(tenantId, adminId)
     }
 }
