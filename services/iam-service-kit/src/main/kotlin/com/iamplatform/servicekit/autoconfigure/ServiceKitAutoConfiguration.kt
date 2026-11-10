@@ -5,7 +5,11 @@ import com.iamplatform.servicekit.audit.AuditPublisher
 import com.iamplatform.servicekit.audit.KafkaAuditPublisher
 import com.iamplatform.servicekit.correlation.CorrelationIdFilter
 import com.iamplatform.servicekit.vault.OpenBaoClient
+import com.iamplatform.servicekit.vault.OpenBaoPkiClient
 import com.iamplatform.servicekit.vault.OpenBaoProperties
+import com.iamplatform.servicekit.vault.OpenBaoTransitClient
+import com.iamplatform.servicekit.vault.PkiProperties
+import com.iamplatform.servicekit.vault.TransitProperties
 import org.springframework.boot.autoconfigure.AutoConfiguration
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean
 import org.springframework.boot.context.properties.EnableConfigurationProperties
@@ -20,7 +24,7 @@ import tools.jackson.databind.ObjectMapper
  * out of this module per BUILD_PLAN.md Section 4.5.
  */
 @AutoConfiguration
-@EnableConfigurationProperties(AuditProperties::class, OpenBaoProperties::class)
+@EnableConfigurationProperties(AuditProperties::class, OpenBaoProperties::class, PkiProperties::class, TransitProperties::class)
 class ServiceKitAutoConfiguration {
 
     @Bean
@@ -39,4 +43,14 @@ class ServiceKitAutoConfiguration {
     @ConditionalOnMissingBean
     fun openBaoClient(properties: OpenBaoProperties): OpenBaoClient =
         OpenBaoClient(OpenBaoClient.restClientFor(properties), properties)
+
+    @Bean
+    @ConditionalOnMissingBean
+    fun openBaoPkiClient(properties: OpenBaoProperties, pkiProperties: PkiProperties): OpenBaoPkiClient =
+        OpenBaoPkiClient(OpenBaoPkiClient.restClientFor(properties), properties, pkiProperties)
+
+    @Bean
+    @ConditionalOnMissingBean
+    fun openBaoTransitClient(properties: OpenBaoProperties, transitProperties: TransitProperties): OpenBaoTransitClient =
+        OpenBaoTransitClient(OpenBaoTransitClient.restClientFor(properties), properties, transitProperties)
 }

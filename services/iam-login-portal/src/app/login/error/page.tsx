@@ -9,6 +9,8 @@ const MESSAGES: Record<string, string> = {
   unavailable: "Sign-in is temporarily unavailable. Please try again shortly.",
   app_access_denied:
     "You don't have access to this app. Ask your administrator to add you to a group that includes it.",
+  device_enroll_invalid:
+    "This device registration link is invalid. Start registration again from the endpoint agent on your computer.",
 };
 
 // Defense in depth (docs/specs/iam-login-portal-SPEC.md Section 4):

@@ -6,6 +6,7 @@ import { SplitShell } from "../SplitShell";
 import { config } from "@/lib/config";
 import { findTenantBySubdomain, resolveTenantSubdomain } from "@/lib/tenant";
 import { brandStyle, safeLogoUrl } from "@/lib/branding";
+import { POST_LOGIN_NEXT_COOKIE, safePostLoginNext } from "@/lib/deviceEnroll";
 
 interface SearchParams {
   // Dev-only tenant override -- see resolveTenantSubdomain.
@@ -29,10 +30,13 @@ export default async function PortalLoginPage({
   const requestHeaders = await headers();
   const tenantOverride = params.tenant ?? null;
 
-  // Already holding a live session -- skip the form entirely.
-  const ssoToken = (await cookies()).get(config.ssoCookieName)?.value;
+  // Already holding a live session -- skip the form entirely. A pending endpoint-agent enrollment
+  // takes priority over the launchpad (the /device-enroll route clears that cookie once used; a
+  // Server Component can't modify cookies itself).
+  const cookieStore = await cookies();
+  const ssoToken = cookieStore.get(config.ssoCookieName)?.value;
   if (ssoToken) {
-    redirect(appsUrl(tenantOverride));
+    redirect(safePostLoginNext(cookieStore.get(POST_LOGIN_NEXT_COOKIE)?.value) ?? appsUrl(tenantOverride));
   }
 
   const subdomain = resolveTenantSubdomain(requestHeaders.get("host"), tenantOverride);

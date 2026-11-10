@@ -1,0 +1,29 @@
+[package]
+name = "agent-core"
+version.workspace = true
+edition.workspace = true
+
+# Deliberately platform-agnostic (no `windows` crate dependency here) --
+# every OS-specific concern (Windows Service registration, CNG-backed keys,
+# the Windows credential store) lives in the `iam-endpoint-agent` binary
+# crate's platform/windows module instead, same "shared core + OS adapters"
+# split the Endpoint Device Trust spec's Section 7.2 workspace layout calls
+# for. Keeping this crate OS-free is what lets it be built and unit-tested
+# on any machine (including this Linux dev environment), not just Windows.
+[dependencies]
+tokio.workspace = true
+reqwest.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+uuid.workspace = true
+tracing.workspace = true
+thiserror.workspace = true
+anyhow.workspace = true
+base64.workspace = true
+ed25519-dalek.workspace = true
+rand.workspace = true
+sha2.workspace = true
+chrono.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["test-util"] }

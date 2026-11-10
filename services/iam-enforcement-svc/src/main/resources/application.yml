@@ -46,6 +46,12 @@ iam:
     # expired. Closes that gap: every enforce() call now also confirms the
     # identity is real and ACTIVE.
     identity-svc: ${IDENTITY_SVC_URL:http://iam-identity-svc:8080}
+    # Endpoint Device Trust spec Section 4 (PEP is the "final server-side
+    # access decision" on device state, not the agent). Only called when a
+    # session actually carries a deviceId (Section 4.2's trust rule doesn't
+    # apply to sessions that were never device-bound at login) -- see
+    # EnforcementService.
+    tenant-svc: ${TENANT_SVC_URL:http://iam-tenant-svc:8080}
   enforcement:
     policy-cache-ttl-seconds: 30
     proxy:
@@ -111,6 +117,13 @@ resilience4j:
         wait-duration-in-open-state: 30s
         ignore-exceptions:
           - org.springframework.web.client.HttpClientErrorException$NotFound
+      tenant-svc:
+        failure-rate-threshold: 50
+        sliding-window-size: 5
+        minimum-number-of-calls: 5
+        wait-duration-in-open-state: 30s
+        ignore-exceptions:
+          - org.springframework.web.client.HttpClientErrorException$NotFound
   retry:
     instances:
       session-svc:
@@ -136,6 +149,12 @@ resilience4j:
           - io.github.resilience4j.circuitbreaker.CallNotPermittedException
           - org.springframework.web.client.HttpClientErrorException$Unauthorized
       identity-svc:
+        max-attempts: 5
+        exponential-backoff-multiplier: 2
+        ignore-exceptions:
+          - io.github.resilience4j.circuitbreaker.CallNotPermittedException
+          - org.springframework.web.client.HttpClientErrorException$NotFound
+      tenant-svc:
         max-attempts: 5
         exponential-backoff-multiplier: 2
         ignore-exceptions:

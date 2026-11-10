@@ -1,5 +1,6 @@
 package com.iamplatform.enforcement
 
+import com.iamplatform.enforcement.client.DeviceTrustClient
 import com.iamplatform.enforcement.client.EvaluateResponse
 import com.iamplatform.enforcement.client.GeoClient
 import com.iamplatform.enforcement.client.IdentityClient
@@ -38,6 +39,7 @@ class EnforcementService(
     private val geoClient: GeoClient,
     private val policyClient: PolicyClient,
     private val identityClient: IdentityClient,
+    private val deviceTrustClient: DeviceTrustClient,
     private val policyCache: PolicyDecisionCache,
     private val auditPublisher: AuditPublisher,
 ) {
@@ -61,6 +63,8 @@ class EnforcementService(
             throw EnforcementDeniedException("user no longer exists or is suspended")
         }
 
+        requireDeviceTrustIfClaimed(session, token, request.sourceIp)
+
         // Section 4.6: never fail open. An unresolved location is
         // high-risk/unknown, not a free pass -- same rule iam-auth-svc
         // applies at login, just re-checked here on every later request.
@@ -83,6 +87,33 @@ class EnforcementService(
         }
 
         return EnforceResponse(allowed = true, sessionId = session.sessionId, tenantId = session.tenantId, userId = session.userId, country = country)
+    }
+
+    // Devices in any of these states must never satisfy a continuous device-trust check (Endpoint
+    // Device Trust spec Section 6.2's access-implication column). Phase 1 scope: this is a
+    // whole-session allow/deny gate, not yet the per-application pending/offline overrides the spec
+    // also describes (Section 6.4, 15.3) -- those require the PEP to know which application is being
+    // accessed, which this call site doesn't carry today.
+    private val trustedDeviceStatuses = setOf("APPROVED")
+
+    /**
+     * Only runs when the session actually claims a device (session.deviceId is a UUID the agent
+     * registered during enrollment) -- a session created before this feature existed, or one from a
+     * login path that never bound a device, makes no such claim and is unaffected, exactly like
+     * every other continuous check in this class only acting on evidence it actually has. Spec
+     * Section 4.2: "a protected application must not trust a client-supplied device ID alone" -- this
+     * is that check, re-verified against iam-tenant-svc's device registry on every request, not just
+     * accepted from the session row.
+     */
+    private fun requireDeviceTrustIfClaimed(session: RemoteSession, token: String, sourceIp: String) {
+        val deviceId = session.deviceId?.let { runCatching { UUID.fromString(it) }.getOrNull() } ?: return
+        val status = orNull { deviceTrustClient.findDeviceTrustStatus(session.tenantId, deviceId) }
+        if (status == null || status.lifecycleStatus !in trustedDeviceStatuses) {
+            val reason = if (status == null) "device is no longer registered" else "device is ${status.lifecycleStatus.lowercase()}, not approved"
+            sessionClient.terminate(token, reason = reason)
+            audit(session, sourceIp, reason, terminate = true)
+            throw EnforcementDeniedException(reason)
+        }
     }
 
     private fun evaluateAndCache(session: RemoteSession, sourceIp: String, country: String): EvaluateResponse {
@@ -109,6 +140,15 @@ class EnforcementService(
      * policy denial kills the session -- an unresolved location or an
      * unreachable policy service denies this one request without touching
      * the session, same precedent as [enforce].
+     *
+     * Known gap (not yet closed): unlike [enforce], this path does not run
+     * [requireDeviceTrustIfClaimed] -- the OIDC userinfo response this is
+     * keyed off doesn't carry a deviceId claim today, so there is nothing
+     * to check yet. A gateway-fronted app behind this cookie-login path is
+     * therefore not currently device-trust-enforced even if the signed-in
+     * user has an approved device elsewhere. Closing this requires the
+     * OIDC provider to carry device binding into its own session/userinfo,
+     * which is separate follow-up work, not done here.
      */
     fun checkLocationAndPolicy(tenantId: UUID, userId: UUID, sourceIp: String): GatewayCheckResult {
         // Same identity-existence check as enforce() -- see its comment.

@@ -26,7 +26,7 @@ interface BackendErrorBody {
 export async function postJson<T>(
   url: string,
   body: unknown,
-  opts: { correlationId: string; timeoutMs: number },
+  opts: { correlationId: string; timeoutMs: number; headers?: Record<string, string> },
 ): Promise<T> {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), opts.timeoutMs);
@@ -36,6 +36,7 @@ export async function postJson<T>(
       headers: {
         "Content-Type": "application/json",
         "X-Correlation-Id": opts.correlationId,
+        ...(opts.headers ?? {}),
       },
       body: JSON.stringify(body),
       signal: controller.signal,

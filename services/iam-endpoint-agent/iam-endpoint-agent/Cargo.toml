@@ -1,0 +1,26 @@
+[package]
+name = "iam-endpoint-agent"
+version.workspace = true
+edition.workspace = true
+
+[[bin]]
+name = "iam-endpoint-agent"
+path = "src/main.rs"
+
+[dependencies]
+agent-core = { path = "../crates/agent-core" }
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+serde_json.workspace = true
+anyhow.workspace = true
+
+# Windows Service registration/lifecycle -- only usable on the Windows
+# target (see src/platform/windows.rs). Not pulled in on other platforms so
+# `cargo check`/`cargo test` still work in non-Windows dev/CI environments
+# for the platform-agnostic logic this binary wires together.
+[target.'cfg(windows)'.dependencies]
+windows-service = "0.7"
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["test-util"] }

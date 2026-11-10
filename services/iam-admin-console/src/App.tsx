@@ -11,7 +11,9 @@ import { LaunchpadPage } from "@/pages/LaunchpadPage";
 import { SwitchUserPage } from "@/pages/SwitchUserPage";
 import { GroupsPage } from "@/pages/GroupsPage";
 import { GoogleWorkspaceSettingsPage } from "@/pages/GoogleWorkspaceSettingsPage";
+import { OrganizationalUnitsPage } from "@/pages/OrganizationalUnitsPage";
 import { BrandingPage } from "@/pages/BrandingPage";
+import { EndpointDevicesPage } from "@/pages/EndpointDevicesPage";
 import { ProtectedRoute } from "@/components/ProtectedRoute";
 import { SessionRoute } from "@/components/SessionRoute";
 import { ImpersonationBanner } from "@/components/ImpersonationBanner";
@@ -106,10 +108,26 @@ export function App() {
           }
         />
         <Route
+          path="/google-workspace/organizational-units"
+          element={
+            <ProtectedRoute>
+              <OrganizationalUnitsPage />
+            </ProtectedRoute>
+          }
+        />
+        <Route
           path="/branding"
           element={
             <ProtectedRoute>
               <BrandingPage />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/endpoint-security"
+          element={
+            <ProtectedRoute>
+              <EndpointDevicesPage />
             </ProtectedRoute>
           }
         />

@@ -20,10 +20,23 @@ class GlobalExceptionHandler {
         OidcClientNotFoundException::class, SamlSpNotFoundException::class,
         GoogleWorkspaceConfigNotFoundException::class, UserNotFoundForDeletionException::class,
         SessionNotFoundForRevokeException::class, ScimConnectionNotFoundException::class,
+        GroupNotFoundException::class, DeviceNotFoundException::class,
     )
     fun handleNotFound(ex: RuntimeException, request: HttpServletRequest): ResponseEntity<ErrorResponse> =
         ResponseEntity.status(HttpStatus.NOT_FOUND).body(
             ErrorResponse.of(HttpStatus.NOT_FOUND.value(), "Not Found", ex.message ?: "", request.requestURI),
+        )
+
+    @ExceptionHandler(EnrollmentTransactionInvalidException::class, DeviceProofOfPossessionException::class)
+    fun handleDeviceAuthFailed(ex: RuntimeException, request: HttpServletRequest): ResponseEntity<ErrorResponse> =
+        ResponseEntity.status(HttpStatus.UNAUTHORIZED).body(
+            ErrorResponse.of(HttpStatus.UNAUTHORIZED.value(), "Unauthorized", ex.message ?: "", request.requestURI),
+        )
+
+    @ExceptionHandler(DeviceLimitExceededException::class)
+    fun handleDeviceLimitExceeded(ex: RuntimeException, request: HttpServletRequest): ResponseEntity<ErrorResponse> =
+        ResponseEntity.status(HttpStatus.CONFLICT).body(
+            ErrorResponse.of(HttpStatus.CONFLICT.value(), "Conflict", ex.message ?: "", request.requestURI),
         )
 
     @ExceptionHandler(SubdomainAlreadyExistsException::class, SamlSpEntityIdAlreadyExistsException::class, CannotSuspendSelfException::class)

@@ -17,9 +17,11 @@ const BACK_TARGETS: Record<string, { to: string; label: string }> = {
   "/switch-user": { to: "/", label: "Dashboard" },
   "/clients": { to: "/", label: "Dashboard" },
   "/policy": { to: "/", label: "Dashboard" },
+  "/endpoint-security": { to: "/", label: "Dashboard" },
   "/branding": { to: "/", label: "Dashboard" },
   "/clients/setup": { to: "/clients", label: "Applications" },
   "/google-workspace": { to: "/clients", label: "Applications" },
+  "/google-workspace/organizational-units": { to: "/google-workspace", label: "Google Workspace" },
 };
 
 const SIDEBAR_COLLAPSED_KEY = "iam-admin-console:sidebar-collapsed";
@@ -91,6 +93,7 @@ export function Shell({ children }: { children: ReactNode }) {
     location.pathname.startsWith("/clients") ||
     location.pathname === "/policy" ||
     location.pathname === "/google-workspace" ||
+    location.pathname === "/google-workspace/organizational-units" ||
     location.pathname === "/branding";
 
   if (collapsed) {
@@ -159,10 +162,20 @@ export function Shell({ children }: { children: ReactNode }) {
               {(adminOpen || adminIsCurrentSection) && (
                 <div className="shell__nav-collapsible-body">
                   <NavLink to="/users" icon="users" label="Users" active={location.pathname === "/users"} />
-                  <NavLink to="/groups" icon="groups" label="Groups" active={location.pathname === "/groups"} />
+                  <NavLink to="/groups" icon="groups" label="OUs" active={location.pathname === "/groups"} />
                   <NavLink to="/switch-user" icon="switch" label="Switch to user" active={location.pathname === "/switch-user"} />
-                  <NavLink to="/clients" icon="plug" label="Applications" active={location.pathname.startsWith("/clients") || location.pathname === "/google-workspace"} />
+                  <NavLink
+                    to="/clients"
+                    icon="plug"
+                    label="Applications"
+                    active={
+                      location.pathname.startsWith("/clients") ||
+                      location.pathname === "/google-workspace" ||
+                      location.pathname === "/google-workspace/organizational-units"
+                    }
+                  />
                   <NavLink to="/policy" icon="lock" label="Access policy" active={location.pathname === "/policy"} />
+                  <NavLink to="/endpoint-security" icon="device" label="Endpoint Security" active={location.pathname === "/endpoint-security"} />
                   <NavLink to="/branding" icon="palette" label="Branding" active={location.pathname === "/branding"} />
                 </div>
               )}

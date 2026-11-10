@@ -10,6 +10,7 @@ import { denialMessage, isAppAccessDenied } from "@/lib/errorCodes";
 import { UpstreamError } from "@/lib/http";
 import { findTenantBySubdomain, resolveTenantSubdomain, type Tenant } from "@/lib/tenant";
 import { str } from "@/lib/formData";
+import { POST_LOGIN_NEXT_COOKIE, safePostLoginNext } from "@/lib/deviceEnroll";
 import type { LoginFormState, PrecheckActionInput, PrecheckActionResult } from "./types";
 
 /** Shared by loginAction, precheckAction, and saml/actions.ts -- resolves which tenant this subdomain belongs to. */
@@ -174,6 +175,14 @@ export async function loginAction(_prevState: LoginFormState, formData: FormData
   });
 
   if (portalMode) {
+    // Signed in on behalf of the endpoint agent's /device-enroll handoff -- go back there instead
+    // of the launchpad. safePostLoginNext only ever allows a same-origin /device-enroll URL.
+    const cookieStore = await cookies();
+    const next = safePostLoginNext(cookieStore.get(POST_LOGIN_NEXT_COOKIE)?.value);
+    cookieStore.delete(POST_LOGIN_NEXT_COOKIE);
+    if (next) {
+      redirect(next);
+    }
     redirect(tenantOverride ? `/apps?tenant=${encodeURIComponent(tenantOverride)}` : "/apps");
   }
 
