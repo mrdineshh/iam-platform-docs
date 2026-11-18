@@ -1,6 +1,6 @@
 import { Fragment, useEffect, useState } from "react";
 import {
-  approveDevice, listDeviceEvents, listDevices, rejectDevice, revokeDevice, suspendDevice, type DeviceEvent, type DeviceSummary, type PostureSignals,
+  approveDevice, deleteDevice, listDeviceEvents, listDevices, rejectDevice, revokeDevice, suspendDevice, type DeviceEvent, type DeviceSummary, type PostureSignals,
 } from "@/lib/devices";
 import { listTenantUsers, type AdminUserListEntry } from "@/lib/impersonate";
 import { loadSession } from "@/lib/session";
@@ -135,6 +135,32 @@ export function EndpointDevicesPage() {
     }
   }
 
+  async function handleDelete(device: DeviceSummary) {
+    const ok = await confirm({
+      title: "Delete this device?",
+      message: (
+        <>
+          This permanently removes <strong>{deviceLabel(device)}</strong> from the platform. The agent can
+          re-enroll from scratch afterward — a new device ID will be created and will need approval again.
+          Use this to reset a device for a fresh demo enrollment.
+        </>
+      ),
+      confirmLabel: "Delete device",
+      danger: true,
+    });
+    if (!ok) return;
+    setActingOn(device.id);
+    try {
+      await deleteDevice(session.tenantId, device.id, session.token);
+      toast.success(`${deviceLabel(device)} deleted. The agent can now re-enroll fresh.`);
+      await load();
+    } catch (err) {
+      toast.error(errorMessage(err));
+    } finally {
+      setActingOn(null);
+    }
+  }
+
   const pendingCount = devices?.filter((d) => d.lifecycleStatus === "PENDING_APPROVAL").length ?? 0;
   const now = Date.now();
   const counts = fleetCounts(devices ?? [], now);
@@ -256,12 +282,16 @@ export function EndpointDevicesPage() {
                           Revoke
                         </button>
                       )}
+                      <button type="button" className="btn-secondary btn-sm" disabled={actingOn === d.id} onClick={() => void handleDelete(d)}>
+                        Delete
+                      </button>
                     </div>
                   </td>
                 </tr>
                 {expandedId === d.id && (
                   <tr className="posture-row">
                     <td colSpan={8}>
+                      <DeviceIdPanel device={d} />
                       <PosturePanel device={d} />
                       <ActivityPanel device={d} users={users} />
                     </td>
@@ -384,6 +414,44 @@ function ActivityPanel({ device, users }: { device: DeviceSummary; users: Record
           ))}
         </ul>
       )}
+    </div>
+  );
+}
+
+/** Shows the device's unique IDs — useful for support and for correlating with agent logs. */
+function DeviceIdPanel({ device }: { device: DeviceSummary }) {
+  return (
+    <div className="posture-panel device-id-panel">
+      <div className="posture-panel__head">
+        <strong>Device identifiers</strong>
+        <span className="posture-panel__muted">Use these to identify this device in logs, support tickets or the agent --status output</span>
+      </div>
+      <dl className="posture-grid posture-grid--wide">
+        <div className="posture-grid__item">
+          <dt>Device ID</dt>
+          <dd><code className="device-id-code">{device.id}</code></dd>
+        </div>
+        <div className="posture-grid__item">
+          <dt>User ID</dt>
+          <dd><code className="device-id-code">{device.userId}</code></dd>
+        </div>
+        <div className="posture-grid__item">
+          <dt>Hostname</dt>
+          <dd>{device.hostname ?? "—"}</dd>
+        </div>
+        <div className="posture-grid__item">
+          <dt>Platform</dt>
+          <dd>{device.platform}</dd>
+        </div>
+        <div className="posture-grid__item">
+          <dt>Agent version</dt>
+          <dd>{device.agentVersion ?? "—"}</dd>
+        </div>
+        <div className="posture-grid__item">
+          <dt>Enrolled on</dt>
+          <dd>{new Date(device.createdAt).toLocaleString()}</dd>
+        </div>
+      </dl>
     </div>
   );
 }

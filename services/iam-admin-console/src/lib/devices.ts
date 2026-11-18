@@ -70,6 +70,14 @@ export const suspendDevice = (tenantId: string, deviceId: string, sessionToken: 
 export const revokeDevice = (tenantId: string, deviceId: string, sessionToken: string, reason?: string) =>
   deviceAction(tenantId, deviceId, "revoke", sessionToken, reason);
 
+/** Soft-delete: wipes the device record so the agent can re-enroll fresh (new device ID, new PENDING_APPROVAL). */
+export async function deleteDevice(tenantId: string, deviceId: string, sessionToken: string): Promise<void> {
+  await http.delete<void>(
+    `${config.tenantSvcUrl}/api/v1/endpoint/devices/${deviceId}?tenantId=${encodeURIComponent(tenantId)}`,
+    { sessionToken },
+  );
+}
+
 // Mirrors iam-tenant-svc's DeviceEventResponse: one entry of a device's activity timeline (newest first).
 export interface DeviceEvent {
   eventType: string;

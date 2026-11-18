@@ -141,6 +141,24 @@ class DeviceController(
         return ResponseEntity.noContent().build()
     }
 
+    /**
+     * Soft-delete: wipes the device record entirely so the agent can re-enroll
+     * from scratch (new device ID, fresh PENDING_APPROVAL). Useful for demos and
+     * when a device is reassigned. Audited as device.deleted.
+     */
+    @DeleteMapping("/devices/{deviceId}")
+    fun deleteDevice(
+        @PathVariable deviceId: UUID,
+        @RequestParam tenantId: UUID,
+        @RequestHeader("X-Session-Token") sessionToken: String,
+        httpRequest: HttpServletRequest,
+    ): ResponseEntity<Void> {
+        val admin = adminAccessGuard.requireValidSession(sessionToken)
+        adminAccessGuard.requireTenantAdmin(sessionToken, tenantId)
+        deviceTrustService.deleteDevice(tenantId, deviceId, admin.userId.toString(), httpRequest.remoteAddr)
+        return ResponseEntity.noContent().build()
+    }
+
     @PostMapping("/devices/{deviceId}/heartbeat")
     fun heartbeat(
         @PathVariable deviceId: UUID,

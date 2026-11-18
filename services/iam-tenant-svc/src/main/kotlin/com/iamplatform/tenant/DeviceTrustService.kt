@@ -349,6 +349,32 @@ class DeviceTrustService(
         audit(tenantId, deviceId, actorId, "device.revoked", AuditResult.SUCCESS, reason, sourceIp)
     }
 
+    /**
+     * Soft-delete: removes the device record and all related rows so the agent
+     * can re-enroll fresh (new device ID, new PENDING_APPROVAL).
+     * Useful for demos and device reassignment.
+     */
+    @Transactional
+    fun deleteDevice(tenantId: UUID, deviceId: UUID, actorId: String, sourceIp: String?) {
+        val device = requireDevice(tenantId, deviceId)
+        // Revoke certificate first if one is active
+        val activeCert = certificateRepository.findByDeviceIdAndStatus(deviceId, CertificateStatus.ACTIVE.name)
+        if (activeCert != null) {
+            try { pkiClient.revokeCertificate(activeCert.serialNumber) } catch (_: Exception) {}
+        }
+        // Audit before deletion so the event is queryable after the fact
+        audit(tenantId, deviceId, actorId, "device.deleted", AuditResult.SUCCESS, null, sourceIp)
+        // Delete all child rows, then the device itself
+        certificateRepository.deleteByDeviceId(deviceId)
+        approvalRepository.deleteByDeviceId(deviceId)
+        eventRepository.deleteByDeviceId(deviceId)
+        keyRepository.deleteByDeviceId(deviceId)
+        hardwareRepository.deleteByDeviceId(deviceId)
+        postureRepository.deleteByDeviceId(deviceId)
+        heartbeatRepository.deleteByDeviceId(deviceId)
+        deviceRepository.delete(device)
+    }
+
     private fun recordApproval(deviceId: UUID, mode: ApprovalMode, decision: ApprovalDecision, actorId: String, reason: String?) {
         approvalRepository.save(
             DeviceApprovalEntity(
