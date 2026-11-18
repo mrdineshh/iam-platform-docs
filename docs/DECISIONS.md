@@ -2058,3 +2058,409 @@ any login work itself.
   that skips Caddy and hits e.g. http://<vm-ip>:8087 directly can still send any X-Forwarded-For or sourceIp.
   Until those ports are closed (only 80/443 should be public; Caddy reaches the services on localhost) the
   server-side IP is only as trustworthy as that network boundary.
+- **2026-11-16 -- Endpoint Device Trust, Phase 1 (Windows): decisions recorded after the fact.** Built
+  2026-11-09..11-10 from the PDF "IAM Endpoint Device Trust Technical Specification v1"; the interview/SPEC
+  step and this log were skipped (process miss, see OPEN_QUESTIONS OQ-16..OQ-25). Recorded now so a reviewer
+  does not have to reverse-engineer them from the diff.
+  **Tier 2 (within scope, no security-semantics change):** new additive tables in `V9`/`V10` (`iam_devices`,
+  `iam_device_hardware/keys/certificates/approvals/posture/heartbeats/events/policies/app_policies`,
+  `iam_device_enrollment_transactions`, `iam_agent_releases`; nothing existing was altered); new
+  `/api/v1/endpoint/*` endpoints in `iam-tenant-svc`; `/internal/devices/{id}` for the PEP; the admin
+  "Endpoint Security" page; `OpenBaoPkiClient` / `OpenBaoTransitClient` in `iam-service-kit`; Rust crates
+  `tokio`, `reqwest` (rustls), `serde`, `uuid`, `tracing`, `thiserror`, `anyhow` (all named in PDF 7.3), plus
+  `ed25519-dalek`, `sha2`, `base64`, `rand`, `chrono`, `windows-service` (not named in the PDF).
+  **Tier 3, made provisionally and NOT yet confirmed by a human (do not treat as approved):**
+  (1) device keys are software Ed25519 (X.509 SPKI DER on the wire), private key persisted in plaintext JSON
+  -- violates FR-5.2/NFR-5.1 on TPM hardware (OQ-17); (2) enrollment is key-bound, PKCE-style: the agent sends
+  base64url(SHA-256(SPKI DER)) before sign-in and only that key can finish the transaction (OQ-19); (3) the
+  agent never holds a session token: `iam-login-portal` `/device-enroll` calls `enrollment/start` server-side
+  and redirects to a validated `127.0.0.1`/`[::1]` loopback URL (RFC 8252); (4) device policy responses are
+  signed by OpenBao transit key `device-policy` over a custom canonical string that the agent re-derives
+  (OQ-23); (5) device-authenticated calls use `X-Device-Signature`/`X-Device-Timestamp` with a 120s window
+  instead of mTLS (OQ-23); (6) defaults: corporate devices auto-approve, BYOD is manual, max 5 devices per
+  user, certificate TTL 90 days, enrollment transaction TTL 5 minutes (PDF D03/D11); (7) the PEP terminates a
+  session whose *claimed* device is not `APPROVED` -- a hardcoded rule, not a merged policy (OQ-20, AP-4).
+  **Bugs found and fixed while building:** a failed enrollment attempt did not burn its transaction because the
+  surrounding `@Transactional` rolled the `consumed_at` write back (now `noRollbackFor`); the first
+  `iam-enforcement-svc` Docker build silently failed (parallel Gradle cache lock) and left the old image
+  running while the pipeline reported success -- builds are now run with `pipefail` and verified by image age.
+  Also fixed `EnforcementServiceTest`, which had not compiled against the real constructor since the identity
+  check was added. **Not verified:** all Windows-only agent code (`platform/windows.rs`) had never been compiled
+  or run on Windows as of this entry.
+- **2026-11-16 -- Endpoint agent: owner directive, Phase B1 (policy lifecycle) and B2 (Windows executable).**
+  **Owner directive:** the product owner told the team to follow the PDF "IAM Endpoint Device Trust Technical
+  Specification v1" for the agent (resolves the *which document governs* part of OQ-16 in the PDF's favour). The BRD-only
+  requirements the PDF omits (GPS FR-5.5, remote-authorized uninstall FR-5.10..5.13, native Chromium policy FR-5.7) are
+  therefore **not built and not scheduled**; they stay listed in OPEN_QUESTIONS (OQ-21, OQ-22) until the owner decides.
+  **B1 (Tier 3, PDF-grounded):** the signed device policy now uses format `iam-device-policy-v1`: it signs tenantId and
+  deviceId (PDF 15.3 "tenant/device bound"), the heartbeat/posture intervals and failure mode (previously unsigned),
+  and sorts applications as text so the signature is deterministic (the repository returned rows in no defined order).
+  Timestamps are whole seconds. The agent rejects a policy that is validly signed but for another device/tenant, older
+  or lower-versioned than one already accepted (replay/rollback), already expired, or seen while the clock has gone
+  backwards (PDF 16 "anti-rollback"); clock-skew tolerance 120 s. Offline rules (PDF 15.2, Appendix A), implemented as a
+  pure tested state machine: FAIL_CLOSED denies when the policy lapses; FAIL_OPEN allows only for the app's grace window
+  (none configured = none allowed); RISK_BASED allows only if the app has offline access enabled AND is within grace;
+  grace is measured from the last successful sync; an unknown mode fails closed. These govern controls enforced
+  *locally by the agent*; app access is still decided server-side by the PEP.
+  **B2:** produced `iam-endpoint-agent.exe` by cross-compiling on Linux (target `x86_64-pc-windows-gnu`, mingw-w64,
+  static); it imports only built-in Windows DLLs. Added `--console`, `--help`, `--version`, config validation (https
+  required except localhost; nil/placeholder tenant rejected; transit key must be 32 raw bytes).
+  **Bugs found by running the real .exe under Wine (none were visible to the compiler or the unit tests):**
+  (1) the browser was opened with `cmd /C start "" <url>`, and `cmd` treats every `&` as a command separator, so the
+  sign-in URL was cut after its first parameter and the rest was executed as commands -- enrollment could never have
+  worked on Windows (now `ShellExecuteW`, non-http(s) URLs refused); (2) the Windows service entry point stored the
+  agent's `run` closure in a thread-local, but the service dispatcher runs `ServiceMain` on a *new thread*, so the
+  service would have started and immediately stopped (now a process-wide static; Stop now actually signals shutdown);
+  (3) the enrollment callback listener accepted a single connection, so a browser's speculative preconnect or any
+  local process could abort sign-in (now it keeps listening and only a request carrying this attempt's secret `state`
+  can complete or fail it), and it waited forever (now bounded at 5 minutes, matching the backend transaction TTL).
+  **Known weak point:** hardware attributes are collected with `wmic`, which Microsoft is removing from Windows 11; it
+  must move to PowerShell CIM before this is relied on.
+  **Process note:** verification of an earlier step ran against stale sources because an upload failed silently; every
+  verification step now first proves the VM holds the latest code (grep for a marker) and records explicit exit codes.
+- **2026-11-16 -- Endpoint agent, Phase B3: device posture reporting (P1-14), Windows. Tier 3 (device-trust logic), made
+  conservatively and recorded for confirmation.** The agent reports **facts only** (disk encryption, antivirus real-time
+  protection, firewall, TPM, Secure Boot, OS, last update); the **server** evaluates them (`PostureEvaluator`), so a
+  modified agent cannot claim to be compliant. The old API took a verdict (`postureStatus`) from the agent; that field is
+  gone (a request carrying only a verdict now gets 400). Default rules: BitLocker, antivirus and firewall must all be
+  enabled; any one off = NON_COMPLIANT; none off but any undeterminable = UNKNOWN (an unreadable check is never a pass,
+  but is not a failure); risk 40 per failed and 10 per unknown check, capped at 100. TPM, Secure Boot and update date are
+  informational only. **Enforcement is OFF by default** (`iam.device.enforce-posture=false`): the verdict is recorded and
+  shown but does not change what a device may do, because turning it on suspends any approved device that fails the
+  defaults (for example a laptop without BitLocker). When on, it is reversible (APPROVED <-> NON_COMPLIANT as posture
+  changes) and never promotes a device that is not already approved. The non-compliant event fires when the status
+  changes, not on every 15-minute report (it used to fire every time). Reported on the policy's posture interval (default
+  900 s, clamped 60 s .. 24 h), after the heartbeat so a slow collection can never delay it, and still sent when the policy
+  fetch fails. Collection runs fixed, input-free PowerShell scripts (`platform/scripts/*.ps1`) launched by full path under
+  %SystemRoot% (never searched on PATH, since the agent runs as SYSTEM), via `-EncodedCommand`, with a 60 s timeout.
+  Hardware attributes moved off `wmic` (being removed from Windows 11) onto the same mechanism. Also fixed: an invalid
+  event `severity` returned 500 (now 400).
+  **Verified:** Rust 91 tests; Kotlin PostureEvaluatorTest 7, DeviceTrustServiceTest 22, DevicePolicyCanonicalTest 5;
+  both PowerShell scripts parse with 0 errors under the real PowerShell parser; Windows build clean; deployed, and the
+  new contract and the served console bundle were checked live (404/400 behaviour as specified).
+  **NOT verified:** the PowerShell probes have never run on a real Windows machine. Specifically unproven: that
+  Get-BitLockerVolume succeeds under the SYSTEM account, the antivirus `productState` bit decoding (0xF000 == 0x1000 means
+  on, taken from documentation, not tested), and Get-Tpm / Confirm-SecureBootUEFI on varied hardware. A probe that fails
+  reports UNKNOWN, so the failure mode is "shows Unknown", not a wrong verdict.
+- **2026-11-16 -- Endpoint agent, Phase B4: make the live end-to-end run possible. Tier 3 (crypto and key custody), made
+  conservatively; two defects found in earlier work.**
+  **Defect in the certificate code (mine, 2026-11-09):** `OpenBaoPkiClient.issueCertificate` calls PKI `issue`, which makes
+  OpenBao generate a NEW key pair and return a certificate for it. The device's own enrolled key is never involved and the
+  generated private key is discarded, so every certificate issued was for a key nobody holds and proved nothing about the
+  device. The correct flow is PKI `sign` over a CSR created from the device's own key (so the private key never leaves the
+  device, PDF section 5.3). **Decision:** certificate issuance is now opt-in and OFF by default
+  (`iam.device.issue-certificates=false`). With it off, approval works with no PKI configured, the response says
+  `certificateStatus: NOT_ISSUED`, and nothing is lost because nothing consumes the certificate (device calls authenticate
+  by signing with the enrolled key). Building the real CSR/`sign` flow is part of the hardware-key phase (FR-5.2) and needs a
+  new CSR dependency on the agent side (Tier 3), so it is not done here. An OpenBao outage now returns 503 (was 500) with no
+  internal detail in the body.
+  **Signed-policy key custody:** policies are signed by an Ed25519 key `device-policy` in OpenBao's transit engine; the
+  private key never leaves OpenBao. `infra/openbao/device-trust-setup.py` creates it (idempotent) and adds ONE permission,
+  `transit/sign/device-policy` (capability `update`), to the shared `cert-issuer` policy by reading and appending, never
+  replacing (replacing would cut every service off from its secrets). Limitation inherited from the existing design: all
+  services share one AppRole, so every service can sign device policies, not only iam-tenant-svc; a dedicated AppRole would
+  be the least-privilege fix.
+  **Verified against a REAL OpenBao** (same `openbao/openbao:latest` image the platform runs, throwaway dev instance): the
+  script succeeds on run 1 and changes nothing on run 2; existing policy paths are preserved; a token holding the policy can
+  sign with `device-policy` (200) but cannot read the key, use another key, or create keys (403); and a signature produced by
+  the real transit API over the golden canonical string verifies in the Rust agent, while a tampered policy is rejected. The
+  live OpenBao has NOT been changed: running the script needs the root token, which only the operator should use.
+  **Process failures this phase (recorded so they are not repeated):** (1) two verification harnesses silently did nothing
+  because inline Python was run with `docker run` without `-i`; one was caught only because the next step failed loudly, so
+  harness steps now assert their expected output; (2) a deploy bundle of a whole directory copied OpenBao's `init.json` and
+  test client key into world-readable `/tmp` files on the VM for ~4 minutes (see OQ-27); archives for the VM now list files
+  explicitly.
+
+- **2026-11-16 -- Endpoint agent: browser sign-in restriction for Chrome and Edge (spec P1-19, P1-20, P1-23, partial). Tier 2.**
+  Uses the browsers' own enterprise policy (AP-7, no TLS inspection): HKLM `RestrictSigninToPattern` for Chrome and Edge and
+  Chrome `AllowedDomainsForApps`, written by the SYSTEM service at every start so a changed value is restored. The domain
+  list comes from the local `allowed_identity_domains` in `config.json` (empty = feature off, nothing touched); domains are
+  strictly validated because they end up in a regex. Unit-tested (5 tests, 96 total) and cross-compiled for Windows; the
+  registry write has NOT been run on a real machine and Chrome's behaviour (`chrome://policy`) has not been checked.
+  Not done: Firefox, Safari, other providers, removing the values on uninstall, and delivering the list through the signed
+  device policy instead of local config (needs a change to the signed canonical format on both sides: Tier 3, see OQ-28).
+- **2026-11-16 -- Endpoint agent: tamper detection (spec P1-16, partial). Tier 2.** The agent hashes its own program and
+  `config.json` at start and re-checks every sync tick. A change or deletion raises one CRITICAL `agent.tamper_detected`
+  event per distinct state and turns the heartbeat health to DEGRADED until the file matches again (`agent.tamper_cleared`).
+  A legitimate edit or update is followed by a restart, which takes a new baseline. 5 new tests (101 total); verified on real
+  Windows by editing the config while the agent ran (HEALTHY -> DEGRADED on the demo platform). NOT covered: stopping or
+  killing the service, SYSTEM-level replacement of files plus restart, signed-binary checks, a watchdog, and the spec's
+  "configurable response" (only report + degrade is built).
+- **2026-11-16 -- Endpoint agent: `--status` command (surfaces the offline/failure-mode logic, spec P1-17/P1-18). Tier 2.**
+  Read-only summary from local files only: enrollment, key type, signed policy version and freshness, intervals, the offline
+  behaviour (fail-closed / fail-open / risk-based, per-app grace) and the local decision right now. Never prints key material
+  (tested). 6 new tests (107 total); run on real Windows against the demo state. The decision logic itself (`PolicyCache::decide`)
+  already existed and is unit-tested; nothing on the device ENFORCES it yet, because enforcement belongs to the browser/network
+  controls (P1-19..25) that are mostly unbuilt. When installed the data folder is administrators-only, so `--status` needs an
+  administrator shell.
+- **2026-11-16 -- Endpoint agent: heartbeat cadence fix and browser-policy cleanup on uninstall. Tier 2.** The sync loop now
+  measures its interval from the START of a pass, so slow posture collection (~12 s of PowerShell) no longer stretches the
+  heartbeat (was ~42 s against a 30 s policy; measured on real Windows after the fix: 30 s gaps, 4 of 4). `install.ps1 -Uninstall`
+  removes the three browser policy values when the config had allowed_identity_domains (it removes by name, so a value an
+  administrator set independently under the same name would also go; documented, not yet verified on a real machine).
+- **2026-11-17 -- Endpoint agent: Windows Event Log integration (spec Section 14.1). Tier 2.** Every event the agent raises
+  (tamper detected/cleared, policy rejected, clock moved backwards, posture collection failure) plus agent started/stopped and
+  the browser-policy result is mirrored to the Windows Application log under source `IamEndpointAgent`, with stable ids
+  (1000 started, 1001 tamper detected, 1002 tamper cleared, 1003 policy rejected, 1004 clock moved backwards, 1005 posture
+  failure, 1006 stopped, 1010/1011 browser policy applied/failed, 1999 other). 111 tests (4 new + one extended). Verified on
+  real Windows: events 1000 and 1001 appeared in Event Viewer with the right level and text. The source has no message file,
+  so Event Viewer prints its "description cannot be found" preamble before the agent's text; registering a message file is a
+  later polish item. `agent.stopped` is not written when the process is killed (only on a graceful stop).
+- **2026-11-17 -- Device activity timeline (Admin Console + iam-tenant-svc). Tier 2.** New admin-only endpoint
+  `GET /api/v1/endpoint/devices/{id}/events?tenantId=` (the device's 50 most recent events, newest first; another tenant's
+  device looks like "not found") and an "Activity" list under each device's details. Admin actions (approve, reject, suspend,
+  revoke) were audit-log-only; they are now ALSO written to the device's own event table (with the actor and reason), so the
+  timeline shows who did what. 3 new tests; the full tenant test suite passes on the VM. Deployed to the live VM (tenant-svc,
+  then admin-console). Verified: both healthy and the new route exists and rejects a caller with no session (HTTP 400).
+  Not yet seen in the browser by me. Events written before this change for admin actions do not exist (they were never stored
+  there), so older devices show enrollment/agent events only.
+- **2026-11-17 -- Endpoint agent: unsigned MSI installer (spec P1-02, partial). Tier 2.** Built with the portable WiX 3.14 toolset
+  (downloaded into %LOCALAPPDATA%\iam-build-tools, nothing installed system-wide; the zip's SHA-256 was recorded at download,
+  trust-on-first-use, no published checksum was checked). `install/build_msi.ps1` produces `dist/IamEndpointAgent-<version>.msi`
+  with tenant id, policy key, allowed domains and URLs as DEFAULT properties that a silent install can override
+  (`msiexec /i ... /qn TENANT_ID=... POLICY_KEY=... ALLOWED_DOMAINS=...`). It installs to Program Files, registers the
+  auto-start LocalSystem service with restart-on-failure, writes the locked-down config through `configure.ps1` (strict input
+  validation, tested with bad tenant/key/URL/domain), keeps an existing config on upgrade, adds a Start Menu "Enroll this
+  device" shortcut, upgrades in place (MajorUpgrade) and on uninstall removes the service, files and browser restriction.
+  The MSI deliberately does NOT start the service: enrolment needs the user's browser sign-in, which an installer running as
+  SYSTEM cannot do, so `Enroll-Device.cmd` enrols (default BYOD = manual approval; CORPORATE auto-approves) and then starts it.
+  NOT signed (no certificate): Windows shows "Unknown publisher"; signing later is one command, no rebuild. NOT yet installed
+  or run on a real machine: the build shell was not elevated, so only the build, the MSI contents (decompiled with WiX dark)
+  and the script validation were verified. An MSI cannot be installed over an agent installed by install.ps1 (the service
+  already exists); uninstall that first.
+- **2026-11-17 -- Admin Console, Endpoint Security: fleet summary, Offline flag, search, auto-refresh. Tier 2.** Console-only
+  change (no backend change). Summary cards (Devices, Approved, Awaiting approval, Non-compliant, Offline) that double as
+  filters, a search box (device name or user), and an "Offline" badge on any device not seen for 15 minutes (the default
+  heartbeat is 5 minutes), which makes a stopped or killed agent visible -- until now the platform only showed a stale "Last
+  seen". The page also refreshes itself every 30 seconds. The 15-minute threshold is a display rule only; no enforcement uses
+  it. Type-checks (tsc) and is deployed; the console's own test suite has one failure that predates this change
+  (tenant.test.ts: the dev `?tenant=` override wins over a real subdomain, which contradicts that test; see the sslip.io
+  demo-domain entry above) and was left alone.
+- **2026-11-17 -- Endpoint agent polish round (usability, PDF 6.3). Tier 2.**
+  (1) Re-enrolment: `--enroll` on an already-registered machine now says so before opening anything and exits 3, which
+  `install.ps1` and `Enroll-Device.cmd` treat as success (so reinstalling on a registered machine just starts the service);
+  `--reset-enrollment --confirm` deletes `state.json` and `policy-cache.json` (keeps config) so the machine can enroll as a
+  NEW device, and refuses while the service is running; the old platform record is left for an administrator to revoke.
+  (2) Security fix: `--ownership` used to treat ANY value other than the exact text `BYOD` as CORPORATE, which the platform
+  approves automatically (a typo meant auto-approval); unknown values are now refused (exit 2).
+  (3) Bug fix in `Enroll-Device.cmd` (never run yet): its self-elevation passed an empty `-ArgumentList`, which PowerShell
+  rejects, so the Start Menu shortcut would have done nothing on a non-elevated click.
+  (4) README rewritten to describe the real install/use/remove flow.
+  Considered and NOT changed: the BitLocker probe takes ~5.5 s (module load); a faster CIM query exists but can only be
+  verified as administrator, and the current probe reads correctly on the test laptop, so it stays.
+  113 tests pass; checked on Windows: already-enrolled exit 3, bad ownership exit 2, reset without --confirm exit 2, and the
+  reset refusing while the real service runs. The reset deletion itself is covered by unit tests only.
+- **2026-11-17 -- Device-bound sign-in and TPM keys: design agreed, slice S1 built. Tier 3 decisions made by the owner.**
+  Owner decisions: (D1) proof of the laptop = the agent signs a one-time platform challenge over a 127.0.0.1 endpoint (PDF 4.2 "nonce-based signed challenge"); (D2) device state blocks only apps an admin flags "trusted device required"; (D3) TPM-backed ECDSA P-256 keys with a software fallback and the assurance level reported; (D4) a non-compliant laptop is blocked only from flagged apps, no automatic suspension. Full design, API, audit events and success criteria in `docs/specs/device-bound-signin-SPEC.md`.
+  Built and tested (S1, tenant-svc only, 16 new tests, whole suite passes on the VM, NOT deployed): migration V11 (per-app flag on oidc_clients and saml_sps; one-time challenge table); `DeviceLoginProofService` (issue; verify with atomic single use that burns the challenge even on failure, same-tenant AND same-user device, dead states refused, domain-separated payload bound to tenant, user, device, challenge, nonce and origin, generic 401 outward with the real reason audited); `TrustedDeviceGate` (applies to administrators too; denies no-device, unknown, not-approved, non-compliant, someone else's device; audited); `PUT /{id}/trusted-device` on OIDC clients and SAML apps; the session's deviceId now reaches the access check. The gate sits in `AppAccessController`, not `AppAccessService`, so the existing access tests and rules are untouched.
+  Not built yet: auth-svc accepting the proof (S2), console switch (S3), the agent's loopback endpoint (S4), the login-portal flow (S5), TPM keys (S6; note CNG signs ECDSA as raw r||s while the backend's `SHA256withECDSA` expects DER, so the verifier needs `SHA256withECDSAinP1363Format` for this path), end-to-end run (S7). Until S2-S5 exist nothing sets a deviceId on a session, so flagging an app today would lock everyone out of it: do not switch the flag on before S5 is deployed.
+- **2026-11-17 -- Device-bound sign-in: S1 corrected and deployed, S2 built and deployed. Tier 2.**
+  (1) Design flaw fixed before it shipped: the challenge was bound to a user, but the login page asks for it BEFORE the
+  password is checked, so the user is unknown. Now the challenge belongs to the tenant only; auth-svc, which has authenticated
+  the user, tells tenant-svc which user the laptop must belong to (the device's owner must equal that user); the signed payload
+  no longer contains a user id.
+  (2) A real exposure found by checking the live system and closed the same day: the spec said the new `/internal/device-challenges`
+  routes were not publicly routed, but the public proxy forwards every request for the tenant address, so they answered the
+  internet (HTTP 200). A proof still cannot be forged (a valid device signature is required) but anyone could create challenge
+  rows. `InternalOnlyFilter` now answers 404 to any request carrying a proxy header (`X-Forwarded-*`, `Forwarded`, `X-Real-IP`);
+  verified live: 404 from the internet, 200 from inside the platform network. Limited to the new routes on purpose; the older
+  `/internal/devices/...` route (OQ-24) is unchanged and still publicly reachable.
+  (3) S2: `iam-auth-svc` accepts an optional `deviceProof` on login. It is checked only after the password and second factor have
+  succeeded; success stores the device on the session; a missing, wrong, malformed-but-parsed or unverifiable proof (or an
+  unreachable tenant-svc) NEVER changes the outcome of the sign-in: the person signs in without a device and a
+  `auth.device_proof_not_accepted` audit event is written. The existing `issue` path is untouched; a separate `issueForDevice`
+  is used only when a proof verified. tenant-svc has its own breaker and `max-attempts: 1` (a challenge is single use, and a slow
+  tenant-svc must not slow sign-ins). 6 new auth tests; both suites pass on the VM.
+  Verified live after each deploy: tenant, admin console and login portal respond; a login for a made-up user returns the same 401
+  with and without a bogus proof; a malformed proof returns 400. A real person's sign-in was not exercised by me.
+  Nothing sets a deviceId on a real session yet (the login page and agent are S4/S5), and no app is flagged, so user-visible
+  behaviour is unchanged.
+- **2026-11-17 -- Device-bound sign-in S4: the agent's loopback endpoint. Tier 2/3 (a new local network surface), built conservatively.**
+  `crates/agent-core/src/local_api.rs`: a minimal hand-written HTTP/1.1 listener on 127.0.0.1 (ports 47631-47635, first free; no
+  new dependency). Routes: `GET /v1/identity`, `POST /v1/sign-login`, CORS preflight. Restrictions: Host must be exactly the
+  loopback address and port (DNS rebinding), Origin must equal the origin of `enrollment_login_url` (else 403 with no CORS headers),
+  JSON content type required, strict body validation (`deny_unknown_fields`, UUID challenge id, 16-128 char base64url nonce, body
+  origin must equal the allowed origin), 4 KiB body / 8 KiB head caps, 3 s read timeout, 8 concurrent connections, peer must be
+  loopback. It signs ONE fixed structure (`iam-device-login-v1` + tenant, device, challenge, nonce, origin) and nothing else; the
+  platform accepts only challenges it issued. It can be switched off per machine with `local_api_enabled: false`. A failure to bind
+  never affects the agent's normal reporting.
+  Stated limit: software running on the laptop can send any Origin header; it would still need a live platform challenge and the
+  user's password, so it gains nothing it did not already have, but this is not protection against local malware.
+  Verified: 14 unit tests plus 4 real-socket tests (129 agent tests total). On real Windows, against the demo platform: right
+  origin 200 and a signature that an independent Python implementation verified over the exact payload (and that does NOT verify
+  for a different origin); evil origin, missing origin 403; bad nonce 400; wrong body origin 400; bound to 127.0.0.1 only.
+  Your installed agent does not have this yet: it needs a new version (bump from 0.1.0) installed over it. Not done on purpose
+  before the login-page side (S5) exists.
+- **2026-11-17 -- Device-bound sign-in S3: Admin Console switch. Tier 2.** On each connected app's details row (Clients page) a
+  "Trusted device" checkbox: "Only allow sign-in from an approved, compliant laptop". Turning it ON asks for confirmation and warns
+  that administrators are included and that the team must have the agent; turning it off needs none. Off by default for every app.
+  Calls `PUT /api/v1/{oidc-clients|saml-sps}/{id}/trusted-device`. Type-checks and deployed (the console's one failing test,
+  tenant.test.ts, predates this). DO NOT turn it on for any app until S5 (login page asks the agent for proof) is deployed and the
+  new agent is installed: until then no session carries a device and the app would refuse everyone.
+- **2026-11-17 -- Device-bound sign-in S5: the login page asks the agent for proof. Tier 2, built so that nothing changes until it is used.**
+  Rules the owner set: do not disturb the existing sign-in, laptop apps or the admin console. How that is guaranteed:
+  (1) the portal talks to the agent only when the tenant has at least one app flagged "trusted device required" (new internal
+  `GET /internal/device-challenges/required`); the check fails to false, so any fault means "behave as before"; no app is flagged
+  today, so no page makes a local call or shows anything new. (2) A proof can only ADD a device: the browser code never throws, has
+  a 4 s overall limit and 0.8 s probe limit, and always submits the form afterwards, with the same button, even on failure; the
+  server drops any proof that is not exactly well-formed (iam-auth-svc would answer a malformed proof with 400, which would block
+  the sign-in). (3) The admin console signs in by calling iam-auth-svc directly and never sends a proof, so it cannot be affected.
+  The challenge is fetched at submit time (not page load) because it may be a minute between password and code; lifetime raised
+  from 60 to 120 s for the push path (which can wait 60 s on the phone before verification), and old challenges are deleted on issue.
+  Verified: 62 portal tests (9 new), tenant suite on the VM (3 new); deployed in order tenant-svc then portal; live sign-in pages
+  are byte-identical to before apart from one new empty hidden field and Next's per-build action id; the new internal routes answer
+  false/200 inside the network and 404 from the internet; wrong-password login still 401; admin console, device list and the laptop's
+  agent unaffected. NOT yet exercised end to end: needs the new agent installed and an app flagged (see OQ-31 for the browser's
+  possible local-network prompt, which would then appear for the tenant's sign-in page).
+- **2026-11-17 -- TPM-backed device keys (spec P1-06, section 5.3), agent 0.2.0. Tier 3 (key custody), per owner decision D3.**
+  New enrollments use a TPM key when the machine has one, otherwise the software key, with the assurance level reported
+  (`HARDWARE_TPM` / `SOFTWARE`) and shown in the console. Windows CNG, "Microsoft Platform Crypto Provider", ECDSA P-256, created as a
+  MACHINE key (so the LocalSystem service can use a key an elevated administrator created), never exportable. State: `state.json` gains
+  an optional `hardware_key_name` next to the existing optional `key_material` (both `serde(default)`; an old file loads unchanged, tested);
+  a TPM identity stores no private key bytes at all (tested). Rules: only NEW enrollments change; an existing software identity keeps
+  its key even where a TPM exists; a TPM key that cannot be opened is an error and is never silently replaced by another key (that
+  would be a different identity the platform never registered); if enrollment fails after the key was created the key is deleted;
+  `--reset-enrollment` deletes the identity's TPM key; `prefer_hardware_key: false` in config forces software keys.
+  Signature format: CNG signs ECDSA as raw 64-byte r||s; the backend verifier now picks `SHA256withECDSAinP1363Format` for a 64-byte
+  signature and DER otherwise (tested both, plus tampered, wrong key, garbage); Ed25519 is unchanged. New dependency: none (windows-sys
+  gains the `Win32_Security_Cryptography` feature; the binary crate gains the already-used `sha2`).
+  New command `--tpm-selftest [--user]` creates a throwaway key, signs, reopens, deletes, and prints the public key and signature as JSON.
+  Proven on the dev laptop (user-scope key, real TPM): created, signed, reopened, deleted; the SPKI and signature were verified
+  independently by Python's `cryptography` AND by Java's own KeyFactory/Signature exactly as the backend reads them; tampered data fails.
+  NOT yet proven: a machine-scope key (needs an elevated shell: run `--tpm-selftest` as administrator), the SYSTEM service using it,
+  and a whole TPM enrollment against the real platform; the 140 agent tests use a fake TPM store for the logic. A laptop with no TPM, or a
+  VM, falls back to a software key (the fallback path is unit-tested, not run on such a machine).
+  Also this round: version 0.2.0 (so the MSI upgrades 0.1.0 in place); the MSI now starts the service after an upgrade, but only if the
+  machine is already enrolled (a fresh install must not start it before enrolment). Fixed my own mistake in that edit: a Python string
+  turned `\v1.0` into a control character in the PowerShell path; found because the build failed.
+- **2026-11-17 -- BUG FOUND AND FIXED (mine): device policy signing was lost at every VM reboot. Tier 2.** Symptom: after the VM restarted
+  (scheduled stop/start), iam-tenant-svc logged `OpenBao ... Signing via transit failed: 403 permission denied` and the laptop agent could
+  no longer obtain a signed policy (it retried with backoff, about every 10 minutes). Cause: `infra/openbao/unseal-on-boot.sh` runs
+  `bootstrap.py` on EVERY boot and `ensure_approle` REPLACES the whole `cert-issuer` policy from the constant `CERT_ISSUER_POLICY`;
+  my `device-trust-setup.py` only appended `transit/sign/device-policy` to the LIVE policy, so the next boot silently removed it.
+  I recorded in OQ-25 that the setup script should be re-run after a rebuild, but did not check the boot path. Fix: the permission is
+  now part of `CERT_ISSUER_POLICY` in `bootstrap.py` (repo and the VM's copy; the VM file differed from the repo only by these 7 lines;
+  backup at /tmp/bootstrap.bak.* on the VM, which does not survive a reboot). `device-trust-setup.py` stays idempotent (it detects the
+  permission and changes nothing). What stays unaffected by this fault: sign-in, the admin console, device registration, heartbeats and
+  posture (device-signed, not OpenBao-signed). What it broke: only the signed policy the agent verifies, so the agent showed degraded.
+  The live policy still lacks the permission until the setup script is run once with the root token (operator step); after that a
+  reboot keeps it. Lesson: any change to a resource that a boot script re-asserts must be made in that script's source, and a verified
+  claim about "survives restart" needs an actual restart test (tonight's unplanned restart was the test).
+- **2026-11-17 -- Fixed an OLD bug found during the E2E test: saving an app's group access failed whenever the selection kept an
+  already-assigned group. Tier 2 (bug fix, not part of device-bound sign-in).** `OidcClientService.setGroups` and `SamlSpService.setGroups`
+  deleted the app's group rows and inserted the new set in one transaction; Hibernate executes INSERTs before DELETEs at flush, so any
+  selection overlapping the existing one violated the unique index (`idx_oidc_client_groups_unique`), HTTP 500, which the console shows as
+  "This is temporarily unavailable". Present in the last commit (not introduced by this work); it only ever worked when the new selection
+  shared nothing with the old. Found because the log showed three such errors while the owner saved OU access for the test app. Fix: flush
+  the delete before saving (one line in each service) plus two ordering regression tests; whole tenant suite passes; deployed.
+  NOT investigated: whether the OUs page uses a different endpoint with the same shape (the "APPS THIS OU CAN OPEN" checkboxes call
+  per-app group updates, so it is likely fixed by the same change, but not verified).
+  Also seen live: Chrome shows a "wants to access other apps and services on this device" (local network) permission prompt the first
+  time the sign-in page contacts the agent (OQ-31 confirmed). If it is not answered within the 4 s overall limit the proof is skipped and
+  the sign-in carries on without a device, so a flagged app then shows the generic access-denied page (OQ-34).
+- **2026-11-17 -- Device-bound sign-in: first live attempt failed; design flaw in S5 found from the platform's audit stream and fixed. Tier 2.**
+  Evidence (audit events read from the `audit-events` Kafka topic): the owner's sign-ins succeeded and the group check passed, but
+  `app.access.denied_untrusted_device` fired with no device on the session, and there was NO `auth.device_proof_not_accepted` event, so
+  the portal never sent a proof at all. Cause: Chrome asks the person to allow a site to reach "other apps and services on this device"
+  the first time it does so, and S5 made that first call at the moment of Sign in with a 0.8 s probe limit, so nobody could answer in time
+  (and each new InPrivate window starts again). The refusal page is the generic "no access" one, which looked like a group problem (OQ-34).
+  Fix: the sign-in page now touches the agent once when it loads (only for tenants that use device sign-in), so the prompt appears while
+  the person types; at sign-in a still-unanswered prompt gets up to 15 s (22 s overall) and otherwise the usual 4 s. Still never blocks a
+  sign-in. 5 more portal tests (67). Lesson: the unit tests proved the logic but not the browser's permission timing; only a real browser
+  run showed it, which is why S7 exists. Possible follow-up for managed laptops: pre-approve the login origin through browser policy so
+  there is no prompt at all (the agent already writes Chrome/Edge policy); not done, the exact policy name/version needs checking first.
+- **2026-11-18 -- Login portal: the refusal page now says WHY (closes OQ-34's wording half). Tier 2.** An app refusal used to show
+  "add you to a group" whatever the cause, which made the device test look like a group problem. iam-oidcprovider-svc already passed the
+  gate's reason as the error message; the portal now maps it to one of a FIXED set of codes (`device_required`, `device_unregistered`,
+  `device_not_approved`, `device_noncompliant`, else `app_access_denied`) with fixed wording. Backend text is never shown and never put in a
+  URL (the error page is reached by URL, so it must not echo anything a link could carry). Same mapping on the SSO path, the OIDC form path
+  and the SAML form path. Also fixed an existing bug: `/login/error?reason=toString` rendered an empty message (object prototype lookup);
+  the page now accepts only its own keys. 4 new tests (71); deployed; every code checked on the live page. The coupling (portal matches
+  the gate's phrases) is commented at both ends; a wording change can only make the page fall back to the generic text.
+- **2026-11-18 -- P1-13 application-specific pending-device access (spec 6.4). Tier 2.** Spec 6.4: "Application-level policy determines
+  what a pending device can access (e.g. HR and IT support allowed; CRM, Finance and source code blocked). All final decisions must be
+  enforced by the backend PEP." Built as a per-app `allow_pending_device` (migration V12, OIDC and SAML, default FALSE) that only matters
+  together with `require_trusted_device`. The gate accepts APPROVED, plus PENDING_APPROVAL only where the app allows it; suspended,
+  revoked, rejected or decommissioned laptops stay refused whatever it says, and a pending laptop that fails posture is still refused.
+  Admin endpoint `PUT /{id}/pending-device` (admin only); console checkbox "Also allow laptops that are still awaiting approval" under
+  Trusted device, disabled while Trusted device is off. 5 new gate tests; tenant suite passes; deployed (tenant-svc, then console); the
+  test app shows `allowPendingDevice: false` (safe default) from the live API. Not run end to end with a real pending laptop (the only
+  enrolled laptop is approved). The signed device policy's per-app `pending_access` field (agent side) is unchanged: the decision is the
+  backend's, as 6.4 requires.
+- **2026-11-18 -- P1-16 "configurable response" to tampering. Tier 2.** iam-tenant-svc setting `iam.device.tamper-response`
+  (env `IAM_DEVICE_TAMPER_RESPONSE`): `report` (default; record and show, as before) or `suspend` (also suspend an APPROVED device,
+  recorded as an AUTOMATIC suspension by `system:tamper-response` with the reason, audited as `device.suspended`). Never undone
+  automatically by `agent.tamper_cleared`: an administrator reviews and reactivates. Only approved devices are touched; any value other
+  than `suspend` (including typos) means report, so a misconfiguration cannot lock devices out. Same shape as the existing
+  `enforce-posture` switch. 4 new tests; suite passes; deployed with the default (no behaviour change). Not set per tenant: one setting
+  for the whole deployment until tenant-level device settings exist. Still not covered: stopping or killing the agent service, and file
+  replacement by someone with SYSTEM rights followed by a restart (the agent re-baselines at start).
+- **2026-11-18 -- Owner decisions (Tier 3), recorded before building:** (1) P1-26 agent auto-update: releases are signed by a NEW,
+  separate OpenBao transit key `agent-release` (not the policy key). (2) P1-17/P1-18 offline/failure modes stay REPORT-ONLY on the laptop
+  (the decision is computed and shown; nothing on the device is blocked; the platform-side checks protect "trusted device" apps). This is
+  the chosen behaviour, not a gap. (3) P1-16 tamper response stays `report` (auto-suspend is built but off). (4) P1-21 Firefox and P1-24
+  Microsoft tenant restrictions are deferred: Firefox needs Mozilla-signed extensions and Tenant Restrictions needs Entra admin setup.
+- **2026-11-18 -- P1-26 signed agent updates built (0.3.0), per owner decision: a NEW OpenBao key `agent-release`. Tier 3 (it installs
+  code as SYSTEM), designed conservatively; spec in `docs/specs/agent-update-SPEC.md`.**
+  Trust model: the OPERATOR signs, with their own token at publish time; no service has permission on that key (the setup script
+  refuses to finish if the shared `cert-issuer` policy could ever sign with it, and a service-level token was shown to get 403), so a
+  compromised iam-tenant-svc can serve a file but cannot make an agent accept one. The AGENT decides: signature over
+  `iam-agent-release-v1 / platform / arch / version / sha256` against the key in its administrators-only config, hash of the bytes (checked
+  again from disk, to catch a swap), and a strictly newer version (no downgrade or replay of an old signed release). Signature and
+  version are checked BEFORE downloading. No key configured = updates off, and nothing the platform sends can turn them on.
+  Backend (deployed): migration V13 (signature column, package table), `AgentReleases.kt`: operator publish route
+  `/internal/agent-releases` (answers 404 through the public proxy; recomputes the SHA-256 and refuses a mismatch or a duplicate version)
+  and two device-signed agent routes (offer, download). Agent: `update.rs` (20 unit tests, a fake source/installer for every refusal,
+  a paused-clock test of the 5 minute / 6 hour schedule), windows `msiexec /i /qn` launched detached by full System32 path for a verified
+  `.msi` only. Operator tools: `infra/openbao/agent-release-setup.py`, `infra/agent-release/publish.py` (7 tests).
+  Verified against a REAL OpenBao (throwaway, same image as production): setup is idempotent; the guard refuses a dangerous policy; a
+  service token is refused (403); publish.py signs a real installer through transit; the agent's verifier accepts that signature and
+  rejects a tampered file, a changed version and a same-version replay. Installer: an upgrade now KEEPS the existing config.json (before,
+  a reinstall rewrote it from build defaults, which would have wiped local settings on every automatic update) and only adds a missing
+  release key; `FORCE_CONFIG=1` rewrites on purpose; 13 behaviour tests of the script. Version 0.3.0. See OQ-35 to OQ-38 for limits.
+- **2026-11-18 -- Pre-publish rehearsal on the dev laptop FOUND AND FIXED TWO SERIOUS INSTALLER BUGS (mine). Tier 2, but one of them could have
+  left laptops with no agent.** Rehearsing the MSI upgrade 0.2.0 -> 0.3.0 on the real laptop:
+  (1) **Bug in my config step.** The installer passed `-ReleaseKey "-"` (a lone dash as the "no key" placeholder) to PowerShell, which parses
+  it as a broken parameter name; `configure.ps1` crashed and failed the whole install (error 1603). My earlier script tests called the script
+  with splatted parameters, never through `powershell -File` as Windows Installer does, so they could not see it. Fix: placeholder `NONE`;
+  and the config step now NEVER fails an install on a machine that already has a config (every problem there is reported and ignored; only a
+  fresh install may fail loudly). 7 new tests run the script exactly as the installer does.
+  (2) **A failed upgrade removed the working agent.** With the default MajorUpgrade order (remove old, then install new), the failure made
+  Windows roll back and the rollback did NOT restore the old version ("Error in rollback skipped"): the laptop ended with no exe, no service and
+  no Apps entry (only the identity files in ProgramData survived, which is why reinstalling worked). For a product with AUTOMATIC updates this
+  would have silently unprotected laptops on any failed update. Fix: `MajorUpgrade Schedule="afterInstallExecute"` (install the new version
+  first, remove the old one only afterwards), proved with a deliberately failing test installer (`build_msi.ps1 -FailInjection`, never in a
+  release): the failing 0.3.9 returns 1603 and 0.3.0 stays installed and running with the same identity; a good 0.3.1 upgrade then succeeds with
+  one Apps entry. (3) The installed file name now follows the build's source file name; pinned to `iam-endpoint-agent.exe` in the installer
+  (the service, shortcut and later upgrades rely on it). The MSI version is also now passed to build_msi as `-ExePath` for rehearsal builds.
+  Also proven live on the laptop: MSI uninstall removes the service, folder, Start Menu entry and the Chrome/Edge policies and KEEPS the config
+  and identity; a clean reinstall on an enrolled machine starts the service by itself.
+  **TPM enrollment proven on the real TPM** (P1-06): a machine-scope ECDSA P-256 key, assurance HARDWARE_TPM, no private key bytes in the
+  identity file, every signed request (heartbeat, policy, posture, enrollment proof) accepted by an independent verifier (Python `cryptography`)
+  with 0 rejections; the test key was deleted afterwards. Limits: `--reset-enrollment` refuses while the real service runs, so its TPM-key
+  deletion is unit-tested only; the cleanup used `certutil -delkey`.
+  Process lesson, for the log: test an installer the way the OS runs it (an actual upgrade, an actual failed upgrade), not only its parts.
+- **2026-11-18 -- Agent-driven update rehearsed on the real laptop (P1-26).** A separate rehearsal agent (0.3.0, throwaway folder, throwaway
+  release key, demo platform) found a signed REAL 0.3.2 installer, verified it, launched `msiexec` silently and the installed agent was upgraded
+  0.3.1 -> 0.3.2: service restarted by itself (agent events 1020 installing, 1006 stopped, 1000 started 0.3.2, 1010 browser policy), one Apps
+  entry, correct exe name, the real device identity and config fingerprints unchanged, `--status` shows the same device
+  (`ef9a4d16…`), APPROVED, policy valid, local decision ALLOW. The rehearsal never put its test key into the real install. NOT yet proven: the
+  installed SERVICE replacing ITSELF from the real platform with the real OpenBao-signed release (the rehearsal agent was a different process
+  from the service being replaced); that is the first real publish. Also noted while checking: my rehearsal script briefly pointed
+  `--status` of the real exe at the rehearsal's data folder and printed the rehearsal's device; a harness artefact, not a product fault.
+  State after the rehearsal: real agent 0.3.2 (software key, auto-update OFF until the real release key exists), 0 leftover TPM keys.
+- **2026-11-18 -- P1-26 PROVEN LIVE: the installed SERVICE replaced itself from the real platform with a release signed by the real OpenBao key.**
+  Operator side: `infra/openbao/agent-release-setup.py` created the `agent-release` key (it confirmed no service policy can sign with it);
+  a `--dry-run` signature over the 0.3.3 installer was verified independently (Python `cryptography`, and the agent's own Rust verifier on the
+  real file) BEFORE anything was installed or published; the key's public half was typed from a screenshot, which is why it was proven
+  cryptographically instead of trusted. `publish.py` then uploaded release 0.3.3. Laptop side: the key-bearing 0.3.2 baseline was installed
+  (identity untouched, only the key added to the config), the service's first update check ran 5 minutes after it started, and the laptop went
+  0.3.2 -> 0.3.3 by itself: agent events 1020 `update_installing`, 1006 stopped, 1000 started 0.3.3, 1010 browser policy; one Apps entry; the
+  downloaded installer hashes to the signed checksum (`fba1d909…ff4362`); the MSI log says "Installation completed successfully"; the device is
+  still `ef9a4d16…`, APPROVED, policy valid, local decision ALLOW; identity fingerprint unchanged.
+  Two operator-tool faults found on the way, both mine and both fixed: (1) `publish.py` used `docker` without `sudo` (the operator account is not in
+  the docker group) and printed an empty "HTTP ?" error, so it now uses `sudo` and prints the real error text; (2) a release key typed from a
+  screenshot cannot be trusted by eye, and a key starting with `/` is rewritten by Git Bash's path conversion when passed as an argument; the MSI
+  build now validates `-ReleaseKey` (base64, exactly 32 bytes) and refuses a bad one at build time.
+  Still open (OQ-35 to OQ-38): no automatic return to an older version if an update installs and then misbehaves (a failed INSTALL is safe, proven);
+  the installer is not Authenticode-signed; releases are served from the database; one release stream for all tenants.
