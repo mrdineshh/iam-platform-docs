@@ -538,9 +538,8 @@ function Fact({ label, value }: { label: string; value?: string | null }) {
   );
 }
 
-const MSI_DOWNLOAD_URL = "https://tenant.34-71-129-0.sslip.io/agent/IamEndpointAgent-latest.msi";
-
 function InstallGuideModal({ onClose }: { onClose: () => void }) {
+  const MSI_DOWNLOAD_URL = "https://tenant.34-71-129-0.sslip.io/agent/IamEndpointAgent-latest.msi";
   const dialogRef = useRef<HTMLDialogElement>(null);
   useEffect(() => { dialogRef.current?.showModal(); }, []);
 
@@ -571,7 +570,7 @@ function InstallGuideModal({ onClose }: { onClose: () => void }) {
         <section className="guide-section">
           <h3>📥 Install (fresh device)</h3>
           <ol className="guide-steps">
-            <li>Download the MSI installer</li>
+            <li><a href={MSI_DOWNLOAD_URL} target="_blank" rel="noreferrer" className="guide-link">Download the MSI installer</a></li>
             <li>Double-click the <code>.msi</code> file → Next → Install → Finish</li>
             <li>Open <strong>Start Menu</strong> → search <strong>"Enroll Device"</strong> → click it</li>
             <li>Come back here → <strong>Approve</strong> the new device</li>
