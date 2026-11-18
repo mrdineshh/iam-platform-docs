@@ -438,9 +438,32 @@ function DeviceIdPanel({ device }: { device: DeviceSummary }) {
       </div>
       <dl className="posture-grid posture-grid--wide">
         <div className="posture-grid__item">
-          <dt>Device ID</dt>
+          <dt>Device ID (platform record, immutable)</dt>
           <dd><code className="device-id-code">{device.id}</code></dd>
         </div>
+        {device.identity && (
+          <>
+            <div className="posture-grid__item">
+              <dt>Agent installation ID</dt>
+              <dd><code className="device-id-code">{device.identity.agentInstanceId}</code></dd>
+            </div>
+            <div className="posture-grid__item">
+              <dt>Device key</dt>
+              <dd>
+                {device.identity.keyAlgorithm ?? "—"}
+                {device.identity.keyAssuranceLevel ? ` · ${device.identity.keyAssuranceLevel.toLowerCase()}` : ""}
+              </dd>
+            </div>
+            <div className="posture-grid__item">
+              <dt>Hardware fingerprint{device.identity.fingerprintVersion != null ? ` (v${device.identity.fingerprintVersion}, SHA-256)` : ""}</dt>
+              <dd><code className="device-id-code">{device.identity.fingerprintHash ?? "—"}</code></dd>
+            </div>
+            <div className="posture-grid__item">
+              <dt>Manufacturer / model</dt>
+              <dd>{[device.identity.manufacturer, device.identity.model].filter(Boolean).join(" ") || "—"}</dd>
+            </div>
+          </>
+        )}
         <div className="posture-grid__item">
           <dt>User ID</dt>
           <dd><code className="device-id-code">{device.userId}</code></dd>
@@ -539,7 +562,6 @@ function Fact({ label, value }: { label: string; value?: string | null }) {
 }
 
 function InstallGuideModal({ onClose }: { onClose: () => void }) {
-  const MSI_DOWNLOAD_URL = "https://tenant.34-71-129-0.sslip.io/agent/IamEndpointAgent-latest.msi";
   const dialogRef = useRef<HTMLDialogElement>(null);
   useEffect(() => { dialogRef.current?.showModal(); }, []);
 
@@ -570,7 +592,7 @@ function InstallGuideModal({ onClose }: { onClose: () => void }) {
         <section className="guide-section">
           <h3>📥 Install (fresh device)</h3>
           <ol className="guide-steps">
-            <li><a href={MSI_DOWNLOAD_URL} target="_blank" rel="noreferrer" className="guide-link">Download the MSI installer</a></li>
+            <li>Get the <code>IamEndpointAgent-&lt;version&gt;.msi</code> installer from your IT administrator</li>
             <li>Double-click the <code>.msi</code> file → Next → Install → Finish</li>
             <li>Open <strong>Start Menu</strong> → search <strong>"Enroll Device"</strong> → click it</li>
             <li>Come back here → <strong>Approve</strong> the new device</li>

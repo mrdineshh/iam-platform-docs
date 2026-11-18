@@ -78,6 +78,21 @@ data class DeviceSummaryResponse(
     val postureSignals: PostureSignals? = null,
     val certificateStatus: String?,
     val createdAt: Instant,
+    // Spec Section 5.1 layered identity, shown to admins. Hashes only: the raw serial / hardware UUID never reach the backend.
+    val identity: DeviceIdentityDetails? = null,
+)
+
+/** The layers of spec Section 5.1 next to the platform device_id (which is [DeviceSummaryResponse.id]). */
+data class DeviceIdentityDetails(
+    val agentInstanceId: UUID,
+    val fingerprintVersion: Int?,
+    val fingerprintHash: String?,
+    val manufacturer: String?,
+    val model: String?,
+    val osVersion: String?,
+    val keyAlgorithm: String?,
+    val keyAssuranceLevel: String?,
+    val keyCreatedAt: Instant?,
 )
 
 // ---- Approval actions (Section 6.3) ----

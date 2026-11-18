@@ -281,6 +281,23 @@ class DeviceTrustService(
             postureSignals = signals,
             certificateStatus = cert?.status,
             createdAt = device.createdAt,
+            identity = identityDetails(device),
+        )
+    }
+
+    private fun identityDetails(device: IamDeviceEntity): DeviceIdentityDetails {
+        val hardware = hardwareRepository.findById(device.id).orElse(null)
+        val key = keyRepository.findByDeviceIdAndStatus(device.id, KeyStatus.ACTIVE.name)
+        return DeviceIdentityDetails(
+            agentInstanceId = device.deviceInstanceId,
+            fingerprintVersion = hardware?.fingerprintVersion,
+            fingerprintHash = hardware?.fingerprintHash,
+            manufacturer = hardware?.manufacturer,
+            model = hardware?.model,
+            osVersion = hardware?.osVersion,
+            keyAlgorithm = key?.keyAlgorithm,
+            keyAssuranceLevel = key?.assuranceLevel,
+            keyCreatedAt = key?.createdAt,
         )
     }
 

@@ -22,6 +22,20 @@ export interface DeviceSummary {
   postureSignals: PostureSignals | null;
   certificateStatus: "ACTIVE" | "EXPIRED" | "REVOKED" | null;
   createdAt: string;
+  identity: DeviceIdentityDetails | null;
+}
+
+// Spec Section 5.1 layers; `id` above is the immutable platform device_id.
+export interface DeviceIdentityDetails {
+  agentInstanceId: string;
+  fingerprintVersion: number | null;
+  fingerprintHash: string | null;
+  manufacturer: string | null;
+  model: string | null;
+  osVersion: string | null;
+  keyAlgorithm: string | null;
+  keyAssuranceLevel: string | null;
+  keyCreatedAt: string | null;
 }
 
 // Mirrors iam-tenant-svc's PostureSignals. A tri-state is "ENABLED", "DISABLED", or anything else (unknown).
