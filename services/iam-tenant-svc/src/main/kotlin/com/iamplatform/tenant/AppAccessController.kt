@@ -63,6 +63,8 @@ class AppAccessController(
     private val appAccessService: AppAccessService,
     private val trustedDeviceGate: TrustedDeviceGate,
 ) {
+    private val log = org.slf4j.LoggerFactory.getLogger(AppAccessController::class.java)
+
     @GetMapping
     fun check(
         @RequestParam appKind: String,
@@ -75,6 +77,13 @@ class AppAccessController(
         val access = appAccessService.check(session.tenantId, user.role, user.groupId, appKind, appId)
         // Only an otherwise-allowed user is checked further, so a denial never reveals more than it already did.
         val deviceDenial = if (access.allowed) trustedDeviceGate.check(session.tenantId, session.userId, appKind, appId, session.deviceId) else null
-        return ResponseEntity.ok(deviceDenial ?: access)
+        val decision = deviceDenial ?: access
+        // One line per app sign-in decision, so "why was this let in / refused" can be answered from the ops logs.
+        // IDs only: no token, no email.
+        log.info(
+            "app-access decision app={}:{} user={} role={} groupAllowed={} sessionDevice={} allowed={} reason={}",
+            appKind, appId, session.userId, user.role, access.allowed, session.deviceId ?: "none", decision.allowed, decision.reason ?: "-",
+        )
+        return ResponseEntity.ok(decision)
     }
 }
