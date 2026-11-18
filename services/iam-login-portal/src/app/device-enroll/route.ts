@@ -34,9 +34,15 @@ export async function GET(request: NextRequest) {
     return redirectTo("/login/error?reason=device_enroll_invalid");
   }
 
-  const sessionToken = request.cookies.get(config.ssoCookieName)?.value;
+  // prompt=login (sent by the agent) means: always show the login form, never silently
+  // reuse an existing browser session -- the user must actively identify themselves so
+  // the device is registered to the right person, not whoever happened to be signed in.
+  const promptLogin = params.get("prompt") === "login";
+  const sessionToken = !promptLogin ? request.cookies.get(config.ssoCookieName)?.value : undefined;
   if (!sessionToken) {
-    return redirectToLogin(request);
+    const response = redirectToLogin(request);
+    if (promptLogin) response.cookies.delete(config.ssoCookieName); // clear any stale session cookie
+    return response;
   }
 
   try {

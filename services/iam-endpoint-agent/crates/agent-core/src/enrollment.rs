@@ -82,7 +82,8 @@ async fn obtain_with_timeout(
     url.query_pairs_mut()
         .append_pair("redirect_uri", &format!("http://127.0.0.1:{port}/callback"))
         .append_pair("key_thumbprint", key_thumbprint)
-        .append_pair("state", &state);
+        .append_pair("state", &state)
+        .append_pair("prompt", "login"); // always show login form; never silently reuse a browser session
     launcher.open(url.as_str()).map_err(EnrollmentAuthError::LaunchBrowser)?;
 
     // Never an unbounded wait (ENGINEERING_GUARDRAILS section 2).
