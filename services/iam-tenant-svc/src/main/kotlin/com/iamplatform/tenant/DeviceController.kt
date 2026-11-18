@@ -4,7 +4,6 @@ import jakarta.servlet.http.HttpServletRequest
 import jakarta.validation.Valid
 import org.springframework.http.HttpStatus
 import org.springframework.http.ResponseEntity
-import org.springframework.web.bind.annotation.DeleteMapping
 import org.springframework.web.bind.annotation.GetMapping
 import org.springframework.web.bind.annotation.PatchMapping
 import org.springframework.web.bind.annotation.PathVariable
@@ -143,20 +142,21 @@ class DeviceController(
     }
 
     /**
-     * Soft-delete: wipes the device record entirely so the agent can re-enroll
-     * from scratch (new device ID, fresh PENDING_APPROVAL). Useful for demos and
-     * when a device is reassigned. Audited as device.deleted.
+     * Decommission ("remove"): takes the device out of service without deleting anything. Its record,
+     * approvals, keys and event history are all retained (spec 6.2: DECOMMISSIONED keeps its audit
+     * record); it never satisfies device trust again, and the user can enrol the laptop afresh.
      */
-    @DeleteMapping("/devices/{deviceId}")
-    fun deleteDevice(
+    @PostMapping("/devices/{deviceId}/decommission")
+    fun decommission(
         @PathVariable deviceId: UUID,
         @RequestParam tenantId: UUID,
+        @RequestBody(required = false) request: DeviceActionRequest?,
         @RequestHeader("X-Session-Token") sessionToken: String,
         httpRequest: HttpServletRequest,
     ): ResponseEntity<Void> {
         val admin = adminAccessGuard.requireValidSession(sessionToken)
         adminAccessGuard.requireTenantAdmin(sessionToken, tenantId)
-        deviceTrustService.deleteDevice(tenantId, deviceId, admin.userId.toString(), httpRequest.remoteAddr)
+        deviceTrustService.decommission(tenantId, deviceId, admin.userId.toString(), request?.reason, httpRequest.remoteAddr)
         return ResponseEntity.noContent().build()
     }
 

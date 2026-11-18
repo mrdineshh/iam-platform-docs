@@ -306,6 +306,44 @@ class DeviceTrustServiceTest {
     }
 
     @Test
+    fun `decommission retires the device and its certificate but deletes nothing`() {
+        val deviceId = UUID.randomUUID()
+        val device = IamDeviceEntity(deviceId, tenantId, userId, UUID.randomUUID(), ownership = "BYOD", lifecycleStatus = DeviceLifecycleStatus.APPROVED.name)
+        val cert = DeviceCertificateEntity(UUID.randomUUID(), deviceId, UUID.randomUUID(), "endpoint-device", "serial-2", "serial-2", Instant.now(), Instant.now().plusSeconds(3600))
+        whenever(deviceRepository.findById(deviceId)).thenReturn(Optional.of(device))
+        whenever(certificateRepository.findByDeviceIdAndStatus(deviceId, CertificateStatus.ACTIVE.name)).thenReturn(cert)
+
+        service.decommission(tenantId, deviceId, "admin-1", "demo reset", "1.2.3.4")
+
+        assertEquals(DeviceLifecycleStatus.DECOMMISSIONED.name, device.lifecycleStatus)
+        verify(pkiClient).revokeCertificate("serial-2")
+        assertEquals(CertificateStatus.REVOKED.name, cert.status)
+        verify(deviceRepository, never()).delete(any())
+        verify(auditPublisher).publish(argThat<AuditEvent> { this.action == "device.decommissioned" && this.deviceId == device.id.toString() })
+    }
+
+    @Test
+    fun `decommission on an already decommissioned device does nothing`() {
+        val deviceId = UUID.randomUUID()
+        val device = IamDeviceEntity(deviceId, tenantId, userId, UUID.randomUUID(), ownership = "BYOD", lifecycleStatus = DeviceLifecycleStatus.DECOMMISSIONED.name)
+        whenever(deviceRepository.findById(deviceId)).thenReturn(Optional.of(device))
+
+        service.decommission(tenantId, deviceId, "admin-1", null, "1.2.3.4")
+
+        verify(pkiClient, never()).revokeCertificate(any())
+        verify(auditPublisher, never()).publish(any<AuditEvent>())
+    }
+
+    @Test
+    fun `decommission rejects a device belonging to a different tenant`() {
+        val deviceId = UUID.randomUUID()
+        val device = IamDeviceEntity(deviceId, UUID.randomUUID(), userId, UUID.randomUUID(), ownership = "BYOD", lifecycleStatus = DeviceLifecycleStatus.APPROVED.name)
+        whenever(deviceRepository.findById(deviceId)).thenReturn(Optional.of(device))
+
+        assertThrows<DeviceNotFoundException> { service.decommission(tenantId, deviceId, "admin-1", null, "1.2.3.4") }
+    }
+
+    @Test
     fun `fetchPolicy signs exactly the canonical form of the response it returns, bound to this device and tenant`() {
         val deviceId = UUID.randomUUID()
         val device = IamDeviceEntity(deviceId, tenantId, userId, UUID.randomUUID(), ownership = "CORPORATE", lifecycleStatus = "APPROVED")

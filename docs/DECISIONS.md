@@ -2464,3 +2464,21 @@ any login work itself.
   build now validates `-ReleaseKey` (base64, exactly 32 bytes) and refuses a bad one at build time.
   Still open (OQ-35 to OQ-38): no automatic return to an older version if an update installs and then misbehaves (a failed INSTALL is safe, proven);
   the installer is not Authenticode-signed; releases are served from the database; one release stream for all tenants.
+
+- **2026-11-18 -- Admin console: "Remove device" (decommission) and the device identity panel (spec 6.2, 13.2, 5.1). Tier 2.**
+  The demo needs a laptop to be re-registered from scratch. First version was a "Delete" button that hard-deleted the device and all of its
+  rows (approvals, keys, hardware, posture, events). That was wrong against the spec: 6.2 says DECOMMISSIONED must "retain audit record", and
+  AP-8 wants admin actions immutably audited. It was also deployed without being logged here. Replaced by `POST /devices/{id}/decommission`
+  (`DeviceTrustService.decommission`): the device becomes DECOMMISSIONED, its certificate is revoked, nothing is deleted, the audit event
+  `device.decommissioned` is published, and the call is idempotent. A decommissioned device never satisfies the trusted-device gate and is
+  excluded from the per-user device cap (it was already in TERMINAL_STATUSES). The Endpoint Security page hides decommissioned devices
+  by default and shows them under "Show removed devices". To register the same laptop again: `--reset-enrollment --confirm` on it (new agent
+  installation ID, so a new device record; enrolling with the same installation ID would hit the unique (tenant, installation id) constraint),
+  then enrol and approve. The agent on a decommissioned device can still heartbeat (its key stays active, as for REVOKED); it cannot change the
+  status back, because posture enforcement only moves APPROVED <-> NON_COMPLIANT.
+  The same change adds the layered identity of spec 5.1 to the Details panel (platform device_id, agent installation UUID, key algorithm and
+  assurance level, versioned SHA-256 fingerprint, manufacturer/model; hashes only). Also removed a "download the installer" link from the
+  Install guide popup that pointed at a route that does not exist.
+  Tests: three new `DeviceTrustServiceTest` cases (retires + revokes certificate + never deletes; idempotent; wrong tenant refused); run on the
+  VM with the other device suites: 50 tests, 0 failures. Not yet done from spec 13.2: a reason prompt on privileged actions, "force policy sync",
+  "request re-enrolment", the platform/enforcement-capability inventory fields.

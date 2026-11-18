@@ -173,37 +173,27 @@ interface IamDeviceRepository : JpaRepository<IamDeviceEntity, UUID> {
     fun countByTenantIdAndUserIdAndLifecycleStatusNotIn(tenantId: UUID, userId: UUID, excluded: List<String>): Long
 }
 
-interface DeviceHardwareRepository : JpaRepository<DeviceHardwareEntity, UUID> {
-    fun deleteByDeviceId(deviceId: UUID)
-}
+interface DeviceHardwareRepository : JpaRepository<DeviceHardwareEntity, UUID>
 
 interface DeviceKeyRepository : JpaRepository<DeviceKeyEntity, UUID> {
-    fun deleteByDeviceId(deviceId: UUID)
     fun findByDeviceIdAndStatus(deviceId: UUID, status: String): DeviceKeyEntity?
 }
 
 interface DeviceCertificateRepository : JpaRepository<DeviceCertificateEntity, UUID> {
     fun findByDeviceIdAndStatus(deviceId: UUID, status: String): DeviceCertificateEntity?
     fun findBySerialNumber(serialNumber: String): DeviceCertificateEntity?
-    fun deleteByDeviceId(deviceId: UUID)
 }
 
 interface DeviceApprovalRepository : JpaRepository<DeviceApprovalEntity, UUID> {
     fun findByDeviceIdOrderByDecidedAtDesc(deviceId: UUID): List<DeviceApprovalEntity>
-    fun deleteByDeviceId(deviceId: UUID)
 }
 
-interface DevicePostureRepository : JpaRepository<DevicePostureEntity, UUID> {
-    fun deleteByDeviceId(deviceId: UUID)
-}
-interface DeviceHeartbeatRepository : JpaRepository<DeviceHeartbeatEntity, UUID> {
-    fun deleteByDeviceId(deviceId: UUID)
-}
+interface DevicePostureRepository : JpaRepository<DevicePostureEntity, UUID>
+interface DeviceHeartbeatRepository : JpaRepository<DeviceHeartbeatEntity, UUID>
 
 interface DeviceEventRepository : JpaRepository<DeviceEventEntity, UUID> {
     fun findByDeviceIdOrderByOccurredAtDesc(deviceId: UUID): List<DeviceEventEntity>
     fun findTop50ByDeviceIdOrderByOccurredAtDesc(deviceId: UUID): List<DeviceEventEntity>
-    fun deleteByDeviceId(deviceId: UUID)
 }
 
 interface DevicePolicyRepository : JpaRepository<DevicePolicyEntity, UUID> {

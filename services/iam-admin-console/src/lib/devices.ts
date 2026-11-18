@@ -84,13 +84,12 @@ export const suspendDevice = (tenantId: string, deviceId: string, sessionToken: 
 export const revokeDevice = (tenantId: string, deviceId: string, sessionToken: string, reason?: string) =>
   deviceAction(tenantId, deviceId, "revoke", sessionToken, reason);
 
-/** Soft-delete: wipes the device record so the agent can re-enroll fresh (new device ID, new PENDING_APPROVAL). */
-export async function deleteDevice(tenantId: string, deviceId: string, sessionToken: string): Promise<void> {
-  await http.delete<void>(
-    `${config.tenantSvcUrl}/api/v1/endpoint/devices/${deviceId}?tenantId=${encodeURIComponent(tenantId)}`,
-    { sessionToken },
-  );
-}
+/**
+ * Takes the device out of service (status Decommissioned). Nothing is deleted: its history is kept, and the
+ * laptop can enrol afresh afterwards.
+ */
+export const decommissionDevice = (tenantId: string, deviceId: string, sessionToken: string, reason?: string) =>
+  deviceAction(tenantId, deviceId, "decommission", sessionToken, reason);
 
 // Mirrors iam-tenant-svc's DeviceEventResponse: one entry of a device's activity timeline (newest first).
 export interface DeviceEvent {

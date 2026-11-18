@@ -1,6 +1,6 @@
 import { Fragment, useEffect, useRef, useState } from "react";
 import {
-  approveDevice, deleteDevice, listDeviceEvents, listDevices, rejectDevice, revokeDevice, suspendDevice, type DeviceEvent, type DeviceSummary, type PostureSignals,
+  approveDevice, decommissionDevice, listDeviceEvents, listDevices, rejectDevice, revokeDevice, suspendDevice, type DeviceEvent, type DeviceSummary, type PostureSignals,
 } from "@/lib/devices";
 import { listTenantUsers, type AdminUserListEntry } from "@/lib/impersonate";
 import { loadSession } from "@/lib/session";
@@ -19,7 +19,8 @@ export function EndpointDevicesPage() {
   const session = loadSession()!;
   const confirm = useConfirm();
   const toast = useToast();
-  const [devices, setDevices] = useState<DeviceSummary[] | null>(null);
+  const [allDevices, setAllDevices] = useState<DeviceSummary[] | null>(null);
+  const [showRemoved, setShowRemoved] = useState(false);
   const [users, setUsers] = useState<Record<string, AdminUserListEntry>>({});
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -37,7 +38,7 @@ export function EndpointDevicesPage() {
         listDevices(session.tenantId, session.token),
         listTenantUsers(session.tenantId, session.token),
       ]);
-      setDevices(deviceList);
+      setAllDevices(deviceList);
       setUsers(Object.fromEntries(userList.map((u) => [u.id, u])));
     } catch (err) {
       setError(errorMessage(err));
@@ -136,24 +137,25 @@ export function EndpointDevicesPage() {
     }
   }
 
-  async function handleDelete(device: DeviceSummary) {
+  async function handleRemove(device: DeviceSummary) {
     const ok = await confirm({
-      title: "Delete this device?",
+      title: "Remove this device?",
       message: (
         <>
-          This permanently removes <strong>{deviceLabel(device)}</strong> from the platform. The agent can
-          re-enroll from scratch afterward — a new device ID will be created and will need approval again.
-          Use this to reset a device for a fresh demo enrollment.
+          <strong>{deviceLabel(device)}</strong> is taken out of service: its certificate is revoked and it can no
+          longer be used to reach protected apps. Nothing is deleted -- its history stays on record (tick "Show removed
+          devices" to see it). To register the laptop again afterwards, run <code>--reset-enrollment --confirm</code>{" "}
+          on it, then enrol and approve it as a new device.
         </>
       ),
-      confirmLabel: "Delete device",
+      confirmLabel: "Remove device",
       danger: true,
     });
     if (!ok) return;
     setActingOn(device.id);
     try {
-      await deleteDevice(session.tenantId, device.id, session.token);
-      toast.success(`${deviceLabel(device)} deleted. The agent can now re-enroll fresh.`);
+      await decommissionDevice(session.tenantId, device.id, session.token);
+      toast.success(`${deviceLabel(device)} removed. Its history is kept.`);
       await load();
     } catch (err) {
       toast.error(errorMessage(err));
@@ -161,6 +163,10 @@ export function EndpointDevicesPage() {
       setActingOn(null);
     }
   }
+
+  // Removed (decommissioned) devices stay on record but are hidden from the working list unless asked for.
+  const removedCount = allDevices?.filter((d) => d.lifecycleStatus === "DECOMMISSIONED").length ?? 0;
+  const devices = allDevices && (showRemoved ? allDevices : allDevices.filter((d) => d.lifecycleStatus !== "DECOMMISSIONED"));
 
   const pendingCount = devices?.filter((d) => d.lifecycleStatus === "PENDING_APPROVAL").length ?? 0;
   const now = Date.now();
@@ -178,7 +184,13 @@ export function EndpointDevicesPage() {
         title="Endpoint Security"
         subtitle={`Devices registered through the IAM endpoint agent${devices ? ` -- ${devices.length} total${pendingCount > 0 ? `, ${pendingCount} awaiting approval` : ""}` : ""}. Windows only in this phase.`}
         actions={
-          <div style={{ display: "flex", gap: 8 }}>
+          <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+            {removedCount > 0 && (
+              <label className="checkbox-field">
+                <input type="checkbox" checked={showRemoved} onChange={(e) => setShowRemoved(e.target.checked)} />
+                Show removed devices ({removedCount})
+              </label>
+            )}
             <button type="button" className="btn-secondary" onClick={() => setShowGuide(true)}>
               Install / Uninstall Guide
             </button>
@@ -291,9 +303,11 @@ export function EndpointDevicesPage() {
                           Revoke
                         </button>
                       )}
-                      <button type="button" className="btn-secondary btn-sm" disabled={actingOn === d.id} onClick={() => void handleDelete(d)}>
-                        Delete
-                      </button>
+                      {d.lifecycleStatus !== "DECOMMISSIONED" && (
+                        <button type="button" className="btn-secondary btn-sm" disabled={actingOn === d.id} onClick={() => void handleRemove(d)}>
+                          Remove
+                        </button>
+                      )}
                     </div>
                   </td>
                 </tr>

@@ -352,44 +352,37 @@ class DeviceTrustService(
         device.updatedAt = Instant.now()
         deviceRepository.save(device)
         recordApproval(deviceId, ApprovalMode.MANUAL, ApprovalDecision.REVOKED, actorId, reason)
-        val activeCert = certificateRepository.findByDeviceIdAndStatus(deviceId, CertificateStatus.ACTIVE.name)
-        if (activeCert != null) {
-            try {
-                pkiClient.revokeCertificate(activeCert.serialNumber)
-            } finally {
-                activeCert.status = CertificateStatus.REVOKED.name
-                activeCert.revokedAt = Instant.now()
-                activeCert.revokedReason = reason
-                certificateRepository.save(activeCert)
-            }
-        }
+        revokeActiveCertificate(deviceId, reason)
         audit(tenantId, deviceId, actorId, "device.revoked", AuditResult.SUCCESS, reason, sourceIp)
     }
 
+    private fun revokeActiveCertificate(deviceId: UUID, reason: String?) {
+        val activeCert = certificateRepository.findByDeviceIdAndStatus(deviceId, CertificateStatus.ACTIVE.name) ?: return
+        try {
+            pkiClient.revokeCertificate(activeCert.serialNumber)
+        } finally {
+            activeCert.status = CertificateStatus.REVOKED.name
+            activeCert.revokedAt = Instant.now()
+            activeCert.revokedReason = reason
+            certificateRepository.save(activeCert)
+        }
+    }
+
     /**
-     * Soft-delete: removes the device record and all related rows so the agent
-     * can re-enroll fresh (new device ID, new PENDING_APPROVAL).
-     * Useful for demos and device reassignment.
+     * Takes a device out of service without deleting anything (spec 6.2, DECOMMISSIONED: "retain audit record").
+     * Its certificate is revoked, and from here on it never satisfies a device-trust requirement; every other row
+     * (approvals, keys, hardware, events) stays. A live session on it is cut on its next request, as with revoke.
+     * Idempotent. The laptop can enrol afresh with --reset-enrollment: that creates a new device record.
      */
     @Transactional
-    fun deleteDevice(tenantId: UUID, deviceId: UUID, actorId: String, sourceIp: String?) {
+    fun decommission(tenantId: UUID, deviceId: UUID, actorId: String, reason: String?, sourceIp: String?) {
         val device = requireDevice(tenantId, deviceId)
-        // Revoke certificate first if one is active
-        val activeCert = certificateRepository.findByDeviceIdAndStatus(deviceId, CertificateStatus.ACTIVE.name)
-        if (activeCert != null) {
-            try { pkiClient.revokeCertificate(activeCert.serialNumber) } catch (_: Exception) {}
-        }
-        // Audit before deletion so the event is queryable after the fact
-        audit(tenantId, deviceId, actorId, "device.deleted", AuditResult.SUCCESS, null, sourceIp)
-        // Delete all child rows, then the device itself
-        certificateRepository.deleteByDeviceId(deviceId)
-        approvalRepository.deleteByDeviceId(deviceId)
-        eventRepository.deleteByDeviceId(deviceId)
-        keyRepository.deleteByDeviceId(deviceId)
-        hardwareRepository.deleteByDeviceId(deviceId)
-        postureRepository.deleteByDeviceId(deviceId)
-        heartbeatRepository.deleteByDeviceId(deviceId)
-        deviceRepository.delete(device)
+        if (device.lifecycleStatus == DeviceLifecycleStatus.DECOMMISSIONED.name) return
+        device.lifecycleStatus = DeviceLifecycleStatus.DECOMMISSIONED.name
+        device.updatedAt = Instant.now()
+        deviceRepository.save(device)
+        revokeActiveCertificate(deviceId, reason)
+        audit(tenantId, deviceId, actorId, "device.decommissioned", AuditResult.SUCCESS, reason, sourceIp)
     }
 
     private fun recordApproval(deviceId: UUID, mode: ApprovalMode, decision: ApprovalDecision, actorId: String, reason: String?) {
