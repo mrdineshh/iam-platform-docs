@@ -1042,6 +1042,8 @@ button:where(:not(:disabled)):hover {
 .posture-grid__required { color: var(--iam-primary); }
 .posture-grid--wide { grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); }
 .device-id-panel { border-bottom: 1px solid var(--iam-border, rgba(255,255,255,0.08)); }
+.cell-user__details { display: flex; flex-direction: column; gap: 2px; }
+.cell-user__id { font-family: monospace; font-size: 0.72rem; color: var(--iam-text-muted); user-select: all; letter-spacing: 0.01em; }
 .device-id-code { font-family: monospace; font-size: 0.85rem; background: var(--iam-surface-2, rgba(255,255,255,0.06)); padding: 2px 6px; border-radius: 4px; user-select: all; word-break: break-all; }
 .activity-panel { border-top: 1px solid var(--iam-border, rgba(255,255,255,0.08)); }
 .activity-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; max-height: 280px; overflow-y: auto; }

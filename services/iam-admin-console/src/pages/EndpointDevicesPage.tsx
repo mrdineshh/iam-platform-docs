@@ -234,7 +234,10 @@ export function EndpointDevicesPage() {
                   <td>
                     <div className="cell-user">
                       <span className="avatar">{(d.hostname ?? d.platform).charAt(0).toUpperCase()}</span>
-                      <span className="cell-user__name">{d.hostname ?? "(unnamed)"}</span>
+                      <span className="cell-user__details">
+                        <span className="cell-user__name">{d.hostname ?? "(unnamed)"}</span>
+                        <span className="cell-user__id" title="Device ID — matches agent --status and Windows Event Log">{d.id}</span>
+                      </span>
                     </div>
                   </td>
                   <td>{users[d.userId]?.email ?? d.userId}</td>
