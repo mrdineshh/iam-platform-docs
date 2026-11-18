@@ -1,4 +1,5 @@
 use crate::key_provider::KeyProvider;
+use crate::posture::PostureSignals;
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -54,7 +55,16 @@ pub struct HeartbeatRequest {
     pub health_status: String,
 }
 
-#[derive(Debug, Deserialize, Clone)]
+/// Sent to `/devices/{id}/events` (DeviceEventRequest). `severity` is INFO, WARNING or CRITICAL.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentEvent {
+    pub event_type: String,
+    pub severity: String,
+    pub metadata_json: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct DeviceAppPolicy {
     pub application_id: Uuid,
@@ -64,9 +74,11 @@ pub struct DeviceAppPolicy {
     pub failure_mode: String,
 }
 
-#[derive(Debug, Deserialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct DevicePolicyResponse {
+    pub tenant_id: Uuid,
+    pub device_id: Uuid,
     pub policy_id: Uuid,
     pub policy_version: i32,
     pub issued_at: String,
@@ -83,6 +95,7 @@ pub struct DevicePolicyResponse {
 /// absent: iam-login-portal calls it server-side with the browser's session, so this agent never
 /// holds a session token (see [`crate::enrollment`]). enrollment/complete authenticates via the
 /// key-bound transaction + proof-of-possession; everything after that uses [`sign_request`].
+#[derive(Clone)]
 pub struct ApiClient {
     http: reqwest::Client,
     base_url: String,
@@ -126,6 +139,108 @@ impl ApiClient {
             .send()
             .await?;
         parse_json(response).await
+    }
+
+    /// GET /devices/{id}/agent-update: the newest release newer than `current_version`, or `None` (HTTP 204).
+    pub async fn agent_update_offer(&self, tenant_id: &str, device_id: Uuid, key: &dyn KeyProvider, current_version: &str) -> Result<Option<crate::update::ReleaseOffer>, ApiError> {
+        let (timestamp, signature) = sign_request(device_id, key);
+        let response = self
+            .http
+            .get(format!("{}/api/v1/endpoint/devices/{}/agent-update", self.base_url, device_id))
+            .query(&[("tenantId", tenant_id), ("currentVersion", current_version)])
+            .header("X-Device-Signature", signature)
+            .header("X-Device-Timestamp", timestamp)
+            .send()
+            .await?;
+        if response.status() == reqwest::StatusCode::NO_CONTENT {
+            return Ok(None);
+        }
+        parse_json(response).await.map(Some)
+    }
+
+    /// GET the installer bytes. Refuses to read more than the update size limit.
+    pub async fn agent_update_package(&self, tenant_id: &str, device_id: Uuid, key: &dyn KeyProvider, release_id: Uuid) -> Result<Vec<u8>, ApiError> {
+        let (timestamp, signature) = sign_request(device_id, key);
+        let response = self
+            .http
+            .get(format!("{}/api/v1/endpoint/devices/{}/agent-releases/{}/package", self.base_url, device_id, release_id))
+            .query(&[("tenantId", tenant_id)])
+            .header("X-Device-Signature", signature)
+            .header("X-Device-Timestamp", timestamp)
+            .send()
+            .await?;
+        let status = response.status();
+        if !status.is_success() {
+            return Err(ApiError::Backend { status: status.as_u16(), body: response.text().await.unwrap_or_default() });
+        }
+        if response.content_length().is_some_and(|n| n > crate::update::MAX_PACKAGE_BYTES) {
+            return Err(ApiError::Backend { status: status.as_u16(), body: "package larger than the update size limit".into() });
+        }
+        let bytes = response.bytes().await?;
+        if bytes.len() as u64 > crate::update::MAX_PACKAGE_BYTES {
+            return Err(ApiError::Backend { status: status.as_u16(), body: "package larger than the update size limit".into() });
+        }
+        Ok(bytes.to_vec())
+    }
+
+    /// PATCH /devices/{id}/posture. Sends facts only; the server decides what they mean.
+    pub async fn report_posture(&self, tenant_id: &str, device_id: Uuid, key: &dyn KeyProvider, signals: &PostureSignals) -> Result<(), ApiError> {
+        let (timestamp, signature) = sign_request(device_id, key);
+        let response = self
+            .http
+            .patch(format!("{}/api/v1/endpoint/devices/{}/posture?tenantId={}", self.base_url, device_id, tenant_id))
+            .header("X-Device-Signature", signature)
+            .header("X-Device-Timestamp", timestamp)
+            .json(&serde_json::json!({ "signals": signals }))
+            .send()
+            .await?;
+        ensure_success(response).await
+    }
+
+    pub async fn post_event(&self, tenant_id: &str, device_id: Uuid, key: &dyn KeyProvider, event: &AgentEvent) -> Result<(), ApiError> {
+        let (timestamp, signature) = sign_request(device_id, key);
+        let response = self
+            .http
+            .post(format!("{}/api/v1/endpoint/devices/{}/events?tenantId={}", self.base_url, device_id, tenant_id))
+            .header("X-Device-Signature", signature)
+            .header("X-Device-Timestamp", timestamp)
+            .json(event)
+            .send()
+            .await?;
+        ensure_success(response).await
+    }
+}
+
+/// The production [`crate::sync::Backend`]: this device's identity (tenant, device id, signing key) bound
+/// to an [`ApiClient`], so the sync engine can call "fetch my policy" without knowing about signing.
+pub struct DeviceBackend {
+    api: ApiClient,
+    tenant_id: String,
+    device_id: Uuid,
+    key: Box<dyn KeyProvider>,
+}
+
+impl DeviceBackend {
+    pub fn new(api: ApiClient, tenant_id: impl Into<String>, device_id: Uuid, key: Box<dyn KeyProvider>) -> Self {
+        Self { api, tenant_id: tenant_id.into(), device_id, key }
+    }
+}
+
+impl crate::sync::Backend for DeviceBackend {
+    fn fetch_policy(&self) -> impl std::future::Future<Output = Result<DevicePolicyResponse, ApiError>> + Send {
+        self.api.fetch_policy(&self.tenant_id, self.device_id, self.key.as_ref())
+    }
+
+    fn heartbeat(&self, request: &HeartbeatRequest) -> impl std::future::Future<Output = Result<(), ApiError>> + Send {
+        self.api.heartbeat(&self.tenant_id, self.device_id, self.key.as_ref(), request)
+    }
+
+    fn post_event(&self, event: &AgentEvent) -> impl std::future::Future<Output = Result<(), ApiError>> + Send {
+        self.api.post_event(&self.tenant_id, self.device_id, self.key.as_ref(), event)
+    }
+
+    fn report_posture(&self, signals: &PostureSignals) -> impl std::future::Future<Output = Result<(), ApiError>> + Send {
+        self.api.report_posture(&self.tenant_id, self.device_id, self.key.as_ref(), signals)
     }
 }
 

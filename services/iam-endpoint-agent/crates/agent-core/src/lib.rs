@@ -9,13 +9,21 @@
 
 pub mod agent;
 pub mod api_client;
+pub mod browser_policy;
 pub mod config;
 pub mod device_identity;
 pub mod enrollment;
-pub mod heartbeat;
+pub mod integrity;
 pub mod key_provider;
+pub mod local_api;
+pub mod local_log;
+pub mod policy_state;
+pub mod posture;
 pub mod policy_verifier;
 pub mod secure_storage;
+pub mod status;
+pub mod sync;
+pub mod update;
 
 pub use agent::{Agent, AgentError};
 pub use config::AgentConfig;

@@ -28,3 +28,7 @@ services/*/.git.old-history-backup/
 **/*.class
 **/.DS_Store
 infra/opentofu/tfplan
+
+# Python bytecode caches
+__pycache__/
+*.pyc

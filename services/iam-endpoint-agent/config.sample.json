@@ -1,0 +1,7 @@
+{
+  "backend_base_url": "https://REPLACE-WITH-YOUR-TENANT-SERVICE-URL",
+  "enrollment_login_url": "https://REPLACE-WITH-YOUR-TENANT-SUBDOMAIN/device-enroll",
+  "tenant_id": "00000000-0000-0000-0000-000000000000",
+  "device_policy_public_key_base64": "REPLACE-WITH-THE-OPENBAO-TRANSIT-PUBLIC-KEY-(RAW-32-BYTES-BASE64)",
+  "heartbeat_interval_seconds": 300
+}

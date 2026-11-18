@@ -9,7 +9,8 @@ use uuid::Uuid;
 /// UUID either, see iam-tenant-svc's DeviceHardwareEntity comment). Each
 /// field here is already whatever the platform layer could read -- this
 /// module only hashes, it doesn't collect.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
 pub struct HardwareAttributes {
     pub manufacturer: Option<String>,
     pub model: Option<String>,
@@ -36,6 +37,13 @@ impl DeviceIdentity {
 impl Default for DeviceIdentity {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+impl HardwareAttributes {
+    /// Parses the platform collector's JSON (camelCase keys; anything missing or null stays `None`).
+    pub fn from_collector_output(output: &str) -> Result<Self, crate::posture::PostureError> {
+        Ok(serde_json::from_str(crate::posture::json_object(output)?)?)
     }
 }
 
@@ -95,6 +103,24 @@ mod tests {
         let b = fingerprint_hash("tenant-1", "WINDOWS", &hw);
         assert_eq!(a, b);
         assert_eq!(a.len(), 64); // SHA-256 hex
+    }
+
+    #[test]
+    fn collector_output_with_noise_and_missing_fields_parses() {
+        let noisy = format!(
+            "\u{feff}{}\r\n",
+            r#"{"manufacturer":"Dell Inc.","model":"Latitude 7440","hardwareUuid":"4C4C4544-0000","serialNumber":null}"#
+        );
+        let hw = HardwareAttributes::from_collector_output(&noisy).unwrap();
+        assert_eq!(hw.manufacturer.as_deref(), Some("Dell Inc."));
+        assert_eq!(hw.model.as_deref(), Some("Latitude 7440"));
+        assert_eq!(hw.hardware_uuid.as_deref(), Some("4C4C4544-0000"));
+        assert!(hw.serial_number.is_none() && hw.os_version.is_none());
+    }
+
+    #[test]
+    fn collector_output_without_json_is_an_error() {
+        assert!(HardwareAttributes::from_collector_output("Get-CimInstance : Access denied").is_err());
     }
 
     #[test]

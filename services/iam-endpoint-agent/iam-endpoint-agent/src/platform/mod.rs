@@ -9,6 +9,10 @@
 mod windows;
 #[cfg(windows)]
 pub use windows::*;
+#[cfg(windows)]
+mod tpm;
+#[cfg(windows)]
+pub use tpm::*;
 
 #[cfg(not(windows))]
 mod fallback;

@@ -209,6 +209,13 @@ path "secret/data/google-workspace/*" {
 path "secret/data/scim/*" {
   capabilities = ["read", "create", "update"]
 }
+# Signs endpoint device policies (iam-tenant-svc, Ed25519 transit key "device-policy"; see device-trust-setup.py).
+# Must live HERE: this function REPLACES the whole policy on every VM boot, so a permission added only by hand
+# is silently dropped at the next restart (found 2026-11-17: laptops lost their signed policy after a reboot).
+# "update" on the sign path only: no read of the key, no other keys, no key creation.
+path "transit/sign/device-policy" {
+  capabilities = ["update"]
+}
 """
 
 

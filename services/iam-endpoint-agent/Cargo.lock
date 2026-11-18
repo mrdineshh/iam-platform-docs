@@ -4,7 +4,7 @@ version = 4
 
 [[package]]
 name = "agent-core"
-version = "0.1.0"
+version = "0.3.3"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -473,15 +473,18 @@ dependencies = [
 
 [[package]]
 name = "iam-endpoint-agent"
-version = "0.1.0"
+version = "0.3.3"
 dependencies = [
  "agent-core",
  "anyhow",
+ "base64 0.22.1",
  "serde_json",
+ "sha2",
  "tokio",
  "tracing",
  "tracing-subscriber",
  "windows-service",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]

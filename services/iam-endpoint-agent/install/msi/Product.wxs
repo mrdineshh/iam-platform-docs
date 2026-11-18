@@ -1,0 +1,114 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  IAM Endpoint Agent installer (spec P1-02, Section 14.1: MSI, managed/silent installation, controlled upgrade).
+  Built with WiX 3 by build_msi.ps1, which supplies the $(var.*) values. NOT signed: Windows shows "Unknown publisher"
+  until the MSI and exe are code-signed (see docs/DECISIONS.md).
+
+  What it does: installs the program and the Windows service (auto-start, restart on failure), writes the locked-down
+  config, adds a Start Menu "Enroll this device" shortcut, and on uninstall removes the service, the files and the
+  browser sign-in restriction. It does NOT start the service: a device must enroll first (a sign-in in the user's
+  browser, which an installer running as SYSTEM cannot do) and Enroll-Device.cmd starts the service afterwards.
+
+  Silent, managed install, every value optional (defaults are the ones the MSI was built with):
+    msiexec /i IamEndpointAgent.msi /qn TENANT_ID=<uuid> POLICY_KEY=<base64> ALLOWED_DOMAINS=econz.net,demo.econz.net
+            BACKEND_URL=https://... ENROLL_URL=https://...
+-->
+<Wix xmlns="http://schemas.microsoft.com/wix/2006/wi" xmlns:util="http://schemas.microsoft.com/wix/UtilExtension">
+  <Product Id="*" Name="IAM Endpoint Agent" Language="1033" Version="$(var.Version)" Manufacturer="Econz"
+           UpgradeCode="9F1B6C52-3E0A-4C7D-8B54-6A2D1E7F0C31">
+    <Package InstallerVersion="500" Compressed="yes" InstallScope="perMachine" Platform="x64"
+             Description="IAM Endpoint Agent: device trust and posture reporting" />
+
+    <!-- Installing a newer version replaces the old one in place; an older one is refused. Config and device
+         identity live in %ProgramData% and are kept. -->
+    <!-- Schedule="afterInstallExecute": the NEW version is installed first and the OLD one removed only afterwards. With the default
+         order (remove old, then install new) a failure in the new install made Windows roll back, and the rollback did NOT bring
+         the old version back: the machine ended with no agent at all (found by a deliberately failing upgrade, 2026-11-18). -->
+    <MajorUpgrade Schedule="afterInstallExecute" DowngradeErrorMessage="A newer version of the IAM Endpoint Agent is already installed." />
+    <MediaTemplate EmbedCab="yes" />
+
+    <Property Id="TENANT_ID" Value="$(var.TenantId)" />
+    <Property Id="POLICY_KEY" Value="$(var.PolicyKey)" />
+    <Property Id="ALLOWED_DOMAINS" Value="$(var.AllowedDomains)" />
+    <Property Id="BACKEND_URL" Value="$(var.BackendUrl)" />
+    <Property Id="ENROLL_URL" Value="$(var.EnrollUrl)" />
+    <!-- Public key of the operator's agent-release signing key ("-" = none, automatic updates stay off). -->
+    <Property Id="RELEASE_KEY" Value="$(var.ReleaseKey)" />
+    <!-- An existing config.json is KEPT on reinstall and upgrade; set FORCE_CONFIG=1 to rewrite it from these values. -->
+    <Property Id="FORCE_CONFIG" Value="0" />
+
+    <Directory Id="TARGETDIR" Name="SourceDir">
+      <Directory Id="ProgramFiles64Folder">
+        <Directory Id="INSTALLFOLDER" Name="IamEndpointAgent" />
+      </Directory>
+      <Directory Id="ProgramMenuFolder">
+        <Directory Id="AppMenuFolder" Name="IAM Endpoint Agent" />
+      </Directory>
+    </Directory>
+
+    <DirectoryRef Id="INSTALLFOLDER">
+      <Component Id="AgentProgram" Guid="3C8E5A10-7B44-4D0B-9A63-1F2E8D6C4B01" Win64="yes">
+        <!-- Always installed under this name, whatever the build's source file is called (the service, the shortcut and every upgrade rely on it). -->
+        <File Id="AgentExe" Name="iam-endpoint-agent.exe" Source="$(var.ExePath)" KeyPath="yes" />
+        <ServiceInstall Id="AgentService" Name="IamEndpointAgent" DisplayName="IAM Endpoint Agent"
+                        Description="IAM endpoint device trust agent: reports device posture and enforces signed policy."
+                        Type="ownProcess" Start="auto" ErrorControl="normal" Account="LocalSystem" Vital="yes" />
+        <ServiceControl Id="AgentServiceControl" Name="IamEndpointAgent" Stop="both" Remove="uninstall" Wait="yes" />
+        <util:ServiceConfig ServiceName="IamEndpointAgent" FirstFailureActionType="restart" SecondFailureActionType="restart"
+                            ThirdFailureActionType="restart" RestartServiceDelayInSeconds="5" ResetPeriodInDays="1" />
+      </Component>
+      <Component Id="AgentScripts" Guid="5D2F7B21-8C55-4E1C-AB74-2A3F9E7D5C02" Win64="yes">
+        <File Id="ConfigureScript" Source="$(var.ScriptsDir)\configure.ps1" KeyPath="yes" />
+        <File Id="EnrollCmd" Source="$(var.ScriptsDir)\Enroll-Device.cmd" />
+      </Component>
+    </DirectoryRef>
+
+    <DirectoryRef Id="AppMenuFolder">
+      <Component Id="EnrollShortcut" Guid="7E3A8C32-9D66-4F2D-BC85-3B4A0F8E6D03">
+        <Shortcut Id="EnrollShortcutLink" Name="Enroll this device" Description="Register this laptop with your organisation (opens your browser to sign in)"
+                  Advertise="no" Target="[INSTALLFOLDER]Enroll-Device.cmd" WorkingDirectory="INSTALLFOLDER" />
+        <RemoveFolder Id="RemoveAppMenuFolder" On="uninstall" />
+        <RegistryValue Root="HKCU" Key="Software\Econz\IamEndpointAgent" Name="shortcut" Type="integer" Value="1" KeyPath="yes" />
+      </Component>
+    </DirectoryRef>
+
+    <Feature Id="Complete" Title="IAM Endpoint Agent" Level="1">
+      <ComponentRef Id="AgentProgram" />
+      <ComponentRef Id="AgentScripts" />
+      <ComponentRef Id="EnrollShortcut" />
+    </Feature>
+
+    <!-- Config and cleanup run as SYSTEM through a PowerShell script shipped in the MSI. A deferred action only sees
+         its own CustomActionData, so each command line is built by an immediate SetProperty action first. -->
+    <SetProperty Id="RunConfigure" Sequence="execute" Before="RunConfigure"
+                 Value="&quot;[System64Folder]WindowsPowerShell\v1.0\powershell.exe&quot; -NoProfile -NonInteractive -ExecutionPolicy Bypass -File &quot;[INSTALLFOLDER]configure.ps1&quot; -TenantId &quot;[TENANT_ID]&quot; -PolicyKey &quot;[POLICY_KEY]&quot; -BackendUrl &quot;[BACKEND_URL]&quot; -EnrollUrl &quot;[ENROLL_URL]&quot; -AllowedDomains &quot;[ALLOWED_DOMAINS]&quot; -ReleaseKey &quot;[RELEASE_KEY]&quot; -ForceConfig &quot;[FORCE_CONFIG]&quot;" />
+    <CustomAction Id="RunConfigure" BinaryKey="WixCA" DllEntry="WixQuietExec64" Execute="deferred" Impersonate="no" Return="check" />
+
+    <SetProperty Id="RunUnconfigure" Sequence="execute" Before="RunUnconfigure"
+                 Value="&quot;[System64Folder]WindowsPowerShell\v1.0\powershell.exe&quot; -NoProfile -NonInteractive -ExecutionPolicy Bypass -File &quot;[INSTALLFOLDER]configure.ps1&quot; -Uninstall" />
+    <CustomAction Id="RunUnconfigure" BinaryKey="WixCA" DllEntry="WixQuietExec64" Execute="deferred" Impersonate="no" Return="ignore" />
+
+    <!-- After an upgrade the service is stopped by the installer; start it again, but ONLY if this machine is already
+         enrolled (state.json exists). A fresh install is not enrolled yet and the service must not be started then. -->
+    <SetProperty Id="RunStartIfEnrolled" Sequence="execute" Before="RunStartIfEnrolled"
+                 Value="&quot;[System64Folder]WindowsPowerShell\v1.0\powershell.exe&quot; -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command &quot;if (Test-Path (Join-Path $env:ProgramData 'IamEndpointAgent\state.json')) { Start-Service IamEndpointAgent -ErrorAction SilentlyContinue }&quot;" />
+    <CustomAction Id="RunStartIfEnrolled" BinaryKey="WixCA" DllEntry="WixQuietExec64" Execute="deferred" Impersonate="no" Return="ignore" />
+
+    <!-- TEST ONLY (build_msi.ps1 -FailInjection): fails the install on purpose, to prove a failed upgrade leaves the previous
+         version working. Never built into a release. -->
+    <?if $(var.FailInjection) = 1 ?>
+    <SetProperty Id="RunFailInjection" Sequence="execute" Before="RunFailInjection"
+                 Value="&quot;[System64Folder]WindowsPowerShell\v1.0\powershell.exe&quot; -NoProfile -NonInteractive -Command &quot;exit 7&quot;" />
+    <CustomAction Id="RunFailInjection" BinaryKey="WixCA" DllEntry="WixQuietExec64" Execute="deferred" Impersonate="no" Return="check" />
+    <?endif?>
+
+    <InstallExecuteSequence>
+      <?if $(var.FailInjection) = 1 ?>
+      <Custom Action="RunFailInjection" After="RunConfigure">NOT REMOVE~="ALL"</Custom>
+      <?endif?>
+      <Custom Action="RunStartIfEnrolled" After="StartServices">NOT REMOVE~="ALL"</Custom>
+      <Custom Action="RunConfigure" After="InstallFiles">NOT REMOVE~="ALL"</Custom>
+      <Custom Action="RunUnconfigure" Before="RemoveFiles">REMOVE~="ALL" AND NOT UPGRADINGPRODUCTCODE</Custom>
+    </InstallExecuteSequence>
+  </Product>
+</Wix>
