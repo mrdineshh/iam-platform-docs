@@ -1,3 +1,5 @@
+import { ACCESS_DENIAL_MESSAGES } from "@/lib/errorCodes";
+
 interface SearchParams {
   reason?: string;
 }
@@ -7,8 +9,7 @@ const MESSAGES: Record<string, string> = {
   tenant_unresolved: "Could not determine which organization to sign in to.",
   tenant_not_found: "No organization was found for this sign-in link.",
   unavailable: "Sign-in is temporarily unavailable. Please try again shortly.",
-  app_access_denied:
-    "You don't have access to this app. Ask your administrator to add you to a group that includes it.",
+  ...ACCESS_DENIAL_MESSAGES,
   device_enroll_invalid:
     "This device registration link is invalid. Start registration again from the endpoint agent on your computer.",
 };
@@ -23,7 +24,7 @@ export default async function LoginErrorPage({
   searchParams: Promise<SearchParams>;
 }) {
   const { reason } = await searchParams;
-  const message = (reason && MESSAGES[reason]) || "Sign-in request could not be processed.";
+  const message = (reason && Object.prototype.hasOwnProperty.call(MESSAGES, reason) && MESSAGES[reason]) || "Sign-in request could not be processed.";
 
   return (
     <main className="login-page">

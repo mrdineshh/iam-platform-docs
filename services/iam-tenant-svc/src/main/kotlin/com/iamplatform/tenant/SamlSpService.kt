@@ -70,9 +70,26 @@ class SamlSpService(
     }
 
     @Transactional
+    fun setAllowPendingDevice(spId: UUID, allowed: Boolean) {
+        val sp = repository.findById(spId).orElseThrow { SamlSpNotFoundException(spId) }
+        sp.allowPendingDevice = allowed
+        repository.save(sp)
+    }
+
+    @Transactional
+    fun setRequireTrustedDevice(spId: UUID, required: Boolean) {
+        val sp = repository.findById(spId).orElseThrow { SamlSpNotFoundException(spId) }
+        sp.requireTrustedDevice = required
+        repository.save(sp)
+    }
+
+    @Transactional
     fun setGroups(spId: UUID, groupIds: List<UUID>) {
         if (!repository.existsById(spId)) throw SamlSpNotFoundException(spId)
         groupRepository.deleteBySamlSpId(spId)
+        // Flush the delete BEFORE inserting: Hibernate runs inserts ahead of deletes, so re-saving a selection that keeps a
+        // group that is already assigned hit the unique index (HTTP 500 "temporarily unavailable" in the console).
+        groupRepository.flush()
         groupRepository.saveAll(groupIds.distinct().map { SamlSpGroupEntity(UUID.randomUUID(), spId, it) })
     }
 

@@ -21,9 +21,17 @@ class DeviceSignatureVerifier {
 
     fun verify(publicKeyBase64: String, keyAlgorithm: String, signedData: ByteArray, signatureBase64: String): Boolean {
         val publicKey = decodePublicKey(publicKeyBase64, keyAlgorithm)
+        val signature = try {
+            Base64.getDecoder().decode(signatureBase64)
+        } catch (ex: IllegalArgumentException) {
+            return false
+        }
         val signatureAlgorithm = when (keyAlgorithm) {
             "RSA2048", "RSA4096" -> "SHA256withRSA"
-            "ECDSA_P256" -> "SHA256withECDSA"
+            // Windows CNG (the TPM path) signs ECDSA P-256 as the raw 64-byte r||s pair (IEEE P1363); Java's plain
+            // "SHA256withECDSA" only reads ASN.1 DER. An r||s pair is always exactly 64 bytes, a DER one never is
+            // (it starts with 0x30 and is 70-72 bytes), so the length alone picks the right reader.
+            "ECDSA_P256" -> if (signature.size == 64) "SHA256withECDSAinP1363Format" else "SHA256withECDSA"
             "ED25519" -> "Ed25519"
             else -> throw DeviceProofOfPossessionException("Unsupported key algorithm: $keyAlgorithm")
         }
@@ -31,7 +39,7 @@ class DeviceSignatureVerifier {
             Signature.getInstance(signatureAlgorithm).apply {
                 initVerify(publicKey)
                 update(signedData)
-            }.verify(Base64.getDecoder().decode(signatureBase64))
+            }.verify(signature)
         } catch (ex: Exception) {
             false
         }

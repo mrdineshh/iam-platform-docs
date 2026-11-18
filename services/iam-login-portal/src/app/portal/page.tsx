@@ -7,6 +7,7 @@ import { config } from "@/lib/config";
 import { findTenantBySubdomain, resolveTenantSubdomain } from "@/lib/tenant";
 import { brandStyle, safeLogoUrl } from "@/lib/branding";
 import { POST_LOGIN_NEXT_COOKIE, safePostLoginNext } from "@/lib/deviceEnroll";
+import { deviceSignInRequired } from "@/lib/deviceChallenge";
 
 interface SearchParams {
   // Dev-only tenant override -- see resolveTenantSubdomain.
@@ -55,9 +56,12 @@ export default async function PortalLoginPage({
     redirect("/login/error?reason=tenant_not_found");
   }
 
+  const deviceSignIn = await deviceSignInRequired(tenant.id, correlationId);
+
   return (
     <SplitShell style={brandStyle(tenant.branding)}>
       <LoginForm
+        deviceSignIn={deviceSignIn}
         clientId=""
         redirectUri=""
         scope="openid"

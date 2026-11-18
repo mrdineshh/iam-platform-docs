@@ -1,6 +1,8 @@
 package com.iamplatform.tenant
 
 import com.iamplatform.servicekit.error.ErrorResponse
+import com.iamplatform.servicekit.vault.OpenBaoPkiException
+import com.iamplatform.servicekit.vault.OpenBaoTransitException
 import io.github.resilience4j.circuitbreaker.CallNotPermittedException
 import jakarta.servlet.http.HttpServletRequest
 import org.springframework.http.HttpStatus
@@ -98,6 +100,16 @@ class GlobalExceptionHandler {
     // iam-session-svc or iam-identity-svc unreachable -- this service's
     // first outbound calls (Service 14), same pattern as every other
     // service's downstream-unavailable handler.
+    // OpenBao (PKI or transit signing) is unreachable or refused the call. The detail stays in the logs: the
+    // exception message can name internal paths and must not be sent to a device or a browser.
+    @ExceptionHandler(OpenBaoPkiException::class, OpenBaoTransitException::class)
+    fun handleVaultUnavailable(ex: RuntimeException, request: HttpServletRequest): ResponseEntity<ErrorResponse> {
+        org.slf4j.LoggerFactory.getLogger(GlobalExceptionHandler::class.java).error("OpenBao call failed: {}", ex.message)
+        return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE).body(
+            ErrorResponse.of(HttpStatus.SERVICE_UNAVAILABLE.value(), "Service Unavailable", "A required security service is currently unavailable", request.requestURI),
+        )
+    }
+
     @ExceptionHandler(CallNotPermittedException::class, ResourceAccessException::class)
     fun handleDownstreamUnavailable(ex: Exception, request: HttpServletRequest): ResponseEntity<ErrorResponse> =
         ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE).body(

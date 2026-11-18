@@ -26,6 +26,8 @@ data class IssueSessionRequest(
     val country: String? = null,
     val region: String? = null,
     val city: String? = null,
+    // Set only when a device proof was verified (device-bound sign-in).
+    val deviceId: String? = null,
 )
 data class IssuedSession(val token: String, val sessionId: UUID, val expiresAt: Instant)
 
@@ -51,6 +53,15 @@ class SessionClient(
         client.post(
             "/api/v1/sessions",
             IssueSessionRequest(tenantId, userId, sourceIp, context?.userAgent, context?.country, context?.region, context?.city),
+            IssuedSession::class.java,
+            headers = mapOf("Idempotency-Key" to idempotencyKey),
+        )
+
+    /** Same as [issue], for a sign-in whose device proof verified: the session is stored WITH that device. */
+    fun issueForDevice(tenantId: UUID, userId: UUID, sourceIp: String?, idempotencyKey: String, context: SessionContext?, deviceId: UUID): IssuedSession =
+        client.post(
+            "/api/v1/sessions",
+            IssueSessionRequest(tenantId, userId, sourceIp, context?.userAgent, context?.country, context?.region, context?.city, deviceId.toString()),
             IssuedSession::class.java,
             headers = mapOf("Idempotency-Key" to idempotencyKey),
         )

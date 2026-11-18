@@ -61,6 +61,7 @@ class AppAccessController(
     private val adminAccessGuard: AdminAccessGuard,
     private val identityClient: IdentityClient,
     private val appAccessService: AppAccessService,
+    private val trustedDeviceGate: TrustedDeviceGate,
 ) {
     @GetMapping
     fun check(
@@ -71,6 +72,9 @@ class AppAccessController(
         val session = adminAccessGuard.requireValidSession(sessionToken)
         val user = identityClient.findUser(session.userId)
             ?: return ResponseEntity.ok(AppAccessResponse(false, "user no longer exists"))
-        return ResponseEntity.ok(appAccessService.check(session.tenantId, user.role, user.groupId, appKind, appId))
+        val access = appAccessService.check(session.tenantId, user.role, user.groupId, appKind, appId)
+        // Only an otherwise-allowed user is checked further, so a denial never reveals more than it already did.
+        val deviceDenial = if (access.allowed) trustedDeviceGate.check(session.tenantId, session.userId, appKind, appId, session.deviceId) else null
+        return ResponseEntity.ok(deviceDenial ?: access)
     }
 }

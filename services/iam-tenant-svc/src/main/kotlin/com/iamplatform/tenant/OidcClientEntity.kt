@@ -46,6 +46,14 @@ class OidcClientEntity(
     @Column(name = "launch_url")
     var launchUrl: String? = null,
 
+    // Device-bound sign-in: when true, only a session from an approved, compliant enrolled laptop may open this app.
+    @Column(name = "require_trusted_device", nullable = false)
+    var requireTrustedDevice: Boolean = false,
+
+    // Spec 6.4: only meaningful with requireTrustedDevice. A laptop still awaiting approval may open this app too.
+    @Column(name = "allow_pending_device", nullable = false)
+    var allowPendingDevice: Boolean = false,
+
     @Column(name = "created_at", nullable = false)
     var createdAt: Instant = Instant.now(),
 ) {

@@ -57,6 +57,30 @@ class SamlSpController(
 
     // Group-based launchpad visibility -- same pattern and reasoning as
     // OidcClientController's /groups endpoints.
+    @PutMapping("/{id}/pending-device")
+    fun setPendingDevice(
+        @PathVariable id: UUID,
+        @RequestParam tenantId: UUID,
+        @RequestBody request: SetPendingDeviceRequest,
+        @RequestHeader("X-Session-Token") sessionToken: String,
+    ): ResponseEntity<SetPendingDeviceRequest> {
+        adminAccessGuard.requireTenantAdmin(sessionToken, tenantId)
+        service.setAllowPendingDevice(id, request.allowed)
+        return ResponseEntity.ok(request)
+    }
+
+    @PutMapping("/{id}/trusted-device")
+    fun setTrustedDevice(
+        @PathVariable id: UUID,
+        @RequestParam tenantId: UUID,
+        @RequestBody request: SetTrustedDeviceRequest,
+        @RequestHeader("X-Session-Token") sessionToken: String,
+    ): ResponseEntity<SetTrustedDeviceRequest> {
+        adminAccessGuard.requireTenantAdmin(sessionToken, tenantId)
+        service.setRequireTrustedDevice(id, request.required)
+        return ResponseEntity.ok(request)
+    }
+
     @PutMapping("/{id}/groups")
     fun setGroups(
         @PathVariable id: UUID,

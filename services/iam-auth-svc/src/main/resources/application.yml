@@ -36,6 +36,7 @@ iam:
     policy-svc: ${POLICY_SVC_URL:http://iam-policy-svc:8080}
     device-svc: ${DEVICE_SVC_URL:http://iam-device-svc:8080}
     session-svc: ${SESSION_SVC_URL:http://iam-session-svc:8080}
+    tenant-svc: ${TENANT_SVC_URL:http://iam-tenant-svc:8080}
   # Added for Service 14 (iam-admin-console) -- see CorsConfig.kt.
   cors:
     allowed-origins: ${ADMIN_CONSOLE_ORIGIN:http://localhost:5173}
@@ -58,6 +59,14 @@ resilience4j:
         sliding-window-size: 5
         minimum-number-of-calls: 5
         wait-duration-in-open-state: 30s
+      # Device-bound sign-in only. A rejected proof (HTTP 401) is an answer, not a fault, so it never trips the breaker.
+      tenant-svc:
+        failure-rate-threshold: 50
+        sliding-window-size: 5
+        minimum-number-of-calls: 5
+        wait-duration-in-open-state: 30s
+        ignore-exceptions:
+          - org.springframework.web.client.HttpClientErrorException$Unauthorized
       device-svc:
         failure-rate-threshold: 50
         sliding-window-size: 5
@@ -94,6 +103,10 @@ resilience4j:
         exponential-backoff-multiplier: 2
         ignore-exceptions:
           - io.github.resilience4j.circuitbreaker.CallNotPermittedException
+      # No retries: a proof's challenge is single use, so a retry after a timeout could only fail, and a slow tenant-svc
+      # must never add seconds to a sign-in.
+      tenant-svc:
+        max-attempts: 1
       device-svc:
         # max-attempts: 1 (no retry) is deliberate, not the platform default --
         # totp/verify (attempt-counter/lockout side effect) and push/send

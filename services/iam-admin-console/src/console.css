@@ -1027,3 +1027,30 @@ button:where(:not(:disabled)):hover {
   gap: 10px;
   flex-shrink: 0;
 }
+
+/* Endpoint Security: per-device posture details */
+.posture-row > td { padding: 0 !important; background: var(--iam-surface-alt); }
+.posture-panel { padding: 16px 20px 18px; display: flex; flex-direction: column; gap: 12px; }
+.posture-panel__head { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
+.posture-panel__muted { color: var(--iam-text-muted); font-size: 0.85rem; }
+.posture-panel__empty { margin: 0; color: var(--iam-text-muted); }
+.posture-panel__reasons { margin: 0; padding-left: 20px; color: var(--iam-text); }
+.posture-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 10px 24px; margin: 0; }
+.posture-grid__item { display: flex; flex-direction: column; gap: 4px; }
+.posture-grid__item dt { color: var(--iam-text-muted); font-size: 0.8rem; }
+.posture-grid__item dd { margin: 0; color: var(--iam-text); }
+.posture-grid__required { color: var(--iam-primary); }
+.activity-panel { border-top: 1px solid var(--iam-border, rgba(255,255,255,0.08)); }
+.activity-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; max-height: 280px; overflow-y: auto; }
+.activity-list__item { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.activity-list__time { margin-left: auto; }
+.fleet-summary { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; margin-bottom: 14px; }
+.fleet-card { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; padding: 14px 16px; border-radius: 12px; border: 1px solid var(--iam-border, rgba(255,255,255,0.08)); background: var(--iam-surface, rgba(255,255,255,0.03)); color: inherit; cursor: pointer; text-align: left; }
+.fleet-card:hover { border-color: var(--iam-primary, #5b8def); }
+.fleet-card--active { border-color: var(--iam-primary, #5b8def); box-shadow: 0 0 0 1px var(--iam-primary, #5b8def); }
+.fleet-card__value { font-size: 1.7rem; font-weight: 700; line-height: 1; }
+.fleet-card__label { color: var(--iam-text-muted); font-size: 0.85rem; }
+.fleet-card--success .fleet-card__value { color: #4ade80; }
+.fleet-card--warning .fleet-card__value { color: #fbbf24; }
+.fleet-card--danger .fleet-card__value { color: #f87171; }
+.fleet-empty { padding: 18px 20px; }

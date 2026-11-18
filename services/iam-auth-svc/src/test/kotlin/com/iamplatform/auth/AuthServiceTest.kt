@@ -13,6 +13,8 @@ import com.iamplatform.auth.client.RemotePushResult
 import com.iamplatform.auth.client.RemoteUserRole
 import com.iamplatform.auth.client.RemoteUserStatus
 import com.iamplatform.auth.client.SessionClient
+import com.iamplatform.auth.client.TenantClient
+import com.iamplatform.auth.client.VerifiedDeviceProof
 import com.iamplatform.auth.client.TotpVerifyResult
 import com.iamplatform.auth.client.VerifyPasswordResponse
 import com.iamplatform.servicekit.audit.AuditEvent
@@ -41,7 +43,8 @@ class AuthServiceTest {
     private val deviceClient = mock<DeviceClient>()
     private val sessionClient = mock<SessionClient>()
     private val auditPublisher = mock<AuditPublisher>()
-    private val service = AuthService(identityClient, geoClient, policyClient, deviceClient, sessionClient, auditPublisher)
+    private val tenantClient = mock<TenantClient>()
+    private val service = AuthService(identityClient, geoClient, policyClient, deviceClient, sessionClient, auditPublisher, tenantClient)
 
     private val tenantId = UUID.randomUUID()
     private val userId = UUID.randomUUID()
@@ -339,5 +342,81 @@ class AuthServiceTest {
 
         assertEquals(AuthErrorCode.ACCOUNT_LOCKED, ex.errorCode)
         verify(geoClient, never()).resolve(any())
+    }
+
+    // ---- device-bound sign-in: a proof can only ADD a device, never change whether the sign-in succeeds ----
+
+    private fun arrangeSuccessfulPasswordAndPush() {
+        whenever(identityClient.verifyPassword(tenantId, "alice@acme.com", "correct-password"))
+            .thenReturn(VerifyPasswordResponse(valid = true, userId = userId, status = RemoteUserStatus.ACTIVE))
+        whenever(geoClient.resolve("8.8.8.8")).thenReturn(GeoResolution("8.8.8.8", resolved = true, country = "US"))
+        whenever(policyClient.evaluate(tenantId, userId, null, "US", "8.8.8.8")).thenReturn(EvaluateResponse(allowed = true))
+        whenever(deviceClient.sendPush(tenantId, userId)).thenReturn(PushSendResult(UUID.randomUUID(), RemotePushResult.APPROVED))
+        whenever(sessionClient.issue(eq(tenantId), eq(userId), eq("8.8.8.8"), any(), any())).thenReturn(IssuedSession("tok-plain", UUID.randomUUID(), Instant.now()))
+    }
+
+    private val proof = DeviceProof(UUID.randomUUID(), UUID.randomUUID(), "sig", "https://login.example.com")
+
+    @Test
+    fun `a sign-in with no device proof never touches the tenant service or the device path`() {
+        arrangeSuccessfulPasswordAndPush()
+        val result = service.login(request)
+        assertEquals("tok-plain", result.token)
+        verify(tenantClient, never()).verifyDeviceProof(any(), any())
+        verify(sessionClient, never()).issueForDevice(any(), any(), anyOrNull(), any(), anyOrNull(), any())
+    }
+
+    @Test
+    fun `a verified proof puts the device on the session`() {
+        arrangeSuccessfulPasswordAndPush()
+        whenever(tenantClient.verifyDeviceProof(eq(proof.challengeId), any())).thenReturn(VerifiedDeviceProof(proof.deviceId, "SOFTWARE"))
+        whenever(sessionClient.issueForDevice(eq(tenantId), eq(userId), eq("8.8.8.8"), any(), any(), eq(proof.deviceId)))
+            .thenReturn(IssuedSession("tok-device", UUID.randomUUID(), Instant.now()))
+
+        val result = service.login(request.copy(deviceProof = proof))
+
+        assertEquals("tok-device", result.token)
+        verify(sessionClient, never()).issue(any(), any(), any(), any(), any())
+    }
+
+    @Test
+    fun `the authenticated user, not the caller, is what the proof is checked against`() {
+        arrangeSuccessfulPasswordAndPush()
+        whenever(tenantClient.verifyDeviceProof(any(), any())).thenReturn(null)
+        service.login(request.copy(deviceProof = proof))
+        val captor = argumentCaptor<com.iamplatform.auth.client.VerifyDeviceProofRequest>()
+        verify(tenantClient).verifyDeviceProof(eq(proof.challengeId), captor.capture())
+        assertEquals(userId, captor.firstValue.userId)
+    }
+
+    @Test
+    fun `a rejected proof still signs the person in, just without a device, and is audited`() {
+        arrangeSuccessfulPasswordAndPush()
+        whenever(tenantClient.verifyDeviceProof(any(), any())).thenReturn(null)
+
+        val result = service.login(request.copy(deviceProof = proof))
+
+        assertEquals("tok-plain", result.token)
+        val captor = argumentCaptor<AuditEvent>()
+        verify(auditPublisher, org.mockito.kotlin.atLeastOnce()).publish(captor.capture())
+        assertEquals(true, captor.allValues.any { it.action == "auth.device_proof_not_accepted" })
+        assertEquals(true, captor.allValues.any { it.action == "auth.login_success" })
+    }
+
+    @Test
+    fun `an unreachable tenant service cannot stop a sign-in`() {
+        arrangeSuccessfulPasswordAndPush()
+        whenever(tenantClient.verifyDeviceProof(any(), any())).thenThrow(RuntimeException("tenant-svc is down"))
+
+        val result = service.login(request.copy(deviceProof = proof))
+
+        assertEquals("tok-plain", result.token)
+    }
+
+    @Test
+    fun `a bad password is refused before any device proof is looked at`() {
+        whenever(identityClient.verifyPassword(tenantId, "alice@acme.com", "correct-password")).thenReturn(VerifyPasswordResponse(valid = false))
+        assertThrows<InvalidCredentialsException> { service.login(request.copy(deviceProof = proof)) }
+        verify(tenantClient, never()).verifyDeviceProof(any(), any())
     }
 }

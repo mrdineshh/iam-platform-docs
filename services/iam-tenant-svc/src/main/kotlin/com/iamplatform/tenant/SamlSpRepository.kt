@@ -9,4 +9,5 @@ interface SamlSpRepository : JpaRepository<SamlSpEntity, UUID> {
     fun findBySpEntityId(spEntityId: String): SamlSpEntity?
 
     fun existsBySpEntityId(spEntityId: String): Boolean
+    fun existsByTenantIdAndRequireTrustedDeviceTrue(tenantId: UUID): Boolean
 }

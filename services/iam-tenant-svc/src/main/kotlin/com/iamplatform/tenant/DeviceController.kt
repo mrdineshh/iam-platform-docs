@@ -75,6 +75,16 @@ class DeviceController(
         return ResponseEntity.ok(deviceTrustService.getDevice(tenantId, deviceId))
     }
 
+    @GetMapping("/devices/{deviceId}/events")
+    fun listEvents(
+        @PathVariable deviceId: UUID,
+        @RequestParam tenantId: UUID,
+        @RequestHeader("X-Session-Token") sessionToken: String,
+    ): ResponseEntity<List<DeviceEventResponse>> {
+        adminAccessGuard.requireTenantAdmin(sessionToken, tenantId)
+        return ResponseEntity.ok(deviceTrustService.listEvents(tenantId, deviceId))
+    }
+
     @PostMapping("/devices/{deviceId}/approve")
     fun approve(
         @PathVariable deviceId: UUID,

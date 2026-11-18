@@ -7,6 +7,7 @@ import com.iamplatform.servicekit.audit.AuditResult
 import com.iamplatform.servicekit.correlation.CorrelationId
 import com.iamplatform.servicekit.vault.OpenBaoPkiClient
 import com.iamplatform.servicekit.vault.OpenBaoTransitClient
+import org.springframework.beans.factory.annotation.Value
 import org.springframework.stereotype.Service
 import org.springframework.transaction.annotation.Transactional
 import java.security.SecureRandom
@@ -14,6 +15,7 @@ import java.time.Duration
 import java.time.Instant
 import java.util.Base64
 import java.util.UUID
+import tools.jackson.databind.ObjectMapper
 
 /**
  * Tenant-level device-trust policy defaults (Endpoint Device Trust spec
@@ -58,8 +60,30 @@ class DeviceTrustService(
     private val pkiClient: OpenBaoPkiClient,
     private val transitClient: OpenBaoTransitClient,
     private val auditPublisher: AuditPublisher,
+    private val objectMapper: ObjectMapper,
+    // Off by default: the posture verdict is recorded and shown, but does not change what a device may
+    // do. Turning it on would suspend access for any approved device that fails the default rules
+    // (e.g. a laptop without BitLocker), which an operator must opt into knowingly.
+    @Value("\${iam.device.enforce-posture:false}") private val enforcePosture: Boolean,
+    // Off by default, on purpose. OpenBaoPkiClient.issueCertificate uses the PKI "issue" API, which makes
+    // OpenBao generate a NEW key pair and return a certificate for that key -- the device's own enrolled key
+    // is never involved, so the certificate proves nothing about the device (and the private key is thrown
+    // away). The correct flow is the "sign" API over a CSR made from the device's own key; until that exists,
+    // issuing certificates would only create meaningless ones, and would make approving a device depend on
+    // OpenBao PKI being configured. Nothing consumes the certificate yet (device calls authenticate by signing
+    // with the enrolled key), so skipping it loses nothing. See OPEN_QUESTIONS OQ-23.
+    @Value("\${iam.device.issue-certificates:false}") private val issueCertificates: Boolean,
+    // What the platform DOES when an agent reports that its own files were tampered with (spec P1-16, "configurable
+    // response"): `report` (default) records it and shows it; `suspend` also suspends an approved device until an
+    // administrator reactivates it. Any other value is treated as `report`, so a typo can never lock devices out.
+    @Value("\${iam.device.tamper-response:report}") private val tamperResponse: String = "report",
 ) {
     private val secureRandom = SecureRandom()
+
+    private companion object {
+        val TAMPER_EVENTS = setOf("agent.tamper_detected", "device.tampering")
+        const val SYSTEM_ACTOR = "system:tamper-response"
+    }
 
     // ---- Enrollment (Section 6.1) ----
 
@@ -180,10 +204,12 @@ class DeviceTrustService(
             device.lifecycleStatus = DeviceLifecycleStatus.APPROVED.name
             device.updatedAt = Instant.now()
             deviceRepository.save(device)
-            val issued = issueCertificateFor(device, keyId)
-            certificatePem = issued.certificatePem
-            issuingCaPem = issued.issuingCaPem
-            certificateStatus = CertificateStatus.ACTIVE.name
+            if (issueCertificates) {
+                val issued = issueCertificateFor(device, keyId)
+                certificatePem = issued.certificatePem
+                issuingCaPem = issued.issuingCaPem
+                certificateStatus = CertificateStatus.ACTIVE.name
+            }
         } else {
             auditPublisher.publish(
                 AuditEvent(
@@ -210,7 +236,11 @@ class DeviceTrustService(
             certificatePem = certificatePem,
             issuingCaPem = issuingCaPem,
             policyVersion = policyVersion,
-            message = if (approvalMode == ApprovalMode.AUTOMATIC) "Device approved and certificate issued" else "Device registration submitted",
+            message = when {
+                approvalMode != ApprovalMode.AUTOMATIC -> "Device registration submitted"
+                certificatePem != null -> "Device approved and certificate issued"
+                else -> "Device approved"
+            },
         )
     }
 
@@ -222,9 +252,18 @@ class DeviceTrustService(
     fun getDevice(tenantId: UUID, deviceId: UUID): DeviceSummaryResponse =
         toSummary(requireDevice(tenantId, deviceId))
 
+    /** The device's 50 most recent events, newest first. A device of another tenant looks like "not found". */
+    fun listEvents(tenantId: UUID, deviceId: UUID): List<DeviceEventResponse> {
+        requireDevice(tenantId, deviceId)
+        return eventRepository.findTop50ByDeviceIdOrderByOccurredAtDesc(deviceId)
+            .map { DeviceEventResponse(it.eventType, it.severity, it.metadataJson, it.occurredAt) }
+    }
+
     private fun toSummary(device: IamDeviceEntity): DeviceSummaryResponse {
         val posture = postureRepository.findById(device.id).orElse(null)
         val cert = certificateRepository.findByDeviceIdAndStatus(device.id, CertificateStatus.ACTIVE.name)
+        // Display only: an unreadable stored document just means "no detail to show", never an error.
+        val signals = posture?.signalsJson?.let { runCatching { objectMapper.readValue(it, PostureSignals::class.java) }.getOrNull() }
         return DeviceSummaryResponse(
             id = device.id,
             tenantId = device.tenantId,
@@ -236,6 +275,10 @@ class DeviceTrustService(
             agentVersion = device.agentVersion,
             lastSeenAt = device.lastSeenAt,
             postureStatus = posture?.postureStatus,
+            postureRiskScore = posture?.riskScore,
+            postureEvaluatedAt = posture?.evaluatedAt,
+            postureReasons = signals?.let { PostureEvaluator.evaluate(it).reasons } ?: emptyList(),
+            postureSignals = signals,
             certificateStatus = cert?.status,
             createdAt = device.createdAt,
         )
@@ -251,7 +294,7 @@ class DeviceTrustService(
         deviceRepository.save(device)
         recordApproval(deviceId, ApprovalMode.MANUAL, ApprovalDecision.APPROVED, actorId, reason)
         val activeKey = keyRepository.findByDeviceIdAndStatus(deviceId, KeyStatus.ACTIVE.name)
-        if (activeKey != null && certificateRepository.findByDeviceIdAndStatus(deviceId, CertificateStatus.ACTIVE.name) == null) {
+        if (issueCertificates && activeKey != null && certificateRepository.findByDeviceIdAndStatus(deviceId, CertificateStatus.ACTIVE.name) == null) {
             issueCertificateFor(device, activeKey.id)
         }
         audit(tenantId, deviceId, actorId, "device.approved", AuditResult.SUCCESS, reason, sourceIp)
@@ -394,40 +437,80 @@ class DeviceTrustService(
         }
     }
 
+    /**
+     * The agent reports facts; this decides what they mean (see [PostureEvaluator]). The verdict is always
+     * recorded. It only changes the device's lifecycle when posture enforcement is switched on
+     * (`iam.device.enforce-posture`), and then reversibly: a non-compliant approved device becomes
+     * NON_COMPLIANT, and returns to APPROVED once it reports compliant again.
+     */
     @Transactional
     fun updatePosture(tenantId: UUID, deviceId: UUID, request: DevicePostureRequest) {
-        requireDevice(tenantId, deviceId)
+        val device = requireDevice(tenantId, deviceId)
         val now = Instant.now()
+        val evaluation = PostureEvaluator.evaluate(request.signals)
+        val signalsJson = objectMapper.writeValueAsString(request.signals)
+
         val existing = postureRepository.findById(deviceId).orElse(null)
+        val previousStatus = existing?.postureStatus
         if (existing != null) {
-            existing.postureStatus = request.postureStatus
-            existing.riskScore = request.riskScore
-            existing.signalsJson = request.signalsJson
+            existing.postureStatus = evaluation.status.name
+            existing.riskScore = evaluation.riskScore
+            existing.signalsJson = signalsJson
             existing.evaluatedAt = now
             postureRepository.save(existing)
         } else {
-            postureRepository.save(DevicePostureEntity(deviceId, request.postureStatus, request.riskScore, request.signalsJson, now))
+            postureRepository.save(DevicePostureEntity(deviceId, evaluation.status.name, evaluation.riskScore, signalsJson, now))
         }
-        if (request.postureStatus == PostureStatus.NON_COMPLIANT.name) {
-            val device = requireDevice(tenantId, deviceId)
-            if (device.lifecycleStatus == DeviceLifecycleStatus.APPROVED.name) {
-                device.lifecycleStatus = DeviceLifecycleStatus.NON_COMPLIANT.name
-                device.updatedAt = now
-                deviceRepository.save(device)
-            }
-            publishDeviceEvent(tenantId, deviceId, "device.noncompliant", EventSeverity.WARNING, request.signalsJson)
+
+        // Once per change, not once per report: the agent re-reports every 15 minutes.
+        if (evaluation.status == PostureStatus.NON_COMPLIANT && previousStatus != PostureStatus.NON_COMPLIANT.name) {
+            publishDeviceEvent(tenantId, deviceId, "device.noncompliant", EventSeverity.WARNING, objectMapper.writeValueAsString(mapOf("reasons" to evaluation.reasons)))
         }
+        if (enforcePosture) {
+            applyPostureEnforcement(device, evaluation.status, now)
+        }
+    }
+
+    private fun applyPostureEnforcement(device: IamDeviceEntity, status: PostureStatus, now: Instant) {
+        val newLifecycle = when {
+            status == PostureStatus.NON_COMPLIANT && device.lifecycleStatus == DeviceLifecycleStatus.APPROVED.name -> DeviceLifecycleStatus.NON_COMPLIANT
+            status == PostureStatus.COMPLIANT && device.lifecycleStatus == DeviceLifecycleStatus.NON_COMPLIANT.name -> DeviceLifecycleStatus.APPROVED
+            else -> return
+        }
+        device.lifecycleStatus = newLifecycle.name
+        device.updatedAt = now
+        deviceRepository.save(device)
+        val (event, severity) =
+            if (newLifecycle == DeviceLifecycleStatus.APPROVED) "device.posture_restored" to EventSeverity.INFO else "device.posture_enforced" to EventSeverity.WARNING
+        publishDeviceEvent(device.tenantId, device.id, event, severity, null)
     }
 
     @Transactional
     fun recordEvent(tenantId: UUID, deviceId: UUID, request: DeviceEventRequest) {
-        requireDevice(tenantId, deviceId)
+        val device = requireDevice(tenantId, deviceId)
         publishDeviceEvent(tenantId, deviceId, request.eventType, EventSeverity.valueOf(request.severity), request.metadataJson)
+        if (request.eventType in TAMPER_EVENTS) applyTamperResponse(device)
+    }
+
+    /**
+     * The configured response to tampering. Only an APPROVED device is suspended (a pending, suspended or revoked one
+     * already has no trusted access). Never undone automatically when the agent later reports the files restored: an
+     * administrator looks first and reactivates.
+     */
+    private fun applyTamperResponse(device: IamDeviceEntity) {
+        if (tamperResponse.trim().lowercase() != "suspend") return
+        if (device.lifecycleStatus != DeviceLifecycleStatus.APPROVED.name) return
+        device.lifecycleStatus = DeviceLifecycleStatus.SUSPENDED.name
+        device.updatedAt = Instant.now()
+        deviceRepository.save(device)
+        val reason = "agent reported tampering with its own files"
+        recordApproval(device.id, ApprovalMode.AUTOMATIC, ApprovalDecision.SUSPENDED, SYSTEM_ACTOR, reason)
+        audit(device.tenantId, device.id, SYSTEM_ACTOR, "device.suspended", AuditResult.SUCCESS, reason, null)
     }
 
     @Transactional
     fun recordCompliance(tenantId: UUID, deviceId: UUID, request: DeviceComplianceRequest) {
-        updatePosture(tenantId, deviceId, DevicePostureRequest(request.postureStatus, null, request.signalsJson))
+        updatePosture(tenantId, deviceId, DevicePostureRequest(request.signals))
     }
 
     private fun publishDeviceEvent(tenantId: UUID, deviceId: UUID, eventType: String, severity: EventSeverity, metadataJson: String?) {
@@ -461,16 +544,35 @@ class DeviceTrustService(
         val policyEntity = policyRepository.findTopByTenantIdOrderByVersionDesc(tenantId)
         val policyId = policyEntity?.id ?: deviceId // stable placeholder until a tenant has configured one
         val policyVersion = policyEntity?.version ?: 0
-        val apps = policyEntity?.let { appPolicyRepository.findByPolicyId(it.id) }?.map {
-            DeviceAppPolicyResponse(it.applicationId, it.pendingAccess, it.offlineAccess, it.offlineGraceSeconds, it.failureMode)
-        } ?: emptyList()
+        // The repository returns rows in no defined order; the signed order must be deterministic.
+        val apps = DevicePolicyCanonical.ordered(
+            policyEntity?.let { appPolicyRepository.findByPolicyId(it.id) }?.map {
+                DeviceAppPolicyResponse(it.applicationId, it.pendingAccess, it.offlineAccess, it.offlineGraceSeconds, it.failureMode)
+            } ?: emptyList(),
+        )
 
-        val now = Instant.now()
+        // Whole seconds, so the JSON the agent receives and the epoch seconds that were signed can
+        // never disagree about the instant (no sub-second part to truncate differently on each side).
+        val now = Instant.now().truncatedTo(java.time.temporal.ChronoUnit.SECONDS)
         val expiresAt = now.plusSeconds(DEFAULT_POLICY.heartbeatIntervalSeconds.toLong() * 3)
-        val canonical = canonicalPolicyEncoding(policyId, policyVersion, now, expiresAt, device.lifecycleStatus, apps)
+        val canonical = DevicePolicyCanonical.encode(
+            tenantId = tenantId,
+            deviceId = deviceId,
+            policyId = policyId,
+            policyVersion = policyVersion,
+            issuedAt = now,
+            expiresAt = expiresAt,
+            deviceStatus = device.lifecycleStatus,
+            heartbeatIntervalSeconds = DEFAULT_POLICY.heartbeatIntervalSeconds,
+            postureIntervalSeconds = DEFAULT_POLICY.postureIntervalSeconds,
+            agentFailureMode = DEFAULT_POLICY.agentFailureMode.name,
+            apps = apps,
+        )
         val signature = transitClient.sign("device-policy", canonical.toByteArray(Charsets.UTF_8))
 
         return DevicePolicyResponse(
+            tenantId = tenantId,
+            deviceId = deviceId,
             policyId = policyId,
             policyVersion = policyVersion,
             issuedAt = now,
@@ -484,22 +586,6 @@ class DeviceTrustService(
         )
     }
 
-    // Deterministic, field-order-fixed encoding -- the Rust agent's
-    // policy-verifier crate must reproduce this exact string to check the
-    // signature OpenBao's transit engine returned. Documented here as the
-    // single source of truth for that format; change both sides together.
-    private fun canonicalPolicyEncoding(
-        policyId: UUID,
-        version: Int,
-        issuedAt: Instant,
-        expiresAt: Instant,
-        deviceStatus: String,
-        apps: List<DeviceAppPolicyResponse>,
-    ): String {
-        val appsPart = apps.joinToString(";") { "${it.applicationId}:${it.pendingAccess}:${it.offlineAccess}:${it.offlineGraceSeconds}:${it.failureMode}" }
-        return "$policyId|$version|${issuedAt.epochSecond}|${expiresAt.epochSecond}|$deviceStatus|$appsPart"
-    }
-
     private fun requireDevice(tenantId: UUID, deviceId: UUID): IamDeviceEntity {
         val device = deviceRepository.findById(deviceId).orElse(null) ?: throw DeviceNotFoundException(deviceId)
         if (device.tenantId != tenantId) throw DeviceNotFoundException(deviceId) // cross-tenant lookup must look identical to "not found" (Section 16)
@@ -507,6 +593,16 @@ class DeviceTrustService(
     }
 
     private fun audit(tenantId: UUID, deviceId: UUID, actorId: String, action: String, result: AuditResult, reason: String?, sourceIp: String?) {
+        eventRepository.save(
+            DeviceEventEntity(
+                id = UUID.randomUUID(),
+                tenantId = tenantId,
+                deviceId = deviceId,
+                eventType = action,
+                severity = if (action == "device.revoked" || action == "device.suspended") EventSeverity.WARNING.name else EventSeverity.INFO.name,
+                metadataJson = objectMapper.writeValueAsString(mapOf("actor" to actorId, "reason" to reason)),
+            ),
+        )
         auditPublisher.publish(
             AuditEvent(
                 correlationId = CorrelationId.get(),

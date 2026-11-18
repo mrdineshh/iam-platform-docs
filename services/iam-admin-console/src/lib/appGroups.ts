@@ -27,3 +27,27 @@ export async function setAppGroups(
     { sessionToken },
   );
 }
+
+/** Turns "this app needs an approved, compliant enrolled laptop" on or off (iam-tenant-svc, `PUT /{id}/trusted-device`). */
+export async function setRequireTrustedDevice(
+  kind: AppKind,
+  appId: string,
+  tenantId: string,
+  required: boolean,
+  sessionToken: string,
+): Promise<void> {
+  await http.put(
+    `${config.tenantSvcUrl}/api/v1/${kind}/${appId}/trusted-device?tenantId=${encodeURIComponent(tenantId)}`,
+    { required },
+    { sessionToken },
+  );
+}
+
+/** Spec 6.4: may a laptop that is enrolled but still awaiting approval open this app? (`PUT /{id}/pending-device`) */
+export async function setAllowPendingDevice(kind: AppKind, appId: string, tenantId: string, allowed: boolean, sessionToken: string): Promise<void> {
+  await http.put(
+    `${config.tenantSvcUrl}/api/v1/${kind}/${appId}/pending-device?tenantId=${encodeURIComponent(tenantId)}`,
+    { allowed },
+    { sessionToken },
+  );
+}

@@ -30,6 +30,19 @@ data class LoginRequest(
     // The browser's User-Agent, forwarded by iam-login-portal (whose own request to this service
     // carries the portal's User-Agent, not the person's). Direct browser callers need not send it.
     val userAgent: String? = null,
+
+    // Device-bound sign-in: proof that this sign-in comes from an enrolled laptop (the agent's signature over a
+    // platform-issued challenge). Optional and never required: a sign-in without it, or with one that does not
+    // verify, succeeds exactly as before and simply carries no device.
+    @field:jakarta.validation.Valid
+    val deviceProof: DeviceProof? = null,
+)
+
+data class DeviceProof(
+    @field:NotNull val challengeId: UUID,
+    @field:NotNull val deviceId: UUID,
+    @field:NotBlank val signature: String,
+    @field:NotBlank val origin: String,
 )
 
 data class LoginResponse(

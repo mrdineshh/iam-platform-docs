@@ -32,6 +32,8 @@ data class SamlSpResponse(
     val spEntityId: String,
     val acsUrl: String,
     val launchUrl: String?,
+    val requireTrustedDevice: Boolean,
+    val allowPendingDevice: Boolean,
     val createdAt: Instant,
 )
 
@@ -43,6 +45,8 @@ fun SamlSpEntity.toResponse(): SamlSpResponse =
         spEntityId = spEntityId,
         acsUrl = acsUrl,
         launchUrl = launchUrl,
+        requireTrustedDevice = requireTrustedDevice,
+        allowPendingDevice = allowPendingDevice,
         createdAt = createdAt,
     )
 

@@ -31,7 +31,7 @@ export async function GET(request: NextRequest) {
   // An invalid redirect_uri is never redirected to, even to report the error -- that's what
   // prevents this endpoint being used as an open redirect.
   if (!redirectUri || !isValidKeyThumbprint(keyThumbprint) || !isValidState(state)) {
-    return NextResponse.redirect(new URL("/login/error?reason=device_enroll_invalid", request.url));
+    return redirectTo("/login/error?reason=device_enroll_invalid");
   }
 
   const sessionToken = request.cookies.get(config.ssoCookieName)?.value;
@@ -62,12 +62,18 @@ export async function GET(request: NextRequest) {
   }
 }
 
+/**
+ * A same-site redirect with a RELATIVE Location, so the browser resolves it against the address it actually
+ * used. NextResponse.redirect needs an absolute URL, and behind the reverse proxy `request.url` is the
+ * container's internal address (https://localhost:3000/...), which sent real users to a dead page.
+ */
+function redirectTo(path: string): NextResponse {
+  return new NextResponse(null, { status: 302, headers: { Location: path } });
+}
+
 function redirectToLogin(request: NextRequest): NextResponse {
   const tenantOverride = request.nextUrl.searchParams.get("tenant");
-  const portal = new URL("/portal", request.url);
-  if (tenantOverride) portal.searchParams.set("tenant", tenantOverride);
-
-  const response = NextResponse.redirect(portal);
+  const response = redirectTo(tenantOverride ? `/portal?tenant=${encodeURIComponent(tenantOverride)}` : "/portal");
   response.cookies.set(POST_LOGIN_NEXT_COOKIE, `${request.nextUrl.pathname}${request.nextUrl.search}`, {
     httpOnly: true,
     secure: config.ssoCookieSecure,

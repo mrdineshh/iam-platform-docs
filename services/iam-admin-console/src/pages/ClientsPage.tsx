@@ -2,7 +2,7 @@ import { Fragment, useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { listClients, type OidcClient } from "@/lib/oidcClients";
 import { listSamlSps, type SamlSp } from "@/lib/samlSps";
-import { getAppGroups, setAppGroups, type AppKind } from "@/lib/appGroups";
+import { getAppGroups, setAllowPendingDevice, setAppGroups, setRequireTrustedDevice, type AppKind } from "@/lib/appGroups";
 import { listGroups, type Group } from "@/lib/groups";
 import { loadSession } from "@/lib/session";
 import { UpstreamError } from "@/lib/http";
@@ -18,7 +18,7 @@ import {
   StatusBadge,
   TableToolbar,
 } from "@/components/ui";
-import { useToast } from "@/components/feedback";
+import { useConfirm, useToast } from "@/components/feedback";
 import { AppProvisioningPanel } from "@/components/AppProvisioningPanel";
 import { useTable } from "@/lib/useTable";
 
@@ -235,6 +235,7 @@ export function ClientsPage() {
                           </div>
                         </div>
                         <AppGroupAssignment kind="oidc-clients" appId={app.id} groups={groups} />
+                        <TrustedDeviceSwitch kind="oidc-clients" appId={app.id} initial={app.oidc.requireTrustedDevice ?? false} initialPending={app.oidc.allowPendingDevice ?? false} />
                         <AppProvisioningPanel kind="OIDC" appId={app.id} />
                       </td>
                     </tr>
@@ -257,6 +258,7 @@ export function ClientsPage() {
                           </div>
                         </div>
                         <AppGroupAssignment kind="saml-sps" appId={app.id} groups={groups} />
+                        <TrustedDeviceSwitch kind="saml-sps" appId={app.id} initial={app.saml.requireTrustedDevice ?? false} initialPending={app.saml.allowPendingDevice ?? false} />
                         <AppProvisioningPanel kind="SAML" appId={app.id} />
                       </td>
                     </tr>
@@ -387,6 +389,69 @@ function AppGroupAssignment({ kind, appId, groups }: { kind: AppKind; appId: str
           </button>
         </>
       )}
+    </div>
+  );
+}
+
+/**
+ * "Requires a trusted device": when on, people can open this app only from a laptop that is enrolled, approved and
+ * passes its security checks. Off by default, and nothing else about the app changes.
+ */
+function TrustedDeviceSwitch({ kind, appId, initial, initialPending }: { kind: AppKind; appId: string; initial: boolean; initialPending: boolean }) {
+  const session = loadSession()!;
+  const toast = useToast();
+  const confirm = useConfirm();
+  const [on, setOn] = useState(initial);
+  const [pending, setPending] = useState(initialPending);
+  const [saving, setSaving] = useState(false);
+
+  async function change(next: boolean) {
+    if (next) {
+      const ok = await confirm({
+        title: "Require a trusted device?",
+        message:
+          "People will be able to open this app only from a laptop that has the endpoint agent installed, is approved and passes the security checks. Anyone else is refused, including administrators. Turn this on only when your team has the agent.",
+        confirmLabel: "Turn on",
+      });
+      if (!ok) return;
+    }
+    setSaving(true);
+    try {
+      await setRequireTrustedDevice(kind, appId, session.tenantId, next, session.token);
+      setOn(next);
+      toast.success(next ? "This app now requires a trusted device." : "This app no longer requires a trusted device.");
+    } catch (err) {
+      toast.error(errorMessage(err));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function changePending(next: boolean) {
+    setSaving(true);
+    try {
+      await setAllowPendingDevice(kind, appId, session.tenantId, next, session.token);
+      setPending(next);
+      toast.success(next ? "Laptops awaiting approval may now open this app." : "Laptops awaiting approval can no longer open this app.");
+    } catch (err) {
+      toast.error(errorMessage(err));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div className="table-details__groups">
+      <strong>Trusted device</strong>
+      <label className="checkbox-list__item">
+        <input type="checkbox" checked={on} disabled={saving} onChange={(e) => void change(e.target.checked)} />
+        Only allow sign-in from an approved, compliant laptop
+      </label>
+      <label className="checkbox-list__item">
+        <input type="checkbox" checked={pending} disabled={saving || !on} onChange={(e) => void changePending(e.target.checked)} />
+        Also allow laptops that are still awaiting approval
+      </label>
+      <p className="hint">Off by default. Requires the endpoint agent on each user's laptop. Awaiting-approval laptops are refused unless the second box is ticked (for example for HR or IT-support apps); suspended or failing laptops are always refused.</p>
     </div>
   );
 }

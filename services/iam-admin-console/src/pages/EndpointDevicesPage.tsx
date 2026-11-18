@@ -1,11 +1,11 @@
-import { useEffect, useState } from "react";
+import { Fragment, useEffect, useState } from "react";
 import {
-  approveDevice, listDevices, rejectDevice, revokeDevice, suspendDevice, type DeviceSummary,
+  approveDevice, listDeviceEvents, listDevices, rejectDevice, revokeDevice, suspendDevice, type DeviceEvent, type DeviceSummary, type PostureSignals,
 } from "@/lib/devices";
 import { listTenantUsers, type AdminUserListEntry } from "@/lib/impersonate";
 import { loadSession } from "@/lib/session";
 import { UpstreamError } from "@/lib/http";
-import { Alert, EmptyState, PageHeader, PendingLabel, SkeletonRows, StatusBadge } from "@/components/ui";
+import { Alert, EmptyState, PageHeader, PendingLabel, SkeletonRows, StatusBadge, TableToolbar } from "@/components/ui";
 import { useConfirm, useToast } from "@/components/feedback";
 
 /**
@@ -24,6 +24,9 @@ export function EndpointDevicesPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [actingOn, setActingOn] = useState<string | null>(null);
+  const [expandedId, setExpandedId] = useState<string | null>(null);
+  const [filter, setFilter] = useState<FleetFilter>("ALL");
+  const [query, setQuery] = useState("");
 
   async function load() {
     setLoading(true);
@@ -44,6 +47,12 @@ export function EndpointDevicesPage() {
 
   useEffect(() => {
     void load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    const timer = window.setInterval(() => void load(), 30_000);
+    return () => window.clearInterval(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -127,6 +136,14 @@ export function EndpointDevicesPage() {
   }
 
   const pendingCount = devices?.filter((d) => d.lifecycleStatus === "PENDING_APPROVAL").length ?? 0;
+  const now = Date.now();
+  const counts = fleetCounts(devices ?? [], now);
+  const needle = query.trim().toLowerCase();
+  const visible = (devices ?? []).filter(
+    (d) =>
+      matchesFilter(d, filter, now) &&
+      (!needle || (d.hostname ?? "").toLowerCase().includes(needle) || (users[d.userId]?.email ?? "").toLowerCase().includes(needle)),
+  );
 
   return (
     <main className="page page--wide">
@@ -150,6 +167,26 @@ export function EndpointDevicesPage() {
           description="Devices appear here once a user installs the endpoint agent and enrolls."
         />
       ) : devices ? (
+        <>
+        <div className="fleet-summary">
+          {FLEET_CARDS.map((c) => (
+            <button
+              key={c.key}
+              type="button"
+              className={`fleet-card fleet-card--${c.tone}${filter === c.key ? " fleet-card--active" : ""}`}
+              onClick={() => setFilter(filter === c.key && c.key !== "ALL" ? "ALL" : c.key)}
+            >
+              <span className="fleet-card__value">{counts[c.key]}</span>
+              <span className="fleet-card__label">{c.label}</span>
+            </button>
+          ))}
+        </div>
+        <TableToolbar
+          query={query}
+          onQuery={setQuery}
+          placeholder="Search by device name or user"
+          summary={visible.length === devices.length ? undefined : `${visible.length} of ${devices.length} shown`}
+        />
         <div className="table-card">
           <table>
             <thead>
@@ -165,8 +202,9 @@ export function EndpointDevicesPage() {
               </tr>
             </thead>
             <tbody>
-              {devices.map((d) => (
-                <tr key={d.id}>
+              {visible.map((d) => (
+                <Fragment key={d.id}>
+                <tr>
                   <td>
                     <div className="cell-user">
                       <span className="avatar">{(d.hostname ?? d.platform).charAt(0).toUpperCase()}</span>
@@ -184,9 +222,15 @@ export function EndpointDevicesPage() {
                     ) : "—"}
                   </td>
                   <td>{d.certificateStatus ? <StatusBadge tone={d.certificateStatus === "ACTIVE" ? "success" : "neutral"}>{d.certificateStatus}</StatusBadge> : "—"}</td>
-                  <td>{d.lastSeenAt ? new Date(d.lastSeenAt).toLocaleString() : "Never"}</td>
+                  <td>
+                    {d.lastSeenAt ? new Date(d.lastSeenAt).toLocaleString() : "Never"}
+                    {isOffline(d, now) && <> <StatusBadge tone="danger">Offline</StatusBadge></>}
+                  </td>
                   <td>
                     <div className="row-actions">
+                      <button type="button" className="btn-secondary btn-sm" onClick={() => setExpandedId(expandedId === d.id ? null : d.id)}>
+                        {expandedId === d.id ? "Hide details" : "Details"}
+                      </button>
                       {d.lifecycleStatus === "PENDING_APPROVAL" && (
                         <>
                           <button type="button" className="btn-sm" disabled={actingOn === d.id} onClick={() => void handleApprove(d)}>
@@ -215,12 +259,204 @@ export function EndpointDevicesPage() {
                     </div>
                   </td>
                 </tr>
+                {expandedId === d.id && (
+                  <tr className="posture-row">
+                    <td colSpan={8}>
+                      <PosturePanel device={d} />
+                      <ActivityPanel device={d} users={users} />
+                    </td>
+                  </tr>
+                )}
+                </Fragment>
               ))}
             </tbody>
           </table>
+          {visible.length === 0 && <p className="posture-panel__empty fleet-empty">No devices match this filter.</p>}
         </div>
+        </>
       ) : null}
     </main>
+  );
+}
+
+type FleetFilter = "ALL" | "APPROVED" | "PENDING" | "NONCOMPLIANT" | "OFFLINE";
+
+const FLEET_CARDS: { key: FleetFilter; label: string; tone: "neutral" | "success" | "warning" | "danger" }[] = [
+  { key: "ALL", label: "Devices", tone: "neutral" },
+  { key: "APPROVED", label: "Approved", tone: "success" },
+  { key: "PENDING", label: "Awaiting approval", tone: "warning" },
+  { key: "NONCOMPLIANT", label: "Non-compliant", tone: "danger" },
+  { key: "OFFLINE", label: "Offline", tone: "danger" },
+];
+
+/** An agent that has not reported for this long is shown as Offline (the default heartbeat is 5 minutes). */
+const OFFLINE_AFTER_MS = 15 * 60 * 1000;
+
+function isOffline(d: DeviceSummary, now: number): boolean {
+  if (!d.lastSeenAt) return false;
+  if (["REVOKED", "REJECTED", "DECOMMISSIONED"].includes(d.lifecycleStatus)) return false;
+  return now - new Date(d.lastSeenAt).getTime() > OFFLINE_AFTER_MS;
+}
+
+function matchesFilter(d: DeviceSummary, filter: FleetFilter, now: number): boolean {
+  switch (filter) {
+    case "APPROVED": return d.lifecycleStatus === "APPROVED";
+    case "PENDING": return d.lifecycleStatus === "PENDING_APPROVAL";
+    case "NONCOMPLIANT": return d.postureStatus === "NON_COMPLIANT";
+    case "OFFLINE": return isOffline(d, now);
+    default: return true;
+  }
+}
+
+function fleetCounts(devices: DeviceSummary[], now: number): Record<FleetFilter, number> {
+  const count = (f: FleetFilter) => devices.filter((d) => matchesFilter(d, f, now)).length;
+  return { ALL: devices.length, APPROVED: count("APPROVED"), PENDING: count("PENDING"), NONCOMPLIANT: count("NONCOMPLIANT"), OFFLINE: count("OFFLINE") };
+}
+
+const EVENT_LABELS: Record<string, string> = {
+  "device.enrollment.submitted": "Device enrolled",
+  "device.approved": "Approved by an admin",
+  "device.rejected": "Rejected by an admin",
+  "device.suspended": "Suspended by an admin",
+  "device.revoked": "Revoked by an admin",
+  "device.noncompliant": "Became non-compliant",
+  "device.posture_enforced": "Suspended automatically (non-compliant)",
+  "device.posture_restored": "Restored (compliant again)",
+  "device.certificate.issued": "Certificate issued",
+  "device.tampering": "Tampering reported",
+  "agent.tamper_detected": "Agent files were changed (tamper detected)",
+  "agent.tamper_cleared": "Agent files restored (tamper cleared)",
+  "agent.policy_rejected": "A policy was rejected by the agent",
+  "agent.clock_moved_backwards": "Device clock moved backwards",
+  "agent.posture_collection_failed": "Posture check failed to run",
+};
+
+function eventDetail(e: DeviceEvent, users: Record<string, AdminUserListEntry>): string {
+  if (!e.metadataJson) return "";
+  try {
+    const m = JSON.parse(e.metadataJson) as { actor?: string; reason?: string | string[] | null };
+    const parts: string[] = [];
+    if (m.actor) parts.push(`by ${users[m.actor]?.email ?? m.actor}`);
+    if (Array.isArray(m.reason)) parts.push(m.reason.join("; "));
+    else if (m.reason) parts.push(String(m.reason));
+    return parts.join(" · ");
+  } catch {
+    return "";
+  }
+}
+
+function ActivityPanel({ device, users }: { device: DeviceSummary; users: Record<string, AdminUserListEntry> }) {
+  const [events, setEvents] = useState<DeviceEvent[] | null>(null);
+  const [failed, setFailed] = useState(false);
+
+  useEffect(() => {
+    const session = loadSession();
+    if (!session) return;
+    let cancelled = false;
+    listDeviceEvents(session.tenantId, device.id, session.token)
+      .then((list) => !cancelled && setEvents(list))
+      .catch(() => !cancelled && setFailed(true));
+    return () => {
+      cancelled = true;
+    };
+  }, [device.id, device.lastSeenAt]);
+
+  return (
+    <div className="posture-panel activity-panel">
+      <strong>Activity</strong>
+      {failed ? (
+        <p className="posture-panel__empty">The activity list could not be loaded.</p>
+      ) : events === null ? (
+        <p className="posture-panel__empty">Loading...</p>
+      ) : events.length === 0 ? (
+        <p className="posture-panel__empty">No activity recorded yet.</p>
+      ) : (
+        <ul className="activity-list">
+          {events.map((e, i) => (
+            <li key={`${e.occurredAt}-${i}`} className="activity-list__item">
+              <StatusBadge tone={e.severity === "CRITICAL" ? "danger" : e.severity === "WARNING" ? "warning" : "neutral"}>
+                {e.severity === "CRITICAL" ? "Critical" : e.severity === "WARNING" ? "Warning" : "Info"}
+              </StatusBadge>
+              <span>{EVENT_LABELS[e.eventType] ?? e.eventType}</span>
+              {eventDetail(e, users) && <span className="posture-panel__muted">{eventDetail(e, users)}</span>}
+              <span className="posture-panel__muted activity-list__time">{new Date(e.occurredAt).toLocaleString()}</span>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
+function PosturePanel({ device }: { device: DeviceSummary }) {
+  const s: PostureSignals | null = device.postureSignals;
+  if (!s || !device.postureEvaluatedAt) {
+    return (
+      <div className="posture-panel">
+        <p className="posture-panel__empty">
+          No posture report yet. The agent sends its first one shortly after it starts, then again every 15 minutes.
+        </p>
+      </div>
+    );
+  }
+  const reported = s.collectedAt ? new Date(s.collectedAt * 1000) : new Date(device.postureEvaluatedAt);
+  return (
+    <div className="posture-panel">
+      <div className="posture-panel__head">
+        <StatusBadge tone={device.postureStatus === "COMPLIANT" ? "success" : device.postureStatus === "NON_COMPLIANT" ? "danger" : "neutral"}>
+          {device.postureStatus === "COMPLIANT" ? "Compliant" : device.postureStatus === "NON_COMPLIANT" ? "Non-compliant" : "Not fully determined"}
+        </StatusBadge>
+        <span>Risk score {device.postureRiskScore ?? "—"}/100</span>
+        <span className="posture-panel__muted">Checked {reported.toLocaleString()}</span>
+      </div>
+      {device.postureReasons.length > 0 && (
+        <ul className="posture-panel__reasons">
+          {device.postureReasons.map((r) => (
+            <li key={r}>{r}</li>
+          ))}
+        </ul>
+      )}
+      <dl className="posture-grid">
+        <Check label="Disk encryption (BitLocker)" value={s.diskEncryption} required />
+        <Check label="Antivirus real-time protection" value={s.antivirus} required detail={s.antivirusProduct} />
+        <Check label="Firewall (all profiles)" value={s.firewall} required />
+        <Check label="TPM present" value={s.tpmPresent} />
+        <Check label="Secure Boot" value={s.secureBoot} />
+        <Fact label="Operating system" value={[s.osName, s.osVersion].filter(Boolean).join(" ")} />
+        <Fact label="Most recent update installed" value={s.lastHotfixDate} />
+      </dl>
+      <p className="posture-panel__muted">
+        Required checks decide compliance. The others are shown for information. This is currently report-only: a
+        non-compliant device is flagged here but is not blocked.
+      </p>
+    </div>
+  );
+}
+
+function Check({ label, value, required, detail }: { label: string; value?: string | null; required?: boolean; detail?: string | null }) {
+  const v = (value ?? "").toUpperCase();
+  const tone = v === "ENABLED" ? "success" : v === "DISABLED" ? "danger" : "neutral";
+  const text = v === "ENABLED" ? "On" : v === "DISABLED" ? "Off" : "Unknown";
+  return (
+    <div className="posture-grid__item">
+      <dt>
+        {label}
+        {required && <span className="posture-grid__required"> · required</span>}
+      </dt>
+      <dd>
+        <StatusBadge tone={tone}>{text}</StatusBadge>
+        {detail && <span className="posture-panel__muted"> {detail}</span>}
+      </dd>
+    </div>
+  );
+}
+
+function Fact({ label, value }: { label: string; value?: string | null }) {
+  return (
+    <div className="posture-grid__item">
+      <dt>{label}</dt>
+      <dd>{value || "Unknown"}</dd>
+    </div>
   );
 }
 

@@ -8,6 +8,8 @@ export interface SamlSp {
   spEntityId: string;
   acsUrl: string;
   launchUrl: string | null;
+  requireTrustedDevice?: boolean;
+  allowPendingDevice?: boolean;
   createdAt: string;
 }
 

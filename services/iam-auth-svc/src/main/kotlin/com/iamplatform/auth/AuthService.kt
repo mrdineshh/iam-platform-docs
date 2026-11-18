@@ -12,6 +12,8 @@ import com.iamplatform.auth.client.RemoteUserStatus
 import com.iamplatform.auth.client.GeoResolution
 import com.iamplatform.auth.client.SessionClient
 import com.iamplatform.auth.client.SessionContext
+import com.iamplatform.auth.client.TenantClient
+import com.iamplatform.auth.client.VerifyDeviceProofRequest
 import com.iamplatform.servicekit.audit.ActorType
 import com.iamplatform.servicekit.audit.AuditEvent
 import com.iamplatform.servicekit.audit.AuditPublisher
@@ -45,6 +47,7 @@ class AuthService(
     private val deviceClient: DeviceClient,
     private val sessionClient: SessionClient,
     private val auditPublisher: AuditPublisher,
+    private val tenantClient: TenantClient,
 ) {
 
     fun login(request: LoginRequest): LoginResponse {
@@ -128,7 +131,13 @@ class AuthService(
         // as a 503 (BUILD_PLAN.md Service 7 TEST GATE: "login fails cleanly
         // with a 503, not a hang or a partial state").
         val context = SessionContext(request.userAgent, country, geo?.region, geo?.city)
-        val session = sessionClient.issue(request.tenantId, userId, request.sourceIp, idempotencyKey = correlationId, context = context)
+        // Device-bound sign-in. Looked at only when the caller sent a proof; otherwise this line changes nothing.
+        val deviceId = request.deviceProof?.let { verifiedDeviceId(request, userId, it, country) }
+        val session = if (deviceId != null) {
+            sessionClient.issueForDevice(request.tenantId, userId, request.sourceIp, idempotencyKey = correlationId, context = context, deviceId = deviceId)
+        } else {
+            sessionClient.issue(request.tenantId, userId, request.sourceIp, idempotencyKey = correlationId, context = context)
+        }
 
         // Where and on what the person signed in, so the audit trail shows it alongside the IP.
         val place = listOfNotNull(geo?.city, geo?.region, country).joinToString(", ")
@@ -233,6 +242,23 @@ class AuthService(
     }
 
     /** Null return means the second factor passed; a non-null pair is (reason, errorCode) for the denial. */
+    /**
+     * The device the proof vouches for, or null. NEVER throws and never blocks the sign-in: the person is already
+     * authenticated; a missing, wrong or unverifiable proof only means the session carries no device (so apps that
+     * require a trusted device will refuse it, and everything else is unaffected).
+     */
+    private fun verifiedDeviceId(request: LoginRequest, userId: UUID, proof: DeviceProof, country: String?): UUID? {
+        val verified = try {
+            tenantClient.verifyDeviceProof(proof.challengeId, VerifyDeviceProofRequest(userId, proof.deviceId, proof.signature, proof.origin))
+        } catch (ex: Exception) {
+            null
+        }
+        if (verified == null) {
+            audit(request.tenantId, userId.toString(), "auth.device_proof_not_accepted", AuditResult.DENIED, "device proof missing, invalid or unverifiable", request.sourceIp, geo = country)
+        }
+        return verified?.deviceId
+    }
+
     private fun verifySecondFactor(request: LoginRequest, userId: UUID): Pair<String, AuthErrorCode>? =
         if (request.totpCode != null) {
             val result = try {

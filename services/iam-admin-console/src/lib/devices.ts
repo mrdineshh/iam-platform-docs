@@ -15,8 +15,28 @@ export interface DeviceSummary {
   agentVersion: string | null;
   lastSeenAt: string | null;
   postureStatus: "COMPLIANT" | "NON_COMPLIANT" | "UNKNOWN" | null;
+  // What the agent last reported and the server's verdict on it. All empty/null until the first report.
+  postureRiskScore: number | null;
+  postureEvaluatedAt: string | null;
+  postureReasons: string[];
+  postureSignals: PostureSignals | null;
   certificateStatus: "ACTIVE" | "EXPIRED" | "REVOKED" | null;
   createdAt: string;
+}
+
+// Mirrors iam-tenant-svc's PostureSignals. A tri-state is "ENABLED", "DISABLED", or anything else (unknown).
+export interface PostureSignals {
+  osName?: string | null;
+  osVersion?: string | null;
+  osBuild?: string | null;
+  diskEncryption?: string | null;
+  antivirus?: string | null;
+  antivirusProduct?: string | null;
+  firewall?: string | null;
+  tpmPresent?: string | null;
+  secureBoot?: string | null;
+  lastHotfixDate?: string | null;
+  collectedAt?: number | null;
 }
 
 /** Endpoint Device Trust spec Section 13: the admin console's device inventory. */
@@ -49,3 +69,18 @@ export const suspendDevice = (tenantId: string, deviceId: string, sessionToken: 
 // just a future-logins block. See DeviceTrustService.revoke's own doc comment.
 export const revokeDevice = (tenantId: string, deviceId: string, sessionToken: string, reason?: string) =>
   deviceAction(tenantId, deviceId, "revoke", sessionToken, reason);
+
+// Mirrors iam-tenant-svc's DeviceEventResponse: one entry of a device's activity timeline (newest first).
+export interface DeviceEvent {
+  eventType: string;
+  severity: "INFO" | "WARNING" | "CRITICAL";
+  metadataJson: string | null;
+  occurredAt: string;
+}
+
+export function listDeviceEvents(tenantId: string, deviceId: string, sessionToken: string): Promise<DeviceEvent[]> {
+  return http.get<DeviceEvent[]>(
+    `${config.tenantSvcUrl}/api/v1/endpoint/devices/${deviceId}/events?tenantId=${encodeURIComponent(tenantId)}`,
+    { sessionToken },
+  );
+}

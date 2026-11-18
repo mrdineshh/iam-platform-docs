@@ -193,6 +193,7 @@ interface DeviceHeartbeatRepository : JpaRepository<DeviceHeartbeatEntity, UUID>
 
 interface DeviceEventRepository : JpaRepository<DeviceEventEntity, UUID> {
     fun findByDeviceIdOrderByOccurredAtDesc(deviceId: UUID): List<DeviceEventEntity>
+    fun findTop50ByDeviceIdOrderByOccurredAtDesc(deviceId: UUID): List<DeviceEventEntity>
 }
 
 interface DevicePolicyRepository : JpaRepository<DevicePolicyEntity, UUID> {

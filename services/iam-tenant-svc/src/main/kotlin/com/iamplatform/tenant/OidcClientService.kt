@@ -71,6 +71,20 @@ class OidcClientService(
         return groupRepository.findByOidcClientId(clientId).map { it.groupId }
     }
 
+    @Transactional
+    fun setAllowPendingDevice(clientId: UUID, allowed: Boolean) {
+        val client = repository.findById(clientId).orElseThrow { OidcClientNotFoundException(clientId) }
+        client.allowPendingDevice = allowed
+        repository.save(client)
+    }
+
+    @Transactional
+    fun setRequireTrustedDevice(clientId: UUID, required: Boolean) {
+        val client = repository.findById(clientId).orElseThrow { OidcClientNotFoundException(clientId) }
+        client.requireTrustedDevice = required
+        repository.save(client)
+    }
+
     // Replace-all semantics: the admin console always sends the full
     // desired set, same as how a multi-select checkbox list naturally
     // works -- simpler than diffing add/remove client-side.
@@ -78,6 +92,9 @@ class OidcClientService(
     fun setGroups(clientId: UUID, groupIds: List<UUID>) {
         if (!repository.existsById(clientId)) throw OidcClientNotFoundException(clientId)
         groupRepository.deleteByOidcClientId(clientId)
+        // Flush the delete BEFORE inserting: Hibernate runs inserts ahead of deletes, so re-saving a selection that keeps a
+        // group that is already assigned hit the unique index (HTTP 500 "temporarily unavailable" in the console).
+        groupRepository.flush()
         groupRepository.saveAll(groupIds.distinct().map { OidcClientGroupEntity(UUID.randomUUID(), clientId, it) })
     }
 

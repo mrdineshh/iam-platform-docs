@@ -1,5 +1,6 @@
 import { config } from "./config";
 import { postJson } from "./http";
+import type { DeviceProof } from "./deviceProof";
 
 export interface LoginRequest {
   tenantId: string;
@@ -9,6 +10,8 @@ export interface LoginRequest {
   // The person's browser User-Agent: this service's own request to iam-auth-svc carries the portal's.
   userAgent?: string;
   totpCode?: string;
+  // Device-bound sign-in: only ever present when the endpoint agent on this laptop signed a platform challenge.
+  deviceProof?: DeviceProof;
 }
 
 export interface LoginResponse {

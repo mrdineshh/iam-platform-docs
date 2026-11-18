@@ -1,13 +1,16 @@
 "use client";
 
 import { BrandHeader } from "../BrandHeader";
-import { useActionState, useEffect, useRef, useState } from "react";
+import { useActionState, useEffect, useRef, useState, type FormEvent } from "react";
 import { useFormStatus } from "react-dom";
 import QRCode from "qrcode";
-import { loginAction, precheckAction } from "./actions";
+import { issueDeviceChallengeAction, loginAction, precheckAction } from "./actions";
+import { obtainDeviceProof, warmUpAgentPermission } from "@/lib/deviceProof";
 import { initialLoginFormState } from "./types";
 
 interface Props {
+  /** True only when this organization has an app that requires a trusted device; false changes nothing about this page. */
+  deviceSignIn?: boolean;
   clientId: string;
   redirectUri: string;
   scope: string;
@@ -31,7 +34,7 @@ type Step = "username" | "password" | "enroll" | "code" | "submitting-no-code";
  * never triggers a push send or issues a session itself -- only the final
  * submit (loginAction, same as before) does that.
  */
-export function LoginForm({ clientId, redirectUri, scope, state, tenantOverride, tenantName, logoUrl, headline }: Props) {
+export function LoginForm({ deviceSignIn = false, clientId, redirectUri, scope, state, tenantOverride, tenantName, logoUrl, headline }: Props) {
   const [formState, formAction] = useActionState(loginAction, initialLoginFormState);
   const [intent, setIntent] = useState<"totp" | "push">("totp");
   const [step, setStep] = useState<Step>("username");
@@ -41,6 +44,22 @@ export function LoginForm({ clientId, redirectUri, scope, state, tenantOverride,
   const [checking, setChecking] = useState(false);
   const [qrDataUrl, setQrDataUrl] = useState<string | null>(null);
   const formRef = useRef<HTMLFormElement>(null);
+  const proofRef = useRef<HTMLInputElement>(null);
+  // Device-bound sign-in bookkeeping (see onSubmitCapture). Refs, not state: they must not re-render anything.
+  const preparingProof = useRef(false);
+  const proofReady = useRef(false);
+  const [preparing, setPreparing] = useState(false);
+  // Started when the page loads (only for organizations that use device sign-in) so the browser's one-time
+  // permission prompt is answered while the person types, not when they press Sign in.
+  const warmUp = useRef<Promise<void> | null>(null);
+  const warmUpDone = useRef(false);
+
+  useEffect(() => {
+    if (!deviceSignIn) return;
+    warmUp.current = warmUpAgentPermission().then(() => {
+      warmUpDone.current = true;
+    });
+  }, [deviceSignIn]);
 
   // mfaRequired=false: there's nothing left for the user to do, so submit
   // the real form the moment that step is reached, with no totpCode.
@@ -49,6 +68,50 @@ export function LoginForm({ clientId, redirectUri, scope, state, tenantOverride,
       formRef.current?.requestSubmit();
     }
   }, [step]);
+
+  /**
+   * Device-bound sign-in. Only does anything when this organization uses it (deviceSignIn). Just before the real
+   * submit, asks the endpoint agent on this laptop to sign a fresh platform challenge, puts the result in the hidden
+   * `deviceProof` field and then submits for real, with the same button the person pressed. A challenge is fetched this
+   * late on purpose: it lives for two minutes, and the person may have spent a while typing their code.
+   *
+   * The whole thing is wrapped so it can only ever ADD a proof: no agent, a browser that blocks the local call, a
+   * timeout, an error of any kind -- the form is submitted anyway, exactly as it would be without this feature.
+   */
+  function onSubmitCapture(event: FormEvent<HTMLFormElement>) {
+    if (!deviceSignIn || proofReady.current) {
+      proofReady.current = false;
+      return;
+    }
+    event.preventDefault();
+    if (preparingProof.current) return; // a double click must not start a second attempt
+    preparingProof.current = true;
+    setPreparing(true);
+    const form = event.currentTarget;
+    const submitter = (event.nativeEvent as SubmitEvent).submitter as HTMLElement | null;
+    // A prompt that is still unanswered gets more time; once it is answered (or there never was one) 4 s is plenty.
+    const promptPending = warmUp.current !== null && !warmUpDone.current;
+    void (async () => {
+      try {
+        const proof = await Promise.race([
+          obtainDeviceProof({
+            origin: window.location.origin,
+            requestChallenge: () => issueDeviceChallengeAction(tenantOverride),
+            waitFor: promptPending ? (warmUp.current ?? undefined) : undefined,
+          }),
+          new Promise<null>((resolve) => setTimeout(() => resolve(null), promptPending ? 22000 : 4000)),
+        ]);
+        if (proofRef.current) proofRef.current.value = proof ? JSON.stringify(proof) : "";
+      } catch {
+        if (proofRef.current) proofRef.current.value = "";
+      } finally {
+        proofReady.current = true;
+        preparingProof.current = false;
+        setPreparing(false);
+        form.requestSubmit(submitter && submitter instanceof HTMLButtonElement ? submitter : undefined);
+      }
+    })();
+  }
 
   async function handlePasswordNext() {
     if (!password) {
@@ -83,7 +146,7 @@ export function LoginForm({ clientId, redirectUri, scope, state, tenantOverride,
   return (
     <>
       <BrandHeader tenantName={tenantName} logoUrl={logoUrl} />
-      <form ref={formRef} action={formAction} className="login-form">
+      <form ref={formRef} action={formAction} onSubmitCapture={onSubmitCapture} className="login-form">
         <h1>{headline || `Sign in to ${tenantName}`}</h1>
         <ol className="login-steps" aria-hidden="true">
           <li className={stepIndex >= 0 ? "login-steps__item login-steps__item--done" : "login-steps__item"} />
@@ -91,6 +154,7 @@ export function LoginForm({ clientId, redirectUri, scope, state, tenantOverride,
           <li className={stepIndex >= 2 ? "login-steps__item login-steps__item--done" : "login-steps__item"} />
         </ol>
 
+        <input type="hidden" name="deviceProof" ref={proofRef} defaultValue="" />
         <input type="hidden" name="clientId" value={clientId} />
       <input type="hidden" name="redirectUri" value={redirectUri} />
       <input type="hidden" name="scope" value={scope} />
@@ -217,6 +281,12 @@ export function LoginForm({ clientId, redirectUri, scope, state, tenantOverride,
 
           <SubmitButtons intent={intent} onIntentChange={setIntent} onBack={() => setStep("password")} />
         </>
+      )}
+
+      {preparing && (
+        <p className="login-form__pending" aria-live="polite">
+          Checking this device…
+        </p>
       )}
 
       {step === "submitting-no-code" && (

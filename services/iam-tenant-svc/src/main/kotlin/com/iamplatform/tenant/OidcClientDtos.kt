@@ -29,6 +29,8 @@ data class OidcClientResponse(
     val name: String,
     val redirectUris: List<String>,
     val launchUrl: String?,
+    val requireTrustedDevice: Boolean,
+    val allowPendingDevice: Boolean,
     val createdAt: Instant,
 )
 
@@ -49,8 +51,14 @@ fun OidcClientEntity.toResponse(): OidcClientResponse =
         name = name,
         redirectUris = redirectUriList,
         launchUrl = launchUrl,
+        requireTrustedDevice = requireTrustedDevice,
+        allowPendingDevice = allowPendingDevice,
         createdAt = createdAt,
     )
+
+data class SetTrustedDeviceRequest(val required: Boolean)
+
+data class SetPendingDeviceRequest(val allowed: Boolean)
 
 data class VerifyClientSecretRequest(
     @field:NotBlank

@@ -1,5 +1,6 @@
 package com.iamplatform.tenant
 
+import jakarta.validation.Valid
 import jakarta.validation.constraints.NotBlank
 import jakarta.validation.constraints.NotNull
 import java.time.Instant
@@ -69,6 +70,12 @@ data class DeviceSummaryResponse(
     val agentVersion: String?,
     val lastSeenAt: Instant?,
     val postureStatus: String?,
+    // The latest reported facts and the server's verdict on them -- see DevicePostureModels.kt. All null
+    // until the agent's first posture report.
+    val postureRiskScore: Int? = null,
+    val postureEvaluatedAt: Instant? = null,
+    val postureReasons: List<String> = emptyList(),
+    val postureSignals: PostureSignals? = null,
     val certificateStatus: String?,
     val createdAt: Instant,
 )
@@ -87,21 +94,21 @@ data class DeviceHeartbeatRequest(
     @field:NotBlank val healthStatus: String, // HEALTHY, DEGRADED, TAMPERED
 )
 
+// The agent reports facts only. It does not (and cannot) send a verdict: the server evaluates the signals
+// against its own rules (PostureEvaluator), so a modified agent can't claim to be compliant.
 data class DevicePostureRequest(
-    @field:NotBlank val postureStatus: String, // COMPLIANT, NON_COMPLIANT, UNKNOWN
-    val riskScore: Int? = null,
-    val signalsJson: String? = null,
+    @field:Valid @field:NotNull val signals: PostureSignals,
 )
 
 data class DeviceEventRequest(
     @field:NotBlank val eventType: String,
-    @field:NotBlank val severity: String, // INFO, WARNING, CRITICAL
+    @field:NotBlank @field:jakarta.validation.constraints.Pattern(regexp = "INFO|WARNING|CRITICAL") val severity: String,
     val metadataJson: String? = null,
 )
 
+// POST /devices/{id}/compliance (spec Section 10): same facts, same server-side evaluation as /posture.
 data class DeviceComplianceRequest(
-    @field:NotBlank val postureStatus: String,
-    val signalsJson: String? = null,
+    @field:Valid @field:NotNull val signals: PostureSignals,
 )
 
 // ---- Signed policy fetch (Section 10.3) ----
@@ -115,6 +122,10 @@ data class DeviceAppPolicyResponse(
 )
 
 data class DevicePolicyResponse(
+    // Signed, and checked by the agent against its own identity -- a policy is only valid for the one
+    // tenant/device it was issued to (spec Section 15.3 "tenant/device bound").
+    val tenantId: UUID,
+    val deviceId: UUID,
     val policyId: UUID,
     val policyVersion: Int,
     val issuedAt: Instant,
@@ -129,4 +140,12 @@ data class DevicePolicyResponse(
     // before trusting/caching the policy (Section 16 "Policy: signed,
     // versioned, expiring and rollback-protected").
     val signature: String,
+)
+
+// GET /devices/{id}/events -- the device's activity timeline in the Admin Console. Newest first.
+data class DeviceEventResponse(
+    val eventType: String,
+    val severity: String,
+    val metadataJson: String?,
+    val occurredAt: Instant,
 )

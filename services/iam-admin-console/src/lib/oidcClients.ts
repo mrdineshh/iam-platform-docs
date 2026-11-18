@@ -7,6 +7,9 @@ export interface OidcClient {
   name: string;
   redirectUris: string[];
   launchUrl: string | null;
+  // Device-bound sign-in: only a session from an approved, compliant enrolled laptop may open this app.
+  requireTrustedDevice?: boolean;
+  allowPendingDevice?: boolean;
   createdAt: string;
 }
 

@@ -69,6 +69,30 @@ class OidcClientController(
     // like every other app-management endpoint -- deciding who can launch
     // an app is a management action, not something any logged-in user
     // should be able to change about themselves.
+    @PutMapping("/{id}/pending-device")
+    fun setPendingDevice(
+        @PathVariable id: UUID,
+        @RequestParam tenantId: UUID,
+        @RequestBody request: SetPendingDeviceRequest,
+        @RequestHeader("X-Session-Token") sessionToken: String,
+    ): ResponseEntity<SetPendingDeviceRequest> {
+        adminAccessGuard.requireTenantAdmin(sessionToken, tenantId)
+        service.setAllowPendingDevice(id, request.allowed)
+        return ResponseEntity.ok(request)
+    }
+
+    @PutMapping("/{id}/trusted-device")
+    fun setTrustedDevice(
+        @PathVariable id: UUID,
+        @RequestParam tenantId: UUID,
+        @RequestBody request: SetTrustedDeviceRequest,
+        @RequestHeader("X-Session-Token") sessionToken: String,
+    ): ResponseEntity<SetTrustedDeviceRequest> {
+        adminAccessGuard.requireTenantAdmin(sessionToken, tenantId)
+        service.setRequireTrustedDevice(id, request.required)
+        return ResponseEntity.ok(request)
+    }
+
     @PutMapping("/{id}/groups")
     fun setGroups(
         @PathVariable id: UUID,

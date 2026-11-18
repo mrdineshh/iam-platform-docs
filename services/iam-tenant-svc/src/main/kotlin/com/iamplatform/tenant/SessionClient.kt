@@ -11,7 +11,14 @@ import org.springframework.web.client.RestClient
 import java.time.Instant
 import java.util.UUID
 
-data class RemoteSession(val sessionId: UUID, val tenantId: UUID, val userId: UUID, val expiresAt: Instant)
+data class RemoteSession(
+    val sessionId: UUID,
+    val tenantId: UUID,
+    val userId: UUID,
+    val expiresAt: Instant,
+    // Set only when the sign-in carried a verified device proof (device-bound sign-in).
+    val deviceId: String? = null,
+)
 
 data class IssueRemoteSessionRequest(val tenantId: UUID, val userId: UUID, val sourceIp: String? = null)
 data class IssuedRemoteSession(val token: String, val sessionId: UUID, val tenantId: UUID, val userId: UUID, val expiresAt: Instant)

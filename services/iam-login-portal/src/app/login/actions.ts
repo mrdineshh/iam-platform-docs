@@ -6,11 +6,13 @@ import { randomUUID } from "node:crypto";
 import { config } from "@/lib/config";
 import { login, precheck, type LoginResponse } from "@/lib/authClient";
 import { completeAuthorization } from "@/lib/oidcClient";
-import { denialMessage, isAppAccessDenied } from "@/lib/errorCodes";
+import { ACCESS_DENIAL_MESSAGES, accessDenialReason, denialMessage, isAppAccessDenied } from "@/lib/errorCodes";
 import { UpstreamError } from "@/lib/http";
 import { findTenantBySubdomain, resolveTenantSubdomain, type Tenant } from "@/lib/tenant";
 import { str } from "@/lib/formData";
 import { POST_LOGIN_NEXT_COOKIE, safePostLoginNext } from "@/lib/deviceEnroll";
+import { deviceSignInRequired, issueDeviceChallenge } from "@/lib/deviceChallenge";
+import { parseDeviceProofField, type DeviceChallenge } from "@/lib/deviceProof";
 import type { LoginFormState, PrecheckActionInput, PrecheckActionResult } from "./types";
 
 /** Shared by loginAction, precheckAction, and saml/actions.ts -- resolves which tenant this subdomain belongs to. */
@@ -84,6 +86,22 @@ export async function precheckAction(input: PrecheckActionInput): Promise<Preche
 }
 
 /**
+ * A one-time challenge for the endpoint agent to sign (device-bound sign-in). Null -- never an error -- when this tenant
+ * has no app that needs a trusted device or anything goes wrong, so the login page just carries on without a proof.
+ */
+export async function issueDeviceChallengeAction(tenantOverride: string | null): Promise<DeviceChallenge | null> {
+  const correlationId = randomUUID();
+  try {
+    const tenant = await resolveTenant(tenantOverride, correlationId);
+    if ("error" in tenant) return null;
+    if (!(await deviceSignInRequired(tenant.id, correlationId))) return null;
+    return await issueDeviceChallenge(tenant.id, correlationId);
+  } catch {
+    return null;
+  }
+}
+
+/**
  * The single form-submission handler for both the TOTP path and the push
  * path (docs/specs/iam-login-portal-SPEC.md Section 2) -- iam-auth-svc has
  * one /login endpoint that takes password + an optional totpCode in the
@@ -108,6 +126,8 @@ export async function loginAction(_prevState: LoginFormState, formData: FormData
   const password = str(formData.get("password"));
   const intent = str(formData.get("intent")) || "totp";
   const totpCode = str(formData.get("totpCode")).trim();
+  // Optional, validated down to exactly four well-formed fields or dropped; never a reason to refuse the sign-in.
+  const deviceProof = parseDeviceProofField(str(formData.get("deviceProof")));
 
   // /portal submits with all three blank (no specific app requested yet --
   // see portal/page.tsx); /login always supplies all three together. A
@@ -138,6 +158,7 @@ export async function loginAction(_prevState: LoginFormState, formData: FormData
         sourceIp,
         userAgent,
         totpCode: intent === "totp" ? totpCode : undefined,
+        deviceProof,
       },
       correlationId,
     );
@@ -195,7 +216,7 @@ export async function loginAction(_prevState: LoginFormState, formData: FormData
     redirectTarget = completion.redirectUri;
   } catch (err) {
     if (isAppAccessDenied(err)) {
-      return { error: denialMessage("APP_ACCESS_DENIED", ""), errorCode: "APP_ACCESS_DENIED" };
+      return { error: ACCESS_DENIAL_MESSAGES[accessDenialReason(err)], errorCode: "APP_ACCESS_DENIED" };
     }
     console.error("[loginAction] authorize/complete failed", err);
     // Never fail open: the session exists at this point, but if we can't

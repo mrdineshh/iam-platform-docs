@@ -64,6 +64,51 @@ export function isAppAccessDenied(err: unknown): boolean {
   return err instanceof UpstreamError && err.status === 403 && err.errorCode === "APP_ACCESS_DENIED";
 }
 
+/**
+ * Why an app refused a signed-in person, as one of a FIXED set of codes. The page never shows backend text (it travels in a
+ * URL on the error path, and anyone can craft a URL), only the wording below.
+ *
+ * The device reasons are recognised from the phrases iam-tenant-svc's TrustedDeviceGate uses (DeviceLoginProof.kt).
+ * Anything unrecognised -- including a plain group refusal -- falls back to the original group message, so a wording
+ * change there can only make this page less specific, never wrong.
+ */
+export type AccessDenialReason =
+  | "app_access_denied"
+  | "device_required"
+  | "device_unregistered"
+  | "device_not_approved"
+  | "device_noncompliant";
+
+export const ACCESS_DENIAL_MESSAGES: Record<AccessDenialReason, string> = {
+  app_access_denied: "You don't have access to this app. Ask your administrator to add you to a group that includes it.",
+  device_required:
+    "This app can only be opened from a managed laptop. Make sure the IAM endpoint agent is installed and running, allow the browser's request to access this device if it asks, then sign in again.",
+  device_unregistered: "This app needs a registered laptop, and this one is no longer registered. Register it again with the IAM endpoint agent.",
+  device_not_approved: "This app needs an approved laptop, and this one is not approved yet (or has been suspended). Ask your administrator.",
+  device_noncompliant:
+    "This app needs a laptop that passes the security checks, and this one does not (for example disk encryption is off). Your administrator can see which check failed.",
+};
+
+const DEVICE_PHRASES: Array<[string, AccessDenialReason]> = [
+  ["needs a managed, approved device", "device_required"],
+  ["no longer registered", "device_unregistered"],
+  ["is not approved", "device_not_approved"],
+  ["does not meet the security requirements", "device_noncompliant"],
+];
+
+export function accessDenialReason(err: unknown): AccessDenialReason {
+  const message = err instanceof Error ? err.message : "";
+  for (const [phrase, reason] of DEVICE_PHRASES) {
+    if (message.includes(phrase)) return reason;
+  }
+  return "app_access_denied";
+}
+
+/** Only ever one of the fixed codes above; anything else is treated as the generic refusal. */
+export function isAccessDenialReason(value: string | undefined): value is AccessDenialReason {
+  return value !== undefined && Object.prototype.hasOwnProperty.call(ACCESS_DENIAL_MESSAGES, value);
+}
+
 /** Which of these codes belong on the TOTP field vs. the push button. */
 export function isTotpError(errorCode: string | undefined): boolean {
   return errorCode === "TOTP_INVALID" || errorCode === "TOTP_LOCKED" || errorCode === "NO_SECOND_FACTOR_ENROLLED";
