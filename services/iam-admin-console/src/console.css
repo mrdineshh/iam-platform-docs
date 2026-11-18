@@ -1042,6 +1042,22 @@ button:where(:not(:disabled)):hover {
 .posture-grid__required { color: var(--iam-primary); }
 .posture-grid--wide { grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); }
 .device-id-panel { border-bottom: 1px solid var(--iam-border, rgba(255,255,255,0.08)); }
+/* Install / Uninstall guide modal */
+.guide-modal { border: 1px solid var(--iam-border, rgba(255,255,255,0.12)); border-radius: 12px; background: var(--iam-surface, #1e2130); color: var(--iam-text, #e8eaf0); padding: 0; width: min(680px, 95vw); max-height: 90vh; display: flex; flex-direction: column; box-shadow: 0 24px 60px rgba(0,0,0,0.5); }
+.guide-modal::backdrop { background: rgba(0,0,0,0.6); }
+.guide-modal__header { display: flex; align-items: center; justify-content: space-between; padding: 20px 24px 16px; border-bottom: 1px solid var(--iam-border, rgba(255,255,255,0.08)); }
+.guide-modal__header h2 { margin: 0; font-size: 1.1rem; }
+.guide-modal__close { background: none; border: none; color: var(--iam-text-muted); font-size: 1.1rem; cursor: pointer; padding: 4px 8px; border-radius: 6px; }
+.guide-modal__close:hover { background: rgba(255,255,255,0.08); }
+.guide-modal__body { overflow-y: auto; padding: 20px 24px; display: flex; flex-direction: column; gap: 20px; }
+.guide-modal__footer { padding: 14px 24px; border-top: 1px solid var(--iam-border, rgba(255,255,255,0.08)); display: flex; justify-content: flex-end; }
+.guide-section h3 { margin: 0 0 10px; font-size: 0.95rem; }
+.guide-steps { margin: 0 0 10px; padding-left: 20px; display: flex; flex-direction: column; gap: 4px; color: var(--iam-text); }
+.guide-note { margin: 8px 0 4px; font-size: 0.85rem; color: var(--iam-text-muted); }
+.guide-code-row { display: flex; align-items: center; gap: 10px; background: rgba(255,255,255,0.05); border-radius: 6px; padding: 8px 12px; }
+.guide-code { font-family: monospace; font-size: 0.78rem; color: var(--iam-text); flex: 1; word-break: break-all; }
+.guide-copy-btn { flex-shrink: 0; background: var(--iam-primary, #6366f1); color: #fff; border: none; border-radius: 5px; padding: 4px 10px; font-size: 0.78rem; cursor: pointer; white-space: nowrap; }
+.guide-copy-btn:hover { opacity: 0.85; }
 .cell-user__details { display: flex; flex-direction: column; gap: 2px; }
 .cell-user__id { font-family: monospace; font-size: 0.72rem; color: var(--iam-text-muted); user-select: all; letter-spacing: 0.01em; }
 .device-id-code { font-family: monospace; font-size: 0.85rem; background: var(--iam-surface-2, rgba(255,255,255,0.06)); padding: 2px 6px; border-radius: 4px; user-select: all; word-break: break-all; }

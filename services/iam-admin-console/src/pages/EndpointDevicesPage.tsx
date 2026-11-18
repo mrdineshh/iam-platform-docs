@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useState } from "react";
+import { Fragment, useEffect, useRef, useState } from "react";
 import {
   approveDevice, deleteDevice, listDeviceEvents, listDevices, rejectDevice, revokeDevice, suspendDevice, type DeviceEvent, type DeviceSummary, type PostureSignals,
 } from "@/lib/devices";
@@ -27,6 +27,7 @@ export function EndpointDevicesPage() {
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [filter, setFilter] = useState<FleetFilter>("ALL");
   const [query, setQuery] = useState("");
+  const [showGuide, setShowGuide] = useState(false);
 
   async function load() {
     setLoading(true);
@@ -177,9 +178,14 @@ export function EndpointDevicesPage() {
         title="Endpoint Security"
         subtitle={`Devices registered through the IAM endpoint agent${devices ? ` -- ${devices.length} total${pendingCount > 0 ? `, ${pendingCount} awaiting approval` : ""}` : ""}. Windows only in this phase.`}
         actions={
-          <button type="button" className="btn-secondary" disabled={loading} onClick={() => void load()}>
-            <PendingLabel pending={loading} idle="Refresh" busy="Loading…" />
-          </button>
+          <div style={{ display: "flex", gap: 8 }}>
+            <button type="button" className="btn-secondary" onClick={() => setShowGuide(true)}>
+              Install / Uninstall Guide
+            </button>
+            <button type="button" className="btn-secondary" disabled={loading} onClick={() => void load()}>
+              <PendingLabel pending={loading} idle="Refresh" busy="Loading…" />
+            </button>
+          </div>
         }
       />
 
@@ -308,6 +314,7 @@ export function EndpointDevicesPage() {
         </div>
         </>
       ) : null}
+      {showGuide && <InstallGuideModal onClose={() => setShowGuide(false)} />}
     </main>
   );
 }
@@ -528,6 +535,100 @@ function Fact({ label, value }: { label: string; value?: string | null }) {
       <dt>{label}</dt>
       <dd>{value || "Unknown"}</dd>
     </div>
+  );
+}
+
+const MSI_DOWNLOAD_URL = "https://tenant.34-71-129-0.sslip.io/agent/IamEndpointAgent-latest.msi";
+
+function InstallGuideModal({ onClose }: { onClose: () => void }) {
+  const dialogRef = useRef<HTMLDialogElement>(null);
+  useEffect(() => { dialogRef.current?.showModal(); }, []);
+
+  function CopyBtn({ text }: { text: string }) {
+    const [copied, setCopied] = useState(false);
+    return (
+      <button
+        type="button"
+        className="guide-copy-btn"
+        onClick={() => { void navigator.clipboard.writeText(text).then(() => { setCopied(true); setTimeout(() => setCopied(false), 2000); }); }}
+      >
+        {copied ? "✓ Copied" : "Copy"}
+      </button>
+    );
+  }
+
+  const uninstallCmd = `$prod = (Get-ItemProperty 'HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*' | Where-Object { $_.DisplayName -eq 'IAM Endpoint Agent' }).PSChildName; Start-Process msiexec.exe -ArgumentList "/x $prod /qn /norestart" -Wait`;
+  const statusCmd = `& "C:\\Program Files\\IamEndpointAgent\\iam-endpoint-agent.exe" --status`;
+
+  return (
+    <dialog ref={dialogRef} className="guide-modal" onClose={onClose}>
+      <div className="guide-modal__header">
+        <h2>Agent Install &amp; Uninstall Guide</h2>
+        <button type="button" className="guide-modal__close" onClick={onClose}>✕</button>
+      </div>
+      <div className="guide-modal__body">
+
+        <section className="guide-section">
+          <h3>📥 Install (fresh device)</h3>
+          <ol className="guide-steps">
+            <li>Download the MSI installer</li>
+            <li>Double-click the <code>.msi</code> file → Next → Install → Finish</li>
+            <li>Open <strong>Start Menu</strong> → search <strong>"Enroll Device"</strong> → click it</li>
+            <li>Come back here → <strong>Approve</strong> the new device</li>
+          </ol>
+        </section>
+
+        <section className="guide-section">
+          <h3>🗑️ Uninstall</h3>
+          <p className="guide-note"><strong>Option 1 — Easiest (Windows Settings):</strong></p>
+          <ol className="guide-steps">
+            <li>Press <kbd>Windows + I</kbd> → Settings</li>
+            <li>Apps → Installed apps</li>
+            <li>Search <strong>"IAM"</strong></li>
+            <li>Click ⋯ next to <strong>IAM Endpoint Agent</strong> → Uninstall</li>
+          </ol>
+          <p className="guide-note"><strong>Option 2 — PowerShell (Admin):</strong></p>
+          <div className="guide-code-row">
+            <code className="guide-code">{uninstallCmd}</code>
+            <CopyBtn text={uninstallCmd} />
+          </div>
+        </section>
+
+        <section className="guide-section">
+          <h3>🔄 Re-register (after uninstall)</h3>
+          <ol className="guide-steps">
+            <li>Click <strong>Delete</strong> on the old device entry above (so it can re-enroll fresh)</li>
+            <li>Reinstall the MSI</li>
+            <li>Run <strong>Enroll Device</strong> shortcut from Start Menu</li>
+            <li>Approve the new pending device here</li>
+          </ol>
+        </section>
+
+        <section className="guide-section">
+          <h3>✅ Check agent status (on the laptop)</h3>
+          <div className="guide-code-row">
+            <code className="guide-code">{statusCmd}</code>
+            <CopyBtn text={statusCmd} />
+          </div>
+        </section>
+
+        <section className="guide-section">
+          <h3>▶️ Start / Stop agent</h3>
+          <div className="guide-code-row">
+            <code className="guide-code">Start-Service IamEndpointAgent</code>
+            <CopyBtn text="Start-Service IamEndpointAgent" />
+          </div>
+          <div className="guide-code-row" style={{ marginTop: 6 }}>
+            <code className="guide-code">Stop-Service IamEndpointAgent</code>
+            <CopyBtn text="Stop-Service IamEndpointAgent" />
+          </div>
+        </section>
+
+      </div>
+      <div className="guide-modal__footer">
+        <button type="button" className="btn-secondary" onClick={onClose}>Close</button>
+      </div>
+    </dialog>
   );
 }
 
