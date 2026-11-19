@@ -563,8 +563,11 @@ function CidrRangeRows({
           <button
             type="button"
             className="btn-secondary"
-            onClick={() => onChange(values.filter((_, idx) => idx !== i))}
-            disabled={values.length === 1}
+            // The last row is cleared rather than removed (the list always keeps one input box); saving a blank box
+            // leaves the list empty. Disabled only when there is nothing left to clear.
+            onClick={() => onChange(values.length === 1 ? [""] : values.filter((_, idx) => idx !== i))}
+            disabled={values.length === 1 && v === ""}
+            title={values.length === 1 && v !== "" ? "Clear this range (then press Save)" : "Remove this range"}
           >
             &minus;
           </button>
