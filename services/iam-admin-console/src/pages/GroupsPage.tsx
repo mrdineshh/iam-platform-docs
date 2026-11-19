@@ -589,7 +589,11 @@ function errorMessage(err: unknown): string {
   if (err instanceof UpstreamError) {
     if (err.status === 401) return "Your session expired. Please sign in again.";
     if (err.status === 403) return "You don't have permission to do this.";
-    return "This is temporarily unavailable. Please try again.";
+    // An administrator needs the real reason (for example a conflict or a refusal from Google), not a generic line that hides
+    // it. Status 0 means the request never got an answer (network, or it timed out).
+    const reason = err.message.trim();
+    if (err.status === 0) return `The server did not answer (${reason || "network error"}). Check that the platform is running, then try again.`;
+    return `The server refused this (HTTP ${err.status})${reason ? `: ${reason}` : ""}.`;
   }
   return "This is temporarily unavailable. Please try again.";
 }
