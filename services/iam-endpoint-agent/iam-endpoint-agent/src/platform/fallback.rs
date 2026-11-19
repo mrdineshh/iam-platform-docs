@@ -82,6 +82,11 @@ impl agent_core::browser_policy::BrowserPolicyApplier for LoggingBrowserPolicy {
         Self::log_block(list);
         Ok(())
     }
+
+    fn remove_url_blocklist(&self, list: &agent_core::browser_policy::UrlBlockList) -> Result<(), agent_core::browser_policy::BrowserPolicyError> {
+        tracing::info!(browser = list.browser, urls = ?list.urls, "would remove from the browser URL block list (not Windows)");
+        Ok(())
+    }
 }
 
 impl LoggingBrowserPolicy {

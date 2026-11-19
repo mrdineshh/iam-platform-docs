@@ -2574,3 +2574,29 @@ any login work itself.
   Tests: 10 new agent-core tests (block lists, work sign-in never blocked, allowed personal domain skips it, merge keeps others / no duplicates /
   idempotent); `cargo test --workspace` 170 passed on the VM and the Windows executable built. NOT yet tried live: the registry reading and writing and
   the blocking itself still need the 0.3.4 installer put on a laptop, and Edge/Chrome restarted.
+
+- **2026-11-19 -- Central Admin Console switch for the personal Microsoft sign-in block (agent 0.3.5, platform V16). Tier 3, requested by the user; default OFF chosen by the user.**
+  Request: block and unblock personal Outlook sign-in from one central place instead of by installing a different agent. Agreed order: prove 0.3.4
+  on the laptop first (done: the block list was written correctly to both browsers, fresh Edge and Chrome profiles blocked outlook.live.com and let a
+  control site through, and Edge's `edge://policy` listed it), then build the switch.
+  How the setting reaches a laptop: a per-tenant row (`tenant_browser_controls`, V16; none means off), `GET/PUT /api/v1/endpoint/browser-controls`
+  (tenant admin, audited as `tenant.browser_controls.personal_microsoft_block.enabled/disabled`, changes only), and in every device policy a
+  `browserControls {blockPersonalMicrosoft, signature}` block. It is signed ON ITS OWN, with the same transit key, over
+  `iam-browser-controls-v1|tenant|device|policyId|policyVersion|issuedAt|expiresAt|flag` (golden vector pinned in Kotlin and in Rust), so the existing policy
+  signature (`iam-device-policy-v1`) is byte-for-byte unchanged and every installed agent keeps verifying it; older agents ignore the extra JSON. Bound to the
+  policy it travels with, so it cannot be replayed onto another device, policy version or issue time. A Kotlin test proves the policy string is identical with
+  the switch on and off.
+  Agent 0.3.5: `verify_policy` checks the second signature and returns Absent / Verified / Invalid. The raw claim is dropped before the policy is cached, so
+  nothing unverified is stored or acted on. The sync loop acts only when the verified setting differs from what it last applied (and once after each start, so an
+  upgrade from 0.3.4 ends up consistent: "off" takes 0.3.4's block away), only for a policy the cache actually accepted (a rolled-back or expired one cannot
+  switch anything), reports a failure and retries next tick, and reports a bad signature once. No controls at all (an older platform) means no change.
+  `remove_from_block_list` is the mirror of `merge_block_list`; the registry writer is one shared function for add and remove, and a remove never creates a list
+  that does not exist. Events: 1012 applied, 1013 failed, 1014 removed, 1015 setting ignored.
+  Changed on purpose: 0.3.4 blocked whenever allowed domains were set and skipped when an allowed domain was a personal Microsoft one; 0.3.5 has no such local rule,
+  the central choice is the only one. The console shows how many enrolled laptops still run an agent older than 0.3.5, since they ignore the switch.
+  Limits: removal takes off any entry equal to one of ours, even if a company's own policy listed the same host (merging cannot tell whose it was); a browser that
+  is already open may need a restart or Reload policies to notice; lower assurance (a URL block in Chrome and Edge only); Edge's own sign-in dialog is a
+  browser-owned window the URL list does not filter (seen live), and there the profile sign-in restriction decides (the owner reported that test as successful).
+  Tests: agent-core 188 (18 new: verifier incl. tampered / replayed / other-key / malformed controls, removal, and the sync behaviour above), tenant 256,
+  console version-comparison tests; `cargo test --workspace` and the Windows build ran on the VM. Not yet tried live: switching it from the console and a laptop
+  on 0.3.5 applying and removing the block. (A console test in `tenant.test.ts` fails on a clean checkout of the previous commit too; unrelated, left alone.)

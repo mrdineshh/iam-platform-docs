@@ -1,6 +1,6 @@
 import { Fragment, useEffect, useRef, useState } from "react";
 import {
-  approveDevice, decommissionDevice, getLoginRule, grantComplianceException, listDeviceEvents, removeComplianceException, setLoginRule, listDevices, rejectDevice, revokeDevice, suspendDevice, type DeviceEvent, type DeviceSummary, type PostureSignals,
+  agentOlderThan, approveDevice, BROWSER_CONTROLS_MIN_AGENT, decommissionDevice, getBrowserControls, getLoginRule, grantComplianceException, listDeviceEvents, removeComplianceException, setBrowserControls, setLoginRule, listDevices, rejectDevice, revokeDevice, suspendDevice, type DeviceEvent, type DeviceSummary, type PostureSignals,
 } from "@/lib/devices";
 import { listTenantUsers, type AdminUserListEntry } from "@/lib/impersonate";
 import { loadSession } from "@/lib/session";
@@ -32,17 +32,21 @@ export function EndpointDevicesPage() {
   const [exceptionFor, setExceptionFor] = useState<DeviceSummary | null>(null);
   const [loginRule, setLoginRuleState] = useState<boolean | null>(null);
   const [savingRule, setSavingRule] = useState(false);
+  const [browserBlock, setBrowserBlock] = useState<boolean | null>(null);
+  const [savingBlock, setSavingBlock] = useState(false);
 
   async function load() {
     setLoading(true);
     setError(null);
     try {
-      const [deviceList, userList, rule] = await Promise.all([
+      const [deviceList, userList, rule, block] = await Promise.all([
         listDevices(session.tenantId, session.token),
         listTenantUsers(session.tenantId, session.token),
         getLoginRule(session.tenantId, session.token),
+        getBrowserControls(session.tenantId, session.token),
       ]);
       setLoginRuleState(rule);
+      setBrowserBlock(block);
       setAllDevices(deviceList);
       setUsers(Object.fromEntries(userList.map((u) => [u.id, u])));
     } catch (err) {
@@ -146,6 +150,48 @@ export function EndpointDevicesPage() {
   function usersWithoutApprovedLaptop(): AdminUserListEntry[] {
     const hasApproved = new Set((allDevices ?? []).filter((d) => d.lifecycleStatus === "APPROVED").map((d) => d.userId));
     return Object.values(users).filter((u) => u.role === "USER" && u.status === "ACTIVE" && !hasApproved.has(u.id));
+  }
+
+  // Laptops that would ignore the browser switch because their agent predates it (removed devices do not count).
+  function laptopsOnOlderAgents(): number {
+    return (allDevices ?? []).filter(
+      (d) => !["DECOMMISSIONED", "REVOKED", "REJECTED"].includes(d.lifecycleStatus) && agentOlderThan(d.agentVersion, BROWSER_CONTROLS_MIN_AGENT),
+    ).length;
+  }
+
+  async function handleToggleBrowserBlock(next: boolean) {
+    if (next) {
+      const older = laptopsOnOlderAgents();
+      const ok = await confirm({
+        title: "Block personal Microsoft sign-in?",
+        message: (
+          <>
+            On enrolled laptops, Chrome and Edge will no longer open the pages where a personal Outlook, Hotmail or live.com account
+            signs in (and personal Outlook, OneDrive and Xbox sign-in with them). Work and school accounts are not affected. This is
+            a lower-assurance control: it blocks these pages in Chrome and Edge only. Laptops pick it up within a few minutes;
+            a browser that is already open may need a restart.
+            {older > 0 ? (
+              <>
+                {" "}<strong>{older} laptop{older === 1 ? " runs" : "s run"} an agent older than {BROWSER_CONTROLS_MIN_AGENT} and will ignore this until updated.</strong>
+              </>
+            ) : null}
+          </>
+        ),
+        confirmLabel: "Turn on",
+        danger: true,
+      });
+      if (!ok) return;
+    }
+    setSavingBlock(true);
+    try {
+      await setBrowserControls(session.tenantId, next, session.token);
+      setBrowserBlock(next);
+      toast.success(next ? "Personal Microsoft sign-in will be blocked on enrolled laptops." : "Personal Microsoft sign-in will be allowed again.");
+    } catch (err) {
+      toast.error(errorMessage(err));
+    } finally {
+      setSavingBlock(false);
+    }
   }
 
   async function handleToggleLoginRule(next: boolean) {
@@ -282,6 +328,27 @@ export function EndpointDevicesPage() {
       />
 
       {error && <Alert kind="error">{error}</Alert>}
+
+      {browserBlock !== null && (
+        <div className="table-card" style={{ padding: "14px 18px", marginBottom: 14 }}>
+          <label className="checkbox-field">
+            <input
+              type="checkbox"
+              checked={browserBlock}
+              disabled={savingBlock}
+              onChange={(e) => void handleToggleBrowserBlock(e.target.checked)}
+            />
+            <strong>Block personal Microsoft (Outlook) sign-in in Chrome and Edge</strong>
+            {browserBlock && <StatusBadge tone="warning">On</StatusBadge>}
+          </label>
+          <p className="posture-panel__muted" style={{ margin: "6px 0 0" }}>
+            Applies to enrolled laptops from their next policy refresh (a few minutes); an already-open browser may need a restart.
+            Work and school accounts are not affected. Lower assurance: it blocks the personal sign-in pages in Chrome and Edge only.
+            Needs agent {BROWSER_CONTROLS_MIN_AGENT} or newer
+            {laptopsOnOlderAgents() > 0 ? ` (${laptopsOnOlderAgents()} laptop${laptopsOnOlderAgents() === 1 ? "" : "s"} still older)` : ""}. Off by default.
+          </p>
+        </div>
+      )}
 
       {loginRule !== null && (
         <div className="table-card" style={{ padding: "14px 18px", marginBottom: 14 }}>
@@ -497,6 +564,10 @@ const EVENT_LABELS: Record<string, string> = {
   "device.suspended": "Suspended by an admin",
   "device.revoked": "Revoked by an admin",
   "device.decommissioned": "Removed from service by an admin",
+  "agent.browser_block_applied": "Personal Microsoft sign-in blocked in the browsers",
+  "agent.browser_block_removed": "Personal Microsoft sign-in unblocked in the browsers",
+  "agent.browser_block_failed": "Could not change the browser block",
+  "agent.browser_controls_rejected": "Browser setting ignored (its signature did not verify)",
   "device.compliance_exception.granted": "Allowed despite failed security checks (exception granted)",
   "device.compliance_exception.removed": "Security-check exception ended",
   "device.noncompliant": "Became non-compliant",

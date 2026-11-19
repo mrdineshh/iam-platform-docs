@@ -74,6 +74,15 @@ pub struct DeviceAppPolicy {
     pub failure_mode: String,
 }
 
+/// Tenant-wide browser controls, signed on their own (see `policy_verifier::BrowserControlsVerdict`). Older platforms do not send
+/// the block at all; the agent then leaves the browsers as they are.
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct BrowserControls {
+    pub block_personal_microsoft: bool,
+    pub signature: String,
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct DevicePolicyResponse {
@@ -89,6 +98,10 @@ pub struct DevicePolicyResponse {
     pub agent_failure_mode: String,
     pub applications: Vec<DeviceAppPolicy>,
     pub signature: String,
+    /// Raw and UNVERIFIED as received; `verify_policy` checks it, records the verdict and clears this field, so nothing
+    /// downstream (the cache on disk, local decisions) ever holds an unchecked claim.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub browser_controls: Option<BrowserControls>,
 }
 
 /// Talks to iam-tenant-svc's /api/v1/endpoint API (Section 10). enrollment/start is deliberately

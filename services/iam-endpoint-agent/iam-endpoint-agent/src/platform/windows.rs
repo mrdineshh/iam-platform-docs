@@ -239,101 +239,122 @@ impl agent_core::browser_policy::BrowserPolicyApplier for RegistryBrowserPolicy 
     }
 
     fn merge_url_blocklist(&self, list: &agent_core::browser_policy::UrlBlockList) -> Result<(), agent_core::browser_policy::BrowserPolicyError> {
-        use agent_core::browser_policy::{merge_block_list, BrowserPolicyError};
-        use std::os::windows::ffi::OsStrExt;
-        use windows_sys::Win32::System::Registry::{
-            RegCloseKey, RegCreateKeyExW, RegDeleteValueW, RegEnumValueW, RegSetValueExW, HKEY, HKEY_LOCAL_MACHINE, KEY_READ, KEY_WRITE,
-            REG_OPTION_NON_VOLATILE, REG_SZ,
-        };
+        rewrite_block_list(list, true, |current| agent_core::browser_policy::merge_block_list(current, &list.urls))
+    }
 
-        const ERROR_FILE_NOT_FOUND: u32 = 2;
-        const ERROR_MORE_DATA: u32 = 234;
-        const ERROR_NO_MORE_ITEMS: u32 = 259;
+    fn remove_url_blocklist(&self, list: &agent_core::browser_policy::UrlBlockList) -> Result<(), agent_core::browser_policy::BrowserPolicyError> {
+        // Nothing to take off a browser that has no list at all: do not create one just to leave it empty.
+        rewrite_block_list(list, false, |current| agent_core::browser_policy::remove_from_block_list(current, &list.urls))
+    }
+}
 
-        fn wide(s: &str) -> Vec<u16> {
-            std::ffi::OsStr::new(s).encode_wide().chain(std::iter::once(0)).collect()
-        }
+/// Reads a browser's URL block list (numbered string values "1","2",... under `<policy key>\URLBlocklist`), lets `compute` decide
+/// what it should hold, and writes that back as consecutive "1".."N" (a browser stops reading at the first gap), deleting any
+/// numbered value beyond the end. Values that are not numbered strings are left alone. With `create` false a missing list is
+/// success: there is nothing to rewrite.
+fn rewrite_block_list(
+    list: &agent_core::browser_policy::UrlBlockList,
+    create: bool,
+    compute: impl Fn(&[String]) -> Vec<String>,
+) -> Result<(), agent_core::browser_policy::BrowserPolicyError> {
+    use agent_core::browser_policy::BrowserPolicyError;
+    use std::os::windows::ffi::OsStrExt;
+    use windows_sys::Win32::System::Registry::{
+        RegCloseKey, RegCreateKeyExW, RegDeleteValueW, RegEnumValueW, RegOpenKeyExW, RegSetValueExW, HKEY, HKEY_LOCAL_MACHINE, KEY_READ,
+        KEY_WRITE, REG_OPTION_NON_VOLATILE, REG_SZ,
+    };
 
-        let list_key = format!("{}\\URLBlocklist", list.key_path);
-        let path = wide(&list_key);
-        let mut key: HKEY = 0;
-        // SAFETY: all pointers refer to live, NUL-terminated buffers owned by this scope.
-        let rc = unsafe {
+    const ERROR_FILE_NOT_FOUND: u32 = 2;
+    const ERROR_MORE_DATA: u32 = 234;
+    const ERROR_NO_MORE_ITEMS: u32 = 259;
+
+    fn wide(s: &str) -> Vec<u16> {
+        std::ffi::OsStr::new(s).encode_wide().chain(std::iter::once(0)).collect()
+    }
+
+    let list_key = format!("{}\\URLBlocklist", list.key_path);
+    let path = wide(&list_key);
+    let mut key: HKEY = 0;
+    // SAFETY: all pointers refer to live, NUL-terminated buffers owned by this scope.
+    let rc = unsafe {
+        if create {
             RegCreateKeyExW(HKEY_LOCAL_MACHINE, path.as_ptr(), 0, std::ptr::null(), REG_OPTION_NON_VOLATILE, KEY_READ | KEY_WRITE, std::ptr::null(), &mut key, std::ptr::null_mut())
-        };
-        if rc != 0 {
-            return Err(BrowserPolicyError::Apply(format!("opening HKLM\\{list_key} failed (Win32 error {rc})")));
+        } else {
+            RegOpenKeyExW(HKEY_LOCAL_MACHINE, path.as_ptr(), 0, KEY_READ | KEY_WRITE, &mut key)
         }
+    };
+    if rc == ERROR_FILE_NOT_FOUND && !create {
+        return Ok(());
+    }
+    if rc != 0 {
+        return Err(BrowserPolicyError::Apply(format!("opening HKLM\\{list_key} failed (Win32 error {rc})")));
+    }
 
-        // What is there now. Only string values named with a positive number are list entries; anything else is left alone.
-        let mut existing: Vec<(u32, String)> = Vec::new();
-        let mut index = 0u32;
-        let read: Result<(), BrowserPolicyError> = loop {
-            let mut name = [0u16; 256];
-            let mut name_len = name.len() as u32;
-            let mut data = vec![0u8; 4096];
-            let mut data_len = data.len() as u32;
-            let mut kind = 0u32;
-            // SAFETY: the buffers are live for the call and the lengths passed are exactly their sizes (name in
-            // characters, data in bytes).
-            let rc = unsafe {
-                RegEnumValueW(key, index, name.as_mut_ptr(), &mut name_len, std::ptr::null(), &mut kind, data.as_mut_ptr(), &mut data_len)
-            };
-            index += 1;
-            match rc {
-                0 => {
-                    if kind == REG_SZ {
-                        let entry_name = String::from_utf16_lossy(&name[..name_len as usize]);
-                        if let Ok(n) = entry_name.parse::<u32>() {
-                            if n >= 1 {
-                                let units: Vec<u16> = data[..data_len as usize].chunks_exact(2).map(|b| u16::from_le_bytes([b[0], b[1]])).collect();
-                                existing.push((n, String::from_utf16_lossy(&units).trim_end_matches('\0').to_string()));
-                            }
+    // What is there now. Only string values named with a positive number are list entries.
+    let mut existing: Vec<(u32, String)> = Vec::new();
+    let mut index = 0u32;
+    let read: Result<(), BrowserPolicyError> = loop {
+        let mut name = [0u16; 256];
+        let mut name_len = name.len() as u32;
+        let mut data = vec![0u8; 4096];
+        let mut data_len = data.len() as u32;
+        let mut kind = 0u32;
+        // SAFETY: the buffers are live for the call and the lengths passed are exactly their sizes (name in characters,
+        // data in bytes).
+        let rc = unsafe { RegEnumValueW(key, index, name.as_mut_ptr(), &mut name_len, std::ptr::null(), &mut kind, data.as_mut_ptr(), &mut data_len) };
+        index += 1;
+        match rc {
+            0 => {
+                if kind == REG_SZ {
+                    let entry_name = String::from_utf16_lossy(&name[..name_len as usize]);
+                    if let Ok(n) = entry_name.parse::<u32>() {
+                        if n >= 1 {
+                            let units: Vec<u16> = data[..data_len as usize].chunks_exact(2).map(|b| u16::from_le_bytes([b[0], b[1]])).collect();
+                            existing.push((n, String::from_utf16_lossy(&units).trim_end_matches('\0').to_string()));
                         }
                     }
                 }
-                ERROR_MORE_DATA => continue, // far too long to be a URL pattern: not ours, left alone
-                ERROR_NO_MORE_ITEMS => break Ok(()),
-                other => break Err(BrowserPolicyError::Apply(format!("reading HKLM\\{list_key} failed (Win32 error {other})"))),
             }
-        };
-        if let Err(err) = read {
-            unsafe { RegCloseKey(key) };
-            return Err(err);
+            ERROR_MORE_DATA => continue, // far too long to be a URL pattern: not ours, left alone
+            ERROR_NO_MORE_ITEMS => break Ok(()),
+            other => break Err(BrowserPolicyError::Apply(format!("reading HKLM\\{list_key} failed (Win32 error {other})"))),
         }
+    };
+    if let Err(err) = read {
+        unsafe { RegCloseKey(key) };
+        return Err(err);
+    }
 
-        existing.sort_by_key(|(n, _)| *n);
-        let current: Vec<String> = existing.iter().map(|(_, v)| v.clone()).collect();
-        let merged = merge_block_list(&current, &list.urls);
+    existing.sort_by_key(|(n, _)| *n);
+    let current: Vec<String> = existing.iter().map(|(_, v)| v.clone()).collect();
+    let wanted = compute(&current);
 
-        // Written back as consecutive "1".."N": a browser stops reading a list at the first gap.
-        let mut result: Result<(), BrowserPolicyError> = Ok(());
-        for (i, url) in merged.iter().enumerate() {
-            let name = wide(&(i + 1).to_string());
-            let data = wide(url);
-            let bytes = (data.len() * 2) as u32;
-            // SAFETY: `data` outlives the call and `bytes` is its exact length in bytes, including the NUL.
-            let rc = unsafe { RegSetValueExW(key, name.as_ptr(), 0, REG_SZ, data.as_ptr() as *const u8, bytes) };
-            if rc != 0 {
-                result = Err(BrowserPolicyError::Apply(format!("writing block list entry {} failed (Win32 error {rc})", i + 1)));
+    let mut result: Result<(), BrowserPolicyError> = Ok(());
+    for (i, url) in wanted.iter().enumerate() {
+        let name = wide(&(i + 1).to_string());
+        let data = wide(url);
+        let bytes = (data.len() * 2) as u32;
+        // SAFETY: `data` outlives the call and `bytes` is its exact length in bytes, including the NUL.
+        let rc = unsafe { RegSetValueExW(key, name.as_ptr(), 0, REG_SZ, data.as_ptr() as *const u8, bytes) };
+        if rc != 0 {
+            result = Err(BrowserPolicyError::Apply(format!("writing block list entry {} failed (Win32 error {rc})", i + 1)));
+            break;
+        }
+    }
+    if result.is_ok() {
+        // The list may have got shorter: remove numbered entries beyond the new end.
+        for (n, _) in existing.iter().filter(|(n, _)| *n as usize > wanted.len()) {
+            let name = wide(&n.to_string());
+            // SAFETY: `name` is a live, NUL-terminated buffer.
+            let rc = unsafe { RegDeleteValueW(key, name.as_ptr()) };
+            if rc != 0 && rc != ERROR_FILE_NOT_FOUND {
+                result = Err(BrowserPolicyError::Apply(format!("removing block list entry {n} failed (Win32 error {rc})")));
                 break;
             }
         }
-        if result.is_ok() {
-            // The list may have got shorter (duplicates dropped): remove numbered entries beyond the new end.
-            for (n, _) in existing.iter().filter(|(n, _)| *n as usize > merged.len()) {
-                let name = wide(&n.to_string());
-                // SAFETY: `name` is a live, NUL-terminated buffer.
-                let rc = unsafe { RegDeleteValueW(key, name.as_ptr()) };
-                if rc != 0 && rc != ERROR_FILE_NOT_FOUND {
-                    result = Err(BrowserPolicyError::Apply(format!("removing block list entry {n} failed (Win32 error {rc})")));
-                    break;
-                }
-            }
-        }
-        unsafe { RegCloseKey(key) };
-        result
     }
+    unsafe { RegCloseKey(key) };
+    result
 }
 
 pub fn browser_policy_applier() -> RegistryBrowserPolicy {

@@ -129,6 +129,43 @@ export async function setLoginRule(tenantId: string, required: boolean, sessionT
   );
 }
 
+/**
+ * Tenant-wide browser control: block personal Microsoft (Outlook, Hotmail, live.com) sign-in in Chrome and Edge on enrolled laptops.
+ * Off by default. Laptops pick it up from their signed policy within a few minutes, and only agents from 0.3.5 on act on it.
+ */
+export async function getBrowserControls(tenantId: string, sessionToken: string): Promise<boolean> {
+  const r = await http.get<{ blockPersonalMicrosoft: boolean }>(
+    `${config.tenantSvcUrl}/api/v1/endpoint/browser-controls?tenantId=${encodeURIComponent(tenantId)}`,
+    { sessionToken },
+  );
+  return r.blockPersonalMicrosoft;
+}
+
+export async function setBrowserControls(tenantId: string, blockPersonalMicrosoft: boolean, sessionToken: string): Promise<void> {
+  await http.put<unknown>(
+    `${config.tenantSvcUrl}/api/v1/endpoint/browser-controls?tenantId=${encodeURIComponent(tenantId)}`,
+    { blockPersonalMicrosoft },
+    { sessionToken },
+  );
+}
+
+/** The first agent that understands the browser switch. */
+export const BROWSER_CONTROLS_MIN_AGENT = "0.3.5";
+
+/** True when `version` (like "0.3.4") is older than `minimum`; an unknown or unreadable version counts as older. */
+export function agentOlderThan(version: string | null | undefined, minimum: string): boolean {
+  const parse = (v: string) => v.split(".").map((p) => Number.parseInt(p, 10));
+  const have = version ? parse(version) : null;
+  if (!have || have.some(Number.isNaN)) return true;
+  const need = parse(minimum);
+  for (let i = 0; i < Math.max(have.length, need.length); i++) {
+    const a = have[i] ?? 0;
+    const b = need[i] ?? 0;
+    if (a !== b) return a < b;
+  }
+  return false;
+}
+
 // Mirrors iam-tenant-svc's DeviceEventResponse: one entry of a device's activity timeline (newest first).
 export interface DeviceEvent {
   eventType: string;

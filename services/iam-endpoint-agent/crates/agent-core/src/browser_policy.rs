@@ -14,6 +14,7 @@
 //!   authenticates are blocked, so such an account cannot be used on the web in these browsers. This is the spec's fallback for
 //!   Microsoft ("otherwise apply documented browser/domain controls", Section 8.2): a lower-assurance domain control, NOT the
 //!   Entra tenant control (which needs an Entra tenant). Work and school accounts sign in elsewhere and are not touched.
+//!   An administrator switches it on and off from the Admin Console (signed policy, see `sync.rs`); it is off by default.
 //!
 //! Firefox, Safari, Entra tenant restrictions and the other-provider adapters (P1-21/22/24/25) are not covered here.
 
@@ -47,6 +48,10 @@ pub trait BrowserPolicyApplier {
     /// Makes sure the browser's URL block list holds `list.urls`, keeping everything else already on it (see
     /// [`merge_block_list`]). Unlike [`apply`](Self::apply) this has to READ the current list first.
     fn merge_url_blocklist(&self, list: &UrlBlockList) -> Result<(), BrowserPolicyError>;
+
+    /// Takes `list.urls` off the browser's URL block list again, keeping everything else (see [`remove_from_block_list`]).
+    /// A browser that has no such list is already fine: that is success, not an error.
+    fn remove_url_blocklist(&self, list: &UrlBlockList) -> Result<(), BrowserPolicyError>;
 }
 
 /// Lower-cases and validates a domain. Deliberately strict: the value ends up inside a regular expression
@@ -88,10 +93,6 @@ pub fn chromium_entries(allowed_domains: &[String]) -> Result<Vec<PolicyEntry>, 
 /// accounts use login.microsoftonline.com and are deliberately not listed.
 pub const PERSONAL_MICROSOFT_HOSTS: [&str; 4] = ["login.live.com", "outlook.live.com", "account.live.com", "signup.live.com"];
 
-/// Email domains that mean "personal Microsoft account". If an administrator lists one of them as allowed, personal Microsoft
-/// sign-in is wanted on purpose and nothing is blocked.
-const PERSONAL_MICROSOFT_DOMAINS: [&str; 5] = ["outlook.com", "hotmail.com", "live.com", "msn.com", "outlook.live.com"];
-
 /// One browser's URL block list: where it lives (a sub-key of its policy key, with numbered values "1", "2", ...) and the
 /// URLs this agent wants on it.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -102,21 +103,14 @@ pub struct UrlBlockList {
     pub urls: Vec<String>,
 }
 
-/// The block lists to maintain. Empty when the identity restriction is off (no allowed domains) or when an allowed domain is a
-/// personal Microsoft one.
-pub fn personal_microsoft_block(allowed_domains: &[String]) -> Result<Vec<UrlBlockList>, BrowserPolicyError> {
-    if allowed_domains.is_empty() {
-        return Ok(Vec::new());
-    }
-    let normalized = allowed_domains.iter().map(|d| normalize_domain(d)).collect::<Result<Vec<_>, _>>()?;
-    if normalized.iter().any(|d| PERSONAL_MICROSOFT_DOMAINS.contains(&d.as_str())) {
-        return Ok(Vec::new());
-    }
+/// The block list this agent maintains in each browser for personal Microsoft sign-in. Whether it is on the list is the
+/// administrator's choice, made centrally and delivered in the signed policy.
+pub fn personal_microsoft_lists() -> Vec<UrlBlockList> {
     let urls: Vec<String> = PERSONAL_MICROSOFT_HOSTS.iter().map(|h| h.to_string()).collect();
-    Ok(vec![
+    vec![
         UrlBlockList { browser: "Chrome", key_path: r"SOFTWARE\Policies\Google\Chrome", urls: urls.clone() },
         UrlBlockList { browser: "Edge", key_path: r"SOFTWARE\Policies\Microsoft\Edge", urls },
-    ])
+    ]
 }
 
 /// What a browser's block list should hold after the agent has had its say: everything already on it that is not ours, in its
@@ -140,6 +134,22 @@ pub fn merge_block_list(existing: &[String], ours: &[String]) -> Vec<String> {
         }
     }
     merged
+}
+
+/// The block list after taking ours off: everything that is not ours, in its original order. The mirror of [`merge_block_list`]
+/// (case-insensitive, trimmed, no blanks or duplicates), so merging and then removing leaves a list exactly as it was apart from
+/// tidying. Removing from a list without ours changes nothing.
+pub fn remove_from_block_list(existing: &[String], ours: &[String]) -> Vec<String> {
+    let is_ours = |u: &str| ours.iter().any(|o| o.trim().eq_ignore_ascii_case(u.trim()));
+    let mut kept: Vec<String> = Vec::new();
+    for e in existing {
+        let e = e.trim();
+        if e.is_empty() || is_ours(e) || kept.iter().any(|k| k.eq_ignore_ascii_case(e)) {
+            continue;
+        }
+        kept.push(e.to_string());
+    }
+    kept
 }
 
 #[cfg(test)]
@@ -187,13 +197,8 @@ mod tests {
     // ---- personal Microsoft sign-in block ----
 
     #[test]
-    fn no_block_when_the_identity_restriction_is_off() {
-        assert!(personal_microsoft_block(&[]).unwrap().is_empty());
-    }
-
-    #[test]
-    fn blocks_the_personal_sign_in_hosts_in_both_browsers() {
-        let lists = personal_microsoft_block(&domains(&["econz.net"])).unwrap();
+    fn the_personal_microsoft_lists_cover_chrome_and_edge() {
+        let lists = personal_microsoft_lists();
         assert_eq!(lists.len(), 2);
         for list in &lists {
             assert!(list.urls.contains(&"login.live.com".to_string()), "{}", list.browser);
@@ -212,18 +217,6 @@ mod tests {
                 assert!(!host.contains(work), "{host} must not touch {work}");
             }
         }
-    }
-
-    #[test]
-    fn an_allowed_personal_microsoft_domain_means_nothing_is_blocked() {
-        for d in ["outlook.com", "Hotmail.com", "live.com", "msn.com"] {
-            assert!(personal_microsoft_block(&domains(&["econz.net", d])).unwrap().is_empty(), "{d}");
-        }
-    }
-
-    #[test]
-    fn a_bad_allowed_domain_is_still_rejected() {
-        assert!(personal_microsoft_block(&domains(&["bad domain"])).is_err());
     }
 
     // ---- merging into an existing block list ----
@@ -260,5 +253,41 @@ mod tests {
     fn blank_and_duplicate_foreign_entries_are_dropped() {
         let merged = merge_block_list(&strings(&["a.com", "", "  ", "A.com", "b.com"]), &strings(&["login.live.com"]));
         assert_eq!(merged, strings(&["a.com", "b.com", "login.live.com"]));
+    }
+
+    // ---- taking ours off again ----
+
+    #[test]
+    fn removing_keeps_what_somebody_else_put_on_the_list() {
+        let ours = strings(&["login.live.com", "outlook.live.com"]);
+        let removed = remove_from_block_list(&strings(&["facebook.com", "login.live.com", "example.org", "outlook.live.com"]), &ours);
+        assert_eq!(removed, strings(&["facebook.com", "example.org"]));
+    }
+
+    #[test]
+    fn removing_from_a_list_without_ours_changes_nothing() {
+        let ours = strings(&["login.live.com"]);
+        assert_eq!(remove_from_block_list(&strings(&["a.com", "b.com"]), &ours), strings(&["a.com", "b.com"]));
+        assert!(remove_from_block_list(&[], &ours).is_empty());
+    }
+
+    #[test]
+    fn removal_matches_in_any_case_and_ignores_padding() {
+        let removed = remove_from_block_list(&strings(&["LOGIN.live.com", " Outlook.Live.com ", "a.com"]), &strings(&["login.live.com", "outlook.live.com"]));
+        assert_eq!(removed, strings(&["a.com"]));
+    }
+
+    #[test]
+    fn adding_then_removing_leaves_the_list_as_it_was() {
+        let ours = strings(&["login.live.com", "outlook.live.com"]);
+        let before = strings(&["facebook.com", "example.org"]);
+        let after_add = merge_block_list(&before, &ours);
+        assert_eq!(remove_from_block_list(&after_add, &ours), before);
+    }
+
+    #[test]
+    fn removing_all_of_ours_from_a_list_that_only_held_ours_leaves_it_empty() {
+        let ours = strings(&["login.live.com"]);
+        assert!(remove_from_block_list(&merge_block_list(&[], &ours), &ours).is_empty());
     }
 }

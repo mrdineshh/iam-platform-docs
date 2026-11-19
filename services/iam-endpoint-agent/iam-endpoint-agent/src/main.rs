@@ -174,30 +174,37 @@ async fn run_agent(config: AgentConfig, data_dir: PathBuf, shutdown: watch::Rece
         },
         Err(err) => tracing::error!(%err, "browser sign-in restriction not applied"),
     }
-    // Personal Microsoft accounts (outlook.com, hotmail.com, live.com): the sign-in pages are put on each browser's URL block
-    // list, keeping whatever else is on it. A lower-assurance domain control (spec 8.2), applied at every start like the above.
-    match agent_core::browser_policy::personal_microsoft_block(&config.allowed_identity_domains) {
-        Ok(lists) if lists.is_empty() => {}
-        Ok(lists) => {
-            for list in &lists {
-                match agent_core::browser_policy::BrowserPolicyApplier::merge_url_blocklist(&platform::browser_policy_applier(), list) {
-                    Ok(()) => {
-                        tracing::info!(browser = list.browser, "personal Microsoft sign-in blocked");
-                        log.write("INFO", "agent.browser_block_applied", &format!("personal Microsoft account sign-in blocked in {}", list.browser));
-                    }
-                    Err(err) => {
-                        tracing::error!(browser = list.browser, %err, "could not block personal Microsoft sign-in");
-                        log.write("ERROR", "agent.browser_block_failed", &format!("{}: {err}", list.browser));
-                    }
-                }
-            }
-        }
-        Err(err) => tracing::error!(%err, "personal Microsoft sign-in block not applied"),
-    }
-    let result = new_agent(config, data_dir).with_local_log(log.clone()).run(platform::posture_collector(), shutdown).await;
+    let result = new_agent(config, data_dir)
+        .with_local_log(log.clone())
+        .with_browser_block(std::sync::Arc::new(PlatformBrowserBlock))
+        .run(platform::posture_collector(), shutdown)
+        .await;
     log.write("INFO", "agent.stopped", "IAM endpoint agent stopped");
     result?;
     Ok(())
+}
+
+/// Carries out the administrator's central "block personal Microsoft sign-in" switch in Chrome and Edge. The decision arrives in the signed
+/// device policy and is made on the sync loop; this only turns it into the browsers' URL block lists (merge to block, remove to unblock).
+struct PlatformBrowserBlock;
+
+impl agent_core::browser_block::BrowserBlockController for PlatformBrowserBlock {
+    fn set_personal_microsoft_block(&self, blocked: bool) -> Result<(), String> {
+        use agent_core::browser_policy::BrowserPolicyApplier;
+        let applier = platform::browser_policy_applier();
+        let mut failures = Vec::new();
+        for list in agent_core::browser_policy::personal_microsoft_lists() {
+            let result = if blocked { applier.merge_url_blocklist(&list) } else { applier.remove_url_blocklist(&list) };
+            if let Err(err) = result {
+                failures.push(format!("{}: {err}", list.browser));
+            }
+        }
+        if failures.is_empty() {
+            Ok(())
+        } else {
+            Err(failures.join("; "))
+        }
+    }
 }
 
 fn config_path() -> PathBuf {

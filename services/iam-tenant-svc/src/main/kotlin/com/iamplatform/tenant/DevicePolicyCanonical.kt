@@ -22,6 +22,27 @@ import java.util.UUID
 object DevicePolicyCanonical {
     const val FORMAT = "iam-device-policy-v1"
 
+    /**
+     * The browser-controls block of a device policy is signed on its own, with the same transit key, over this string. It is
+     * deliberately NOT part of [FORMAT]'s string: changing that would make every already-installed agent reject every policy.
+     * Bound to the same tenant, device, policy id/version and validity window as the policy it travels with, so it cannot be
+     * replayed to another device or kept after the policy expires. The agent rebuilds it in `policy_verifier.rs`
+     * (`canonical_browser_controls_encoding`); both pin the same golden vector.
+     */
+    const val BROWSER_CONTROLS_FORMAT = "iam-browser-controls-v1"
+
+    fun encodeBrowserControls(
+        tenantId: UUID,
+        deviceId: UUID,
+        policyId: UUID,
+        policyVersion: Int,
+        issuedAt: Instant,
+        expiresAt: Instant,
+        blockPersonalMicrosoft: Boolean,
+    ): String = listOf(
+        BROWSER_CONTROLS_FORMAT, tenantId, deviceId, policyId, policyVersion, issuedAt.epochSecond, expiresAt.epochSecond, blockPersonalMicrosoft,
+    ).joinToString("|")
+
     /** The order applications are both signed and returned in; callers must use this one ordering. */
     fun ordered(apps: List<DeviceAppPolicyResponse>): List<DeviceAppPolicyResponse> =
         apps.sortedBy { it.applicationId.toString() }

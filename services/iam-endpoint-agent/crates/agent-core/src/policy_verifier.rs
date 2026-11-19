@@ -1,4 +1,4 @@
-use crate::api_client::DevicePolicyResponse;
+use crate::api_client::{BrowserControls, DevicePolicyResponse};
 use base64::{engine::general_purpose::STANDARD, Engine};
 use chrono::DateTime;
 use ed25519_dalek::{Signature, VerifyingKey};
@@ -6,6 +6,20 @@ use uuid::Uuid;
 
 /// Must match `DevicePolicyCanonical.FORMAT` in iam-tenant-svc exactly.
 pub const POLICY_FORMAT: &str = "iam-device-policy-v1";
+
+/// Must match `DevicePolicyCanonical.BROWSER_CONTROLS_FORMAT` in iam-tenant-svc exactly.
+pub const BROWSER_CONTROLS_FORMAT: &str = "iam-browser-controls-v1";
+
+/// What the agent learned about the policy's separately signed browser controls.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum BrowserControlsVerdict {
+    /// The platform sent none (an older platform). Leave the browsers as they are.
+    Absent,
+    /// Signed by the tenant's key and bound to this tenant, device and policy.
+    Verified { block_personal_microsoft: bool },
+    /// Sent but not trustworthy. Never acted on; the rest of the policy is still good.
+    Invalid(String),
+}
 
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
 pub enum PolicyVerificationError {
@@ -31,9 +45,13 @@ pub struct VerifiedPolicy {
     policy: DevicePolicyResponse,
     issued_at: i64,
     expires_at: i64,
+    browser_controls: BrowserControlsVerdict,
 }
 
 impl VerifiedPolicy {
+    pub fn browser_controls(&self) -> &BrowserControlsVerdict {
+        &self.browser_controls
+    }
     pub fn policy(&self) -> &DevicePolicyResponse {
         &self.policy
     }
@@ -53,7 +71,7 @@ impl VerifiedPolicy {
 /// versioned, expiry-bound and anti-rollback protected"). Expiry and rollback are time/state dependent and
 /// are checked when the policy is *accepted* into the cache, see `policy_state::PolicyCache::accept`.
 pub fn verify_policy(
-    policy: DevicePolicyResponse,
+    mut policy: DevicePolicyResponse,
     transit_public_key_base64: &str,
     expected_tenant: Uuid,
     expected_device: Uuid,
@@ -69,17 +87,7 @@ pub fn verify_policy(
 
     let (canonical, issued_at, expires_at) = canonical_policy_encoding(&policy).map_err(PolicyVerificationError::MalformedTimestamp)?;
 
-    // Vault/OpenBao prefix transit signatures with "vault:v<n>:" -- strip it before decoding.
-    let raw_signature_b64 = policy.signature.rsplit(':').next().filter(|s| !s.is_empty()).ok_or_else(|| PolicyVerificationError::MalformedSignature("empty signature".into()))?;
-    let signature_bytes: [u8; 64] = STANDARD
-        .decode(raw_signature_b64)
-        .map_err(|e| PolicyVerificationError::MalformedSignature(e.to_string()))?
-        .try_into()
-        .map_err(|_| PolicyVerificationError::MalformedSignature("expected a 64-byte Ed25519 signature".into()))?;
-
-    verifying_key
-        .verify_strict(canonical.as_bytes(), &Signature::from_bytes(&signature_bytes))
-        .map_err(|_| PolicyVerificationError::InvalidSignature)?;
+    check_signature(&verifying_key, &canonical, &policy.signature)?;
 
     // Only after the signature is good do the signed ids mean anything.
     if policy.tenant_id != expected_tenant {
@@ -89,7 +97,40 @@ pub fn verify_policy(
         return Err(PolicyVerificationError::WrongDevice);
     }
 
-    Ok(VerifiedPolicy { policy, issued_at, expires_at })
+    // The browser controls are signed on their own, so the policy signature above is unchanged for older agents. A bad block does
+    // not invalidate the policy (that would let a platform fault take every laptop's policy down); it is just never acted on.
+    let browser_controls = match policy.browser_controls.take() {
+        None => BrowserControlsVerdict::Absent,
+        Some(BrowserControls { block_personal_microsoft, signature }) => {
+            let text = canonical_browser_controls_encoding(&policy, issued_at, expires_at, block_personal_microsoft);
+            match check_signature(&verifying_key, &text, &signature) {
+                Ok(()) => BrowserControlsVerdict::Verified { block_personal_microsoft },
+                Err(e) => BrowserControlsVerdict::Invalid(format!("browser controls: {e}")),
+            }
+        }
+    };
+
+    Ok(VerifiedPolicy { policy, issued_at, expires_at, browser_controls })
+}
+
+/// Checks an OpenBao transit Ed25519 signature (prefixed `vault:v<n>:`) over `canonical`.
+fn check_signature(key: &VerifyingKey, canonical: &str, signature: &str) -> Result<(), PolicyVerificationError> {
+    let raw_signature_b64 = signature.rsplit(':').next().filter(|s| !s.is_empty()).ok_or_else(|| PolicyVerificationError::MalformedSignature("empty signature".into()))?;
+    let signature_bytes: [u8; 64] = STANDARD
+        .decode(raw_signature_b64)
+        .map_err(|e| PolicyVerificationError::MalformedSignature(e.to_string()))?
+        .try_into()
+        .map_err(|_| PolicyVerificationError::MalformedSignature("expected a 64-byte Ed25519 signature".into()))?;
+    key.verify_strict(canonical.as_bytes(), &Signature::from_bytes(&signature_bytes)).map_err(|_| PolicyVerificationError::InvalidSignature)
+}
+
+/// Rebuilds the exact string iam-tenant-svc's `DevicePolicyCanonical.encodeBrowserControls` signed. Bound to the same tenant, device,
+/// policy id/version and validity window as the policy it arrived with, so it cannot be replayed onto another policy.
+fn canonical_browser_controls_encoding(policy: &DevicePolicyResponse, issued_at: i64, expires_at: i64, block_personal_microsoft: bool) -> String {
+    format!(
+        "{BROWSER_CONTROLS_FORMAT}|{}|{}|{}|{}|{issued_at}|{expires_at}|{block_personal_microsoft}",
+        policy.tenant_id, policy.device_id, policy.policy_id, policy.policy_version,
+    )
 }
 
 /// Rebuilds the exact string iam-tenant-svc's `DevicePolicyCanonical.encode` signed. Applications are
@@ -151,6 +192,23 @@ pub(crate) mod test_support {
             p.signature = format!("vault:v1:{}", STANDARD.encode(self.signing_key.sign(canonical.as_bytes()).to_bytes()));
         }
 
+        /// A policy whose browser controls say `block`, signed by this fixture's key like the real platform does.
+        pub fn signed_policy_with_controls(&self, version: i32, issued_at: i64, ttl: i64, block: bool) -> DevicePolicyResponse {
+            let mut p = self.signed_policy(version, issued_at, ttl, "APPROVED", vec![]);
+            self.sign_controls(&mut p, block);
+            p
+        }
+
+        pub fn sign_controls(&self, p: &mut DevicePolicyResponse, block: bool) {
+            let issued = DateTime::parse_from_rfc3339(&p.issued_at).unwrap().timestamp();
+            let expires = DateTime::parse_from_rfc3339(&p.expires_at).unwrap().timestamp();
+            let text = canonical_browser_controls_encoding(p, issued, expires, block);
+            p.browser_controls = Some(BrowserControls {
+                block_personal_microsoft: block,
+                signature: format!("vault:v1:{}", STANDARD.encode(self.signing_key.sign(text.as_bytes()).to_bytes())),
+            });
+        }
+
         pub fn verified(&self, version: i32, issued_at: i64, ttl: i64, status: &str, apps: Vec<DeviceAppPolicy>) -> VerifiedPolicy {
             verify_policy(self.signed_policy(version, issued_at, ttl, status, apps), &self.public_key_b64, TENANT.parse().unwrap(), DEVICE.parse().unwrap()).unwrap()
         }
@@ -174,6 +232,7 @@ pub(crate) mod test_support {
             agent_failure_mode: "RISK_BASED".to_string(),
             applications: apps,
             signature: String::new(),
+            browser_controls: None,
         }
     }
 
@@ -226,6 +285,77 @@ mod tests {
              ffffffff-ffff-ffff-ffff-ffffffffffff:false:false:0:FAIL_OPEN"
         );
         assert_eq!((issued, expires), (1_800_000_000, 1_800_000_900));
+    }
+
+    /// Byte-for-byte the same string as iam-tenant-svc's `DevicePolicyCanonicalTest.browser controls golden vector`.
+    #[test]
+    fn browser_controls_golden_vector_matches_the_backend() {
+        let p = golden_policy();
+        assert_eq!(
+            canonical_browser_controls_encoding(&p, 1_800_000_000, 1_800_000_900, true),
+            "iam-browser-controls-v1|11111111-1111-1111-1111-111111111111|22222222-2222-2222-2222-222222222222|\
+             33333333-3333-3333-3333-333333333333|7|1800000000|1800000900|true"
+        );
+    }
+
+    fn verdict_of(f: &Fixture, p: DevicePolicyResponse) -> BrowserControlsVerdict {
+        verify_policy(p, &f.public_key_b64, tenant(), device()).unwrap().browser_controls().clone()
+    }
+
+    #[test]
+    fn a_policy_without_browser_controls_is_still_good_and_says_absent() {
+        let f = Fixture::new();
+        assert_eq!(verdict_of(&f, f.signed_policy(3, 1_000, 900, "APPROVED", vec![])), BrowserControlsVerdict::Absent);
+    }
+
+    #[test]
+    fn properly_signed_browser_controls_are_verified_either_way() {
+        let f = Fixture::new();
+        assert_eq!(verdict_of(&f, f.signed_policy_with_controls(3, 1_000, 900, true)), BrowserControlsVerdict::Verified { block_personal_microsoft: true });
+        assert_eq!(verdict_of(&f, f.signed_policy_with_controls(3, 1_000, 900, false)), BrowserControlsVerdict::Verified { block_personal_microsoft: false });
+    }
+
+    #[test]
+    fn the_raw_unverified_controls_are_dropped_from_the_policy_that_gets_cached() {
+        let f = Fixture::new();
+        let verified = verify_policy(f.signed_policy_with_controls(3, 1_000, 900, true), &f.public_key_b64, tenant(), device()).unwrap();
+        assert!(verified.policy().browser_controls.is_none());
+    }
+
+    #[test]
+    fn flipping_the_setting_without_the_key_is_caught() {
+        let f = Fixture::new();
+        let mut p = f.signed_policy_with_controls(3, 1_000, 900, true);
+        p.browser_controls.as_mut().unwrap().block_personal_microsoft = false; // an attacker unblocks, keeping the old signature
+        assert!(matches!(verdict_of(&f, p), BrowserControlsVerdict::Invalid(_)));
+    }
+
+    #[test]
+    fn controls_signed_for_another_policy_issue_cannot_be_replayed_onto_this_one() {
+        let f = Fixture::new();
+        let old = f.signed_policy_with_controls(3, 1_000, 900, true);
+        let mut newer = f.signed_policy(3, 2_000, 900, "APPROVED", vec![]);
+        newer.browser_controls = old.browser_controls.clone();
+        assert!(matches!(verdict_of(&f, newer), BrowserControlsVerdict::Invalid(_)));
+    }
+
+    #[test]
+    fn controls_signed_by_some_other_key_are_invalid_but_the_policy_itself_still_verifies() {
+        let f = Fixture::new();
+        let other = Fixture::new();
+        let mut p = f.signed_policy(3, 1_000, 900, "APPROVED", vec![]);
+        other.sign_controls(&mut p, true);
+        let verified = verify_policy(p, &f.public_key_b64, tenant(), device()).unwrap();
+        assert!(matches!(verified.browser_controls(), BrowserControlsVerdict::Invalid(_)));
+        assert_eq!(verified.policy().policy_version, 3);
+    }
+
+    #[test]
+    fn malformed_controls_signature_is_invalid_not_a_crash() {
+        let f = Fixture::new();
+        let mut p = f.signed_policy_with_controls(3, 1_000, 900, true);
+        p.browser_controls.as_mut().unwrap().signature = "not-a-signature".into();
+        assert!(matches!(verdict_of(&f, p), BrowserControlsVerdict::Invalid(_)));
     }
 
     #[test]

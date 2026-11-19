@@ -9,6 +9,7 @@
 
 pub mod agent;
 pub mod api_client;
+pub mod browser_block;
 pub mod browser_policy;
 pub mod config;
 pub mod device_identity;

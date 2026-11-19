@@ -11,7 +11,8 @@ use crate::integrity::{FindingKind, IntegrityMonitor};
 use crate::local_log::LocalEventSink;
 use crate::api_client::{AgentEvent, ApiError, DevicePolicyResponse, HeartbeatRequest};
 use crate::policy_state::{PolicyCache, RejectReason};
-use crate::policy_verifier::{verify_policy, PolicyVerificationError};
+use crate::browser_block::BrowserBlockController;
+use crate::policy_verifier::{verify_policy, BrowserControlsVerdict, PolicyVerificationError};
 use crate::posture::{PostureCollector, PostureSignals};
 use crate::secure_storage::PolicyStore;
 use std::future::Future;
@@ -75,6 +76,12 @@ pub struct SyncEngine<B: Backend, C: PostureCollector> {
     last_posture_at: Option<i64>,
     integrity: Option<IntegrityMonitor>,
     local_log: Option<std::sync::Arc<dyn LocalEventSink>>,
+    browser_block: Option<std::sync::Arc<dyn BrowserBlockController>>,
+    /// What the browsers were last made to match. Acting only on a CHANGE keeps the registry quiet on every other tick; `None`
+    /// until the first verified setting after a start, which is then applied once so a changed or tampered list is put right.
+    last_browser_block: Option<bool>,
+    /// So a bad browser-controls signature is reported once, not on every tick.
+    browser_controls_invalid_reported: bool,
 }
 
 impl<B: Backend, C: PostureCollector> SyncEngine<B, C> {
@@ -82,12 +89,31 @@ impl<B: Backend, C: PostureCollector> SyncEngine<B, C> {
     /// policy, its anti-rollback state, and the clock high-water mark.
     pub fn new(backend: B, collector: C, store: PolicyStore, config: SyncConfig) -> Result<Self, crate::secure_storage::StorageError> {
         let cache = store.load()?.unwrap_or_default();
-        Ok(Self { backend, collector, store, cache, config, consecutive_failures: 0, last_posture_at: None, integrity: None, local_log: None })
+        Ok(Self {
+            backend,
+            collector,
+            store,
+            cache,
+            config,
+            consecutive_failures: 0,
+            last_posture_at: None,
+            integrity: None,
+            local_log: None,
+            browser_block: None,
+            last_browser_block: None,
+            browser_controls_invalid_reported: false,
+        })
     }
 
     /// Mirrors every event the agent raises to the device's own log (Windows Event Log on Windows).
     pub fn with_local_log(mut self, sink: std::sync::Arc<dyn LocalEventSink>) -> Self {
         self.local_log = Some(sink);
+        self
+    }
+
+    /// Lets the administrator's central switch for the personal Microsoft sign-in block take effect on this laptop.
+    pub fn with_browser_block(mut self, controller: std::sync::Arc<dyn BrowserBlockController>) -> Self {
+        self.browser_block = Some(controller);
         self
     }
 
@@ -119,7 +145,7 @@ impl<B: Backend, C: PostureCollector> SyncEngine<B, C> {
                 outcome = TickOutcome::SyncFailed;
             }
             Ok(raw) => match self.verify_and_accept(raw, now) {
-                Ok(()) => {}
+                Ok(controls) => self.apply_browser_controls(controls).await,
                 Err(reason) => {
                     tracing::error!(%reason, "rejecting device policy");
                     self.report("agent.policy_rejected", "CRITICAL", &reason).await;
@@ -197,10 +223,53 @@ impl<B: Backend, C: PostureCollector> SyncEngine<B, C> {
         }
     }
 
-    fn verify_and_accept(&mut self, raw: DevicePolicyResponse, now: i64) -> Result<(), String> {
+    /// Returns what the policy's browser controls said, but ONLY for a policy the cache really took: a replayed, rolled-back or
+    /// expired policy must not switch anything.
+    fn verify_and_accept(&mut self, raw: DevicePolicyResponse, now: i64) -> Result<BrowserControlsVerdict, String> {
         let verified = verify_policy(raw, &self.config.transit_public_key_base64, self.config.tenant_id, self.config.device_id)
             .map_err(|e: PolicyVerificationError| e.to_string())?;
-        self.cache.accept(verified, now).map_err(|r: RejectReason| format!("{r:?}"))
+        let controls = verified.browser_controls().clone();
+        self.cache.accept(verified, now).map_err(|r: RejectReason| format!("{r:?}"))?;
+        Ok(controls)
+    }
+
+    /// Makes the browsers match the administrator's signed choice. Acts only when the choice differs from what was last applied
+    /// (or has not been applied yet since this start); a failure is reported and retried on the next tick. An older platform that
+    /// sends no controls, and controls that do not verify, change nothing.
+    async fn apply_browser_controls(&mut self, controls: BrowserControlsVerdict) {
+        let Some(controller) = self.browser_block.clone() else { return };
+        match controls {
+            BrowserControlsVerdict::Absent => {}
+            BrowserControlsVerdict::Invalid(reason) => {
+                if !self.browser_controls_invalid_reported {
+                    self.browser_controls_invalid_reported = true;
+                    tracing::error!(%reason, "ignoring browser controls that did not verify");
+                    self.report("agent.browser_controls_rejected", "WARNING", &reason).await;
+                }
+            }
+            BrowserControlsVerdict::Verified { block_personal_microsoft } => {
+                self.browser_controls_invalid_reported = false;
+                if self.last_browser_block == Some(block_personal_microsoft) {
+                    return;
+                }
+                match controller.set_personal_microsoft_block(block_personal_microsoft) {
+                    Ok(()) => {
+                        self.last_browser_block = Some(block_personal_microsoft);
+                        let (event, text) = if block_personal_microsoft {
+                            ("agent.browser_block_applied", "personal Microsoft account sign-in blocked in Chrome and Edge")
+                        } else {
+                            ("agent.browser_block_removed", "personal Microsoft account sign-in no longer blocked in Chrome and Edge")
+                        };
+                        self.report(event, "INFO", text).await;
+                    }
+                    // `last_browser_block` is left alone, so the next tick tries again.
+                    Err(err) => {
+                        tracing::error!(%err, "could not change the personal Microsoft sign-in block");
+                        self.report("agent.browser_block_failed", "ERROR", &err).await;
+                    }
+                }
+            }
+        }
     }
 
     /// Best-effort security event; failing to deliver it must never break the loop.
@@ -762,6 +831,168 @@ mod tests {
         tokio::time::sleep(Duration::from_secs(1)).await;
         drop(tx);
         tokio::time::timeout(Duration::from_secs(1), handle).await.expect("loop must stop when the sender goes away").unwrap();
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    // ---- the administrator's central browser switch ----
+
+    struct FakeBlock {
+        calls: Mutex<Vec<bool>>,
+        fail: std::sync::atomic::AtomicBool,
+    }
+
+    impl FakeBlock {
+        fn new() -> Arc<Self> {
+            Arc::new(Self { calls: Mutex::new(Vec::new()), fail: std::sync::atomic::AtomicBool::new(false) })
+        }
+        fn calls(&self) -> Vec<bool> {
+            self.calls.lock().unwrap().clone()
+        }
+        fn fail(&self, on: bool) {
+            self.fail.store(on, Ordering::SeqCst);
+        }
+    }
+
+    impl crate::browser_block::BrowserBlockController for FakeBlock {
+        fn set_personal_microsoft_block(&self, blocked: bool) -> Result<(), String> {
+            self.calls.lock().unwrap().push(blocked);
+            if self.fail.load(Ordering::SeqCst) {
+                Err("registry says no".to_string())
+            } else {
+                Ok(())
+            }
+        }
+    }
+
+    fn count(backend: &FakeBackend, event: &str) -> usize {
+        backend.events().iter().filter(|(t, _, _)| t == event).count()
+    }
+
+    #[tokio::test]
+    async fn switching_the_block_on_applies_it_once_and_not_again_on_every_tick() {
+        let (f, backend, block) = (Fixture::new(), FakeBackend::default(), FakeBlock::new());
+        let (engine, dir) = engine(&f, backend.clone());
+        let mut engine = engine.with_browser_block(block.clone());
+
+        backend.serve(f.signed_policy_with_controls(3, T0, 900, true));
+        assert_eq!(engine.tick(T0 + 5).await, TickOutcome::Synced);
+        backend.serve(f.signed_policy_with_controls(3, T0 + 10, 900, true));
+        assert_eq!(engine.tick(T0 + 15).await, TickOutcome::Synced);
+
+        assert_eq!(block.calls(), vec![true]);
+        assert_eq!(count(&backend, "agent.browser_block_applied"), 1);
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn switching_it_off_again_takes_the_block_off() {
+        let (f, backend, block) = (Fixture::new(), FakeBackend::default(), FakeBlock::new());
+        let (engine, dir) = engine(&f, backend.clone());
+        let mut engine = engine.with_browser_block(block.clone());
+
+        backend.serve(f.signed_policy_with_controls(3, T0, 900, true));
+        engine.tick(T0 + 5).await;
+        backend.serve(f.signed_policy_with_controls(3, T0 + 10, 900, false));
+        engine.tick(T0 + 15).await;
+
+        assert_eq!(block.calls(), vec![true, false]);
+        assert_eq!(count(&backend, "agent.browser_block_applied"), 1);
+        assert_eq!(count(&backend, "agent.browser_block_removed"), 1);
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn the_first_verified_choice_after_a_start_is_applied_even_when_it_is_off() {
+        // An upgrade from a version that blocked on its own: "off" must take that block away on the first sync.
+        let (f, backend, block) = (Fixture::new(), FakeBackend::default(), FakeBlock::new());
+        let (engine, dir) = engine(&f, backend.clone());
+        let mut engine = engine.with_browser_block(block.clone());
+
+        backend.serve(f.signed_policy_with_controls(3, T0, 900, false));
+        engine.tick(T0 + 5).await;
+
+        assert_eq!(block.calls(), vec![false]);
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn a_platform_that_sends_no_controls_changes_nothing() {
+        let (f, backend, block) = (Fixture::new(), FakeBackend::default(), FakeBlock::new());
+        let (engine, dir) = engine(&f, backend.clone());
+        let mut engine = engine.with_browser_block(block.clone());
+
+        backend.serve(f.signed_policy(3, T0, 900, "APPROVED", vec![]));
+        assert_eq!(engine.tick(T0 + 5).await, TickOutcome::Synced);
+
+        assert!(block.calls().is_empty());
+        assert!(backend.events().is_empty());
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn controls_that_do_not_verify_change_nothing_and_are_reported_once() {
+        let (f, backend, block) = (Fixture::new(), FakeBackend::default(), FakeBlock::new());
+        let (engine, dir) = engine(&f, backend.clone());
+        let mut engine = engine.with_browser_block(block.clone());
+
+        for (i, now) in [T0 + 5, T0 + 15, T0 + 25].into_iter().enumerate() {
+            let mut p = f.signed_policy_with_controls(3, T0 + 10 * i as i64, 900, true);
+            p.browser_controls.as_mut().unwrap().block_personal_microsoft = false; // flipped without the key
+            backend.serve(p);
+            // The policy itself is still good: a bad controls block must not take the policy down with it.
+            assert_eq!(engine.tick(now).await, TickOutcome::Synced);
+        }
+
+        assert!(block.calls().is_empty());
+        assert_eq!(count(&backend, "agent.browser_controls_rejected"), 1);
+        assert_eq!(engine.cache().policy_version(), 3);
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn a_failed_change_is_reported_and_tried_again_on_the_next_tick() {
+        let (f, backend, block) = (Fixture::new(), FakeBackend::default(), FakeBlock::new());
+        let (engine, dir) = engine(&f, backend.clone());
+        let mut engine = engine.with_browser_block(block.clone());
+
+        block.fail(true);
+        backend.serve(f.signed_policy_with_controls(3, T0, 900, true));
+        engine.tick(T0 + 5).await;
+        assert_eq!(count(&backend, "agent.browser_block_failed"), 1);
+        assert_eq!(count(&backend, "agent.browser_block_applied"), 0);
+
+        block.fail(false);
+        backend.serve(f.signed_policy_with_controls(3, T0 + 10, 900, true));
+        engine.tick(T0 + 15).await;
+
+        assert_eq!(block.calls(), vec![true, true]);
+        assert_eq!(count(&backend, "agent.browser_block_applied"), 1);
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn the_controls_of_a_policy_the_cache_refuses_are_never_acted_on() {
+        let (f, backend, block) = (Fixture::new(), FakeBackend::default(), FakeBlock::new());
+        let (engine, dir) = engine(&f, backend.clone());
+        let mut engine = engine.with_browser_block(block.clone());
+
+        backend.serve(f.signed_policy(5, T0, 900, "APPROVED", vec![]));
+        assert_eq!(engine.tick(T0 + 5).await, TickOutcome::Synced);
+        // A validly signed but OLDER policy (a replay) carrying "block": refused as a rollback, so it must not switch anything.
+        backend.serve(f.signed_policy_with_controls(4, T0 + 10, 900, true));
+        assert_eq!(engine.tick(T0 + 15).await, TickOutcome::PolicyRejected);
+
+        assert!(block.calls().is_empty());
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn without_a_controller_the_controls_are_simply_ignored() {
+        let (f, backend) = (Fixture::new(), FakeBackend::default());
+        let (mut engine, dir) = engine(&f, backend.clone());
+        backend.serve(f.signed_policy_with_controls(3, T0, 900, true));
+        assert_eq!(engine.tick(T0 + 5).await, TickOutcome::Synced);
+        assert!(backend.events().is_empty());
         std::fs::remove_dir_all(dir).ok();
     }
 }

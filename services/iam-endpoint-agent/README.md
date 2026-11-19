@@ -28,15 +28,20 @@ Tested on a real Windows 11 laptop against the live platform unless marked other
   is unreachable. The console marks a device Offline after 15 minutes of silence.
 - **Browser sign-in restriction**: Chrome and Edge only accept accounts from `allowed_identity_domains` (enterprise policy,
   no TLS inspection). Google's block of an account outside the list was seen on the test laptop.
-- **Personal Microsoft accounts blocked on the web** (0.3.4+, same on/off switch as the sign-in restriction): the pages a personal
-  outlook.com / hotmail.com / live.com account signs in through (`login.live.com`, `outlook.live.com`, `account.live.com`,
-  `signup.live.com`) are added to Chrome's and Edge's `URLBlocklist`. Work and school accounts are not touched. Anything already
-  on that list (for example from a company's group policy) is kept. Skipped if an allowed domain is itself outlook.com,
-  hotmail.com, live.com or msn.com. This is a lower-assurance domain control (spec 8.2), not Entra tenant restrictions.
+- **Personal Microsoft accounts blocked on the web, from one central switch** (0.3.5+): an administrator turns "Block personal
+  Microsoft (Outlook) sign-in in Chrome and Edge" on or off in the Admin Console (Endpoint Security); it is OFF by default. The setting
+  travels in the signed device policy as its own signed block (`iam-browser-controls-v1`), so older agents are unaffected. When on, the
+  pages a personal outlook.com / hotmail.com / live.com account signs in through (`login.live.com`, `outlook.live.com`,
+  `account.live.com`, `signup.live.com`) are added to Chrome's and Edge's `URLBlocklist`; when off they are taken off again. Work and
+  school accounts are not touched, and anything else already on that list (for example from a company's group policy) is kept. It acts
+  only when the setting changes (and once after each start); a failure is reported and retried. Events 1012 applied, 1013 failed,
+  1014 removed, 1015 setting ignored (signature did not verify). A lower-assurance domain control (spec 8.2), not Entra tenant
+  restrictions. Versions 0.3.4 blocked whenever allowed domains were set; 0.3.5 decides only centrally. Edge's own sign-in dialog is a
+  browser-owned window the URL list does not filter; the profile sign-in restriction decides there.
 - **Tamper detection** of the agent's own program and config: DEGRADED health plus a CRITICAL event until restored.
 - **Windows Event Log**: Application log, source `IamEndpointAgent` (1000 started, 1001 tamper detected, 1002 tamper
   cleared, 1003 policy rejected, 1004 clock moved back, 1005 posture failure, 1006 stopped, 1010/1011 browser policy,
-  1012/1013 personal Microsoft sign-in block).
+  1012-1015 personal Microsoft sign-in block).
 - **`--status`**: read-only summary of enrollment, policy, offline behaviour and the local decision.
 - **TPM-backed device key** (version 0.2.0+): a NEW enrollment uses a non-exportable TPM key when the machine has one and
   falls back to a software key otherwise; the assurance level is reported. An existing identity keeps its key.

@@ -49,6 +49,35 @@ class DevicePolicyCanonicalTest {
     }
 
     @Test
+    fun `browser controls golden vector`() {
+        assertEquals(
+            "iam-browser-controls-v1|11111111-1111-1111-1111-111111111111|22222222-2222-2222-2222-222222222222|" +
+                "33333333-3333-3333-3333-333333333333|7|1800000000|1800000900|true",
+            controls(),
+        )
+    }
+
+    private fun controls(block: Boolean = true, deviceId: UUID = device, version: Int = 7, expires: Long = 1_800_000_900) =
+        DevicePolicyCanonical.encodeBrowserControls(
+            tenant, deviceId, policy, version, Instant.ofEpochSecond(1_800_000_000), Instant.ofEpochSecond(expires), block,
+        )
+
+    @Test
+    fun `the browser controls string changes with the choice, the device, the policy version and the expiry`() {
+        val base = controls()
+        assertNotEquals(base, controls(block = false))
+        assertNotEquals(base, controls(deviceId = UUID.randomUUID()))
+        assertNotEquals(base, controls(version = 8))
+        assertNotEquals(base, controls(expires = 1_800_000_901))
+    }
+
+    @Test
+    fun `the browser controls string never equals a policy string, so one signature cannot stand in for the other`() {
+        assertNotEquals(encode(), controls())
+        assertEquals(true, controls().startsWith("iam-browser-controls-v1|") && encode().startsWith("iam-device-policy-v1|"))
+    }
+
+    @Test
     fun `an empty application list still encodes (trailing separator, no apps)`() {
         assertEquals(
             "iam-device-policy-v1|11111111-1111-1111-1111-111111111111|22222222-2222-2222-2222-222222222222|" +

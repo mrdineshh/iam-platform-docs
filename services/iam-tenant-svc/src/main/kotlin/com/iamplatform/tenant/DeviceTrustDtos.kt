@@ -168,7 +168,12 @@ data class DevicePolicyResponse(
     // before trusting/caching the policy (Section 16 "Policy: signed,
     // versioned, expiring and rollback-protected").
     val signature: String,
+    // Tenant-wide browser controls, signed separately so the signature above is unchanged for agents that predate them.
+    val browserControls: SignedBrowserControls? = null,
 )
+
+/** The browser controls an agent should apply, with a signature over their own canonical string (DevicePolicyCanonical). */
+data class SignedBrowserControls(val blockPersonalMicrosoft: Boolean, val signature: String)
 
 // GET /devices/{id}/events -- the device's activity timeline in the Admin Console. Newest first.
 data class DeviceEventResponse(

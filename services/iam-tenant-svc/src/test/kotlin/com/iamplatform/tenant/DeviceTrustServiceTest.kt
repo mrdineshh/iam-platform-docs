@@ -50,12 +50,13 @@ class DeviceTrustServiceTest {
     private val pkiClient = mock<OpenBaoPkiClient>()
     private val transitClient = mock<OpenBaoTransitClient>()
     private val auditPublisher = mock<AuditPublisher>()
+    private val browserControls = mock<BrowserControlsService>()
 
     private fun newService(enforcePosture: Boolean = false, issueCertificates: Boolean = false, tamperResponse: String = "report") = DeviceTrustService(
         deviceRepository, hardwareRepository, keyRepository, certificateRepository, approvalRepository,
         postureRepository, heartbeatRepository, eventRepository, policyRepository, appPolicyRepository,
         enrollmentTransactionRepository, DeviceSignatureVerifier(), pkiClient, transitClient, auditPublisher,
-        jacksonObjectMapper(), enforcePosture, issueCertificates, tamperResponse,
+        jacksonObjectMapper(), browserControls, enforcePosture, issueCertificates, tamperResponse,
     )
 
     private val service = newService()
@@ -410,7 +411,7 @@ class DeviceTrustServiceTest {
         val response = service.fetchPolicy(tenantId, deviceId)
 
         val signedBytes = argumentCaptor<ByteArray>()
-        verify(transitClient).sign(eq("device-policy"), signedBytes.capture())
+        verify(transitClient, org.mockito.kotlin.times(2)).sign(eq("device-policy"), signedBytes.capture())
         val expected = DevicePolicyCanonical.encode(
             tenantId, deviceId, response.policyId, response.policyVersion, response.issuedAt, response.expiresAt,
             response.deviceStatus, response.heartbeatIntervalSeconds, response.postureIntervalSeconds,
@@ -421,6 +422,67 @@ class DeviceTrustServiceTest {
         assertEquals(deviceId, response.deviceId)
         assertEquals("vault:v1:test-signature", response.signature)
         assertEquals(0, response.issuedAt.nano) // whole seconds: nothing for the two sides to truncate differently
+    }
+
+    @Test
+    fun `the policy signature does not depend on the browser controls, so agents that predate them keep verifying`() {
+        val deviceId = UUID.randomUUID()
+        val device = IamDeviceEntity(deviceId, tenantId, userId, UUID.randomUUID(), ownership = "CORPORATE", lifecycleStatus = "APPROVED")
+        whenever(deviceRepository.findById(deviceId)).thenReturn(Optional.of(device))
+        whenever(policyRepository.findTopByTenantIdOrderByVersionDesc(tenantId)).thenReturn(null)
+        whenever(transitClient.sign(any(), any())).thenReturn("vault:v1:test-signature")
+
+        val signedWhenOff = argumentCaptor<ByteArray>()
+        whenever(browserControls.isBlockingPersonalMicrosoft(tenantId)).thenReturn(false)
+        service.fetchPolicy(tenantId, deviceId)
+        verify(transitClient, org.mockito.kotlin.times(2)).sign(eq("device-policy"), signedWhenOff.capture())
+
+        org.mockito.kotlin.clearInvocations(transitClient)
+        val signedWhenOn = argumentCaptor<ByteArray>()
+        whenever(browserControls.isBlockingPersonalMicrosoft(tenantId)).thenReturn(true)
+        service.fetchPolicy(tenantId, deviceId)
+        verify(transitClient, org.mockito.kotlin.times(2)).sign(eq("device-policy"), signedWhenOn.capture())
+
+        // The first signed string is the policy itself. Compared field by field, leaving out only the issue and expiry
+        // times (fields 5 and 6, which move with the second each fetch was made in): nothing else may differ, so the
+        // string installed agents rebuild and check is the same whether the switch is on or off.
+        fun withoutTimes(bytes: ByteArray) = String(bytes, Charsets.UTF_8).split("|").filterIndexed { i, _ -> i != 5 && i != 6 }
+        assertEquals(true, String(signedWhenOff.firstValue, Charsets.UTF_8).startsWith("iam-device-policy-v1|"))
+        assertEquals(withoutTimes(signedWhenOff.firstValue), withoutTimes(signedWhenOn.firstValue))
+    }
+
+    @Test
+    fun `the browser controls are signed separately, bound to this policy, and say what the tenant chose`() {
+        val deviceId = UUID.randomUUID()
+        val device = IamDeviceEntity(deviceId, tenantId, userId, UUID.randomUUID(), ownership = "CORPORATE", lifecycleStatus = "APPROVED")
+        whenever(deviceRepository.findById(deviceId)).thenReturn(Optional.of(device))
+        whenever(policyRepository.findTopByTenantIdOrderByVersionDesc(tenantId)).thenReturn(null)
+        whenever(transitClient.sign(any(), any())).thenReturn("vault:v1:sig-a", "vault:v1:sig-b")
+        whenever(browserControls.isBlockingPersonalMicrosoft(tenantId)).thenReturn(true)
+
+        val response = service.fetchPolicy(tenantId, deviceId)
+
+        val signed = argumentCaptor<ByteArray>()
+        verify(transitClient, org.mockito.kotlin.times(2)).sign(eq("device-policy"), signed.capture())
+        val expectedControls = DevicePolicyCanonical.encodeBrowserControls(
+            tenantId, deviceId, response.policyId, response.policyVersion, response.issuedAt, response.expiresAt, true,
+        )
+        assertEquals(expectedControls, String(signed.secondValue, Charsets.UTF_8))
+        assertEquals("vault:v1:sig-a", response.signature)
+        assertEquals(true, response.browserControls?.blockPersonalMicrosoft)
+        assertEquals("vault:v1:sig-b", response.browserControls?.signature)
+    }
+
+    @Test
+    fun `with no choice made the controls are signed as not blocking`() {
+        val deviceId = UUID.randomUUID()
+        val device = IamDeviceEntity(deviceId, tenantId, userId, UUID.randomUUID(), ownership = "CORPORATE", lifecycleStatus = "APPROVED")
+        whenever(deviceRepository.findById(deviceId)).thenReturn(Optional.of(device))
+        whenever(policyRepository.findTopByTenantIdOrderByVersionDesc(tenantId)).thenReturn(null)
+        whenever(transitClient.sign(any(), any())).thenReturn("vault:v1:test-signature")
+        whenever(browserControls.isBlockingPersonalMicrosoft(tenantId)).thenReturn(false)
+
+        assertEquals(false, service.fetchPolicy(tenantId, deviceId).browserControls?.blockPersonalMicrosoft)
     }
 
     @Test

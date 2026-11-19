@@ -67,6 +67,7 @@ class DeviceTrustService(
     private val transitClient: OpenBaoTransitClient,
     private val auditPublisher: AuditPublisher,
     private val objectMapper: ObjectMapper,
+    private val browserControls: BrowserControlsService,
     // Off by default: the posture verdict is recorded and shown, but does not change what a device may
     // do. Turning it on would suspend access for any approved device that fails the default rules
     // (e.g. a laptop without BitLocker), which an operator must opt into knowingly.
@@ -653,6 +654,14 @@ class DeviceTrustService(
         )
         val signature = transitClient.sign("device-policy", canonical.toByteArray(Charsets.UTF_8))
 
+        // Signed on its own (same key), so the signature above stays byte-for-byte what every installed agent already checks.
+        val blockPersonalMicrosoft = browserControls.isBlockingPersonalMicrosoft(tenantId)
+        val controlsSignature = transitClient.sign(
+            "device-policy",
+            DevicePolicyCanonical.encodeBrowserControls(tenantId, deviceId, policyId, policyVersion, now, expiresAt, blockPersonalMicrosoft)
+                .toByteArray(Charsets.UTF_8),
+        )
+
         return DevicePolicyResponse(
             tenantId = tenantId,
             deviceId = deviceId,
@@ -666,6 +675,7 @@ class DeviceTrustService(
             agentFailureMode = DEFAULT_POLICY.agentFailureMode.name,
             applications = apps,
             signature = signature,
+            browserControls = SignedBrowserControls(blockPersonalMicrosoft, controlsSignature),
         )
     }
 

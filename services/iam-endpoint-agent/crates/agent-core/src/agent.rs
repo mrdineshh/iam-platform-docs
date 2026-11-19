@@ -43,6 +43,7 @@ pub struct Agent {
     local_log: Option<std::sync::Arc<dyn crate::local_log::LocalEventSink>>,
     hardware_keys: Option<Arc<dyn HardwareKeyStore>>,
     update_installer: Option<Arc<dyn crate::update::UpdateInstaller>>,
+    browser_block: Option<Arc<dyn crate::browser_block::BrowserBlockController>>,
 }
 
 impl Agent {
@@ -58,7 +59,14 @@ impl Agent {
             local_log: None,
             hardware_keys: None,
             update_installer: None,
+            browser_block: None,
         }
+    }
+
+    /// Offers the platform's way of blocking personal Microsoft sign-in in the browsers. Without one the setting is ignored.
+    pub fn with_browser_block(mut self, controller: Arc<dyn crate::browser_block::BrowserBlockController>) -> Self {
+        self.browser_block = Some(controller);
+        self
     }
 
     /// Offers the platform's installer launcher. Without one (or without a release key in the config) updates are off.
@@ -185,6 +193,10 @@ impl Agent {
         .with_integrity(crate::integrity::IntegrityMonitor::baseline(self.watched_files()));
         let engine = match &self.local_log {
             Some(sink) => engine.with_local_log(sink.clone()),
+            None => engine,
+        };
+        let engine = match &self.browser_block {
+            Some(controller) => engine.with_browser_block(controller.clone()),
             None => engine,
         };
 
