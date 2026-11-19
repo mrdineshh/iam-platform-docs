@@ -46,6 +46,16 @@ class InternalOnlyFilterTest {
     }
 
     @Test
+    fun `the platform sign-in device check is guarded too`() {
+        val (external, externalChain) = call("/internal/login-device-check", "X-Forwarded-For" to "203.0.113.9")
+        assertEquals(404, external.status)
+        assertNull(externalChain.request)
+        val (internal, internalChain) = call("/internal/login-device-check")
+        assertEquals(200, internal.status)
+        assertNotNull(internalChain.request)
+    }
+
+    @Test
     fun `other routes are not affected, with or without proxy headers`() {
         for (uri in listOf("/api/v1/endpoint/devices", "/internal/devices/abc", "/actuator/health")) {
             val (response, chain) = call(uri, "X-Forwarded-For" to "203.0.113.9")

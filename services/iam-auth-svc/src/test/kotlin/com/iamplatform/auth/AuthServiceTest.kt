@@ -6,6 +6,8 @@ import com.iamplatform.auth.client.GeoClient
 import com.iamplatform.auth.client.GeoResolution
 import com.iamplatform.auth.client.IdentityClient
 import com.iamplatform.auth.client.IssuedSession
+import com.iamplatform.auth.client.LoginDeviceCheckRequest
+import com.iamplatform.auth.client.LoginDeviceCheckResponse
 import com.iamplatform.auth.client.PolicyClient
 import com.iamplatform.auth.client.PushSendResult
 import com.iamplatform.auth.client.RemoteDeviceStatus
@@ -45,6 +47,11 @@ class AuthServiceTest {
     private val auditPublisher = mock<AuditPublisher>()
     private val tenantClient = mock<TenantClient>()
     private val service = AuthService(identityClient, geoClient, policyClient, deviceClient, sessionClient, auditPublisher, tenantClient)
+
+    init {
+        // The platform sign-in rule is off unless a test says otherwise.
+        whenever(tenantClient.checkLoginDevice(any())).thenReturn(LoginDeviceCheckResponse(allowed = true))
+    }
 
     private val tenantId = UUID.randomUUID()
     private val userId = UUID.randomUUID()
@@ -411,6 +418,112 @@ class AuthServiceTest {
         val result = service.login(request.copy(deviceProof = proof))
 
         assertEquals("tok-plain", result.token)
+    }
+
+    // ---- Platform-level "authorised laptop to sign in" rule ----
+
+    @Test
+    fun `when the tenant rule refuses the laptop, no session is issued and the reason is audited`() {
+        arrangeSuccessfulPasswordAndPush()
+        whenever(tenantClient.checkLoginDevice(any())).thenReturn(LoginDeviceCheckResponse(false, "DEVICE_NON_COMPLIANT"))
+
+        val ex = assertThrows<LoginDeniedException> { service.login(request) }
+
+        assertEquals(AuthErrorCode.DEVICE_NON_COMPLIANT, ex.errorCode)
+        verify(sessionClient, never()).issue(any(), any(), any(), any(), any())
+        verify(sessionClient, never()).issueForDevice(any(), any(), anyOrNull(), any(), anyOrNull(), any())
+        val captor = argumentCaptor<AuditEvent>()
+        verify(auditPublisher, org.mockito.kotlin.atLeastOnce()).publish(captor.capture())
+        assertEquals(true, captor.allValues.any { it.action == "auth.login_denied" && it.result == AuditResult.DENIED && it.reason!!.contains("device_non_compliant") })
+        assertEquals(false, captor.allValues.any { it.action == "auth.login_success" })
+    }
+
+    @Test
+    fun `each refusal code the tenant service can answer reaches the caller as its own error code`() {
+        arrangeSuccessfulPasswordAndPush()
+        for (code in listOf("DEVICE_REQUIRED", "DEVICE_NOT_APPROVED", "DEVICE_NON_COMPLIANT")) {
+            whenever(tenantClient.checkLoginDevice(any())).thenReturn(LoginDeviceCheckResponse(false, code))
+            assertEquals(AuthErrorCode.valueOf(code), assertThrows<LoginDeniedException> { service.login(request) }.errorCode, code)
+        }
+    }
+
+    @Test
+    fun `an unknown refusal code is treated as DEVICE_REQUIRED, never as allowed`() {
+        arrangeSuccessfulPasswordAndPush()
+        whenever(tenantClient.checkLoginDevice(any())).thenReturn(LoginDeviceCheckResponse(false, "SOMETHING_NEW"))
+        assertEquals(AuthErrorCode.DEVICE_REQUIRED, assertThrows<LoginDeniedException> { service.login(request) }.errorCode)
+        whenever(tenantClient.checkLoginDevice(any())).thenReturn(LoginDeviceCheckResponse(false, null))
+        assertEquals(AuthErrorCode.DEVICE_REQUIRED, assertThrows<LoginDeniedException> { service.login(request) }.errorCode)
+    }
+
+    @Test
+    fun `if the rule cannot be checked the sign-in fails closed with its own code`() {
+        arrangeSuccessfulPasswordAndPush()
+        whenever(tenantClient.checkLoginDevice(any())).thenThrow(RuntimeException("tenant-svc is down"))
+
+        val ex = assertThrows<LoginDeniedException> { service.login(request) }
+
+        assertEquals(AuthErrorCode.DEVICE_CHECK_UNAVAILABLE, ex.errorCode)
+        verify(sessionClient, never()).issue(any(), any(), any(), any(), any())
+    }
+
+    @Test
+    fun `an open circuit breaker also fails closed`() {
+        arrangeSuccessfulPasswordAndPush()
+        val breaker = io.github.resilience4j.circuitbreaker.CircuitBreaker.ofDefaults("tenant-svc")
+        whenever(tenantClient.checkLoginDevice(any())).thenThrow(CallNotPermittedException.createCallNotPermittedException(breaker))
+        assertEquals(AuthErrorCode.DEVICE_CHECK_UNAVAILABLE, assertThrows<LoginDeniedException> { service.login(request) }.errorCode)
+    }
+
+    @Test
+    fun `the rule is asked about the authenticated user, their role and the verified device`() {
+        arrangeSuccessfulPasswordAndPush()
+        whenever(identityClient.verifyPassword(tenantId, "alice@acme.com", "correct-password"))
+            .thenReturn(VerifyPasswordResponse(valid = true, userId = userId, status = RemoteUserStatus.ACTIVE, role = RemoteUserRole.ADMIN))
+        whenever(tenantClient.verifyDeviceProof(eq(proof.challengeId), any())).thenReturn(VerifiedDeviceProof(proof.deviceId, "SOFTWARE"))
+        whenever(sessionClient.issueForDevice(eq(tenantId), eq(userId), eq("8.8.8.8"), any(), any(), eq(proof.deviceId)))
+            .thenReturn(IssuedSession("tok-device", UUID.randomUUID(), Instant.now()))
+
+        service.login(request.copy(deviceProof = proof))
+
+        val captor = argumentCaptor<LoginDeviceCheckRequest>()
+        verify(tenantClient).checkLoginDevice(captor.capture())
+        assertEquals(tenantId, captor.firstValue.tenantId)
+        assertEquals(userId, captor.firstValue.userId)
+        assertEquals("ADMIN", captor.firstValue.role)
+        assertEquals(proof.deviceId.toString(), captor.firstValue.deviceId)
+    }
+
+    @Test
+    fun `a sign-in with no proof is checked with no device, and a rejected proof counts as no device`() {
+        arrangeSuccessfulPasswordAndPush()
+        service.login(request)
+        whenever(tenantClient.verifyDeviceProof(any(), any())).thenReturn(null)
+        service.login(request.copy(deviceProof = proof))
+        val captor = argumentCaptor<LoginDeviceCheckRequest>()
+        verify(tenantClient, org.mockito.kotlin.times(2)).checkLoginDevice(captor.capture())
+        assertEquals(listOf(null, null), captor.allValues.map { it.deviceId })
+    }
+
+    @Test
+    fun `the enrollment sign-in skips the rule, is audited as such, and still issues a session`() {
+        arrangeSuccessfulPasswordAndPush()
+        whenever(tenantClient.checkLoginDevice(any())).thenReturn(LoginDeviceCheckResponse(false, "DEVICE_REQUIRED"))
+
+        val result = service.login(request, enforceDeviceRule = false)
+
+        assertEquals("tok-plain", result.token)
+        verify(tenantClient, never()).checkLoginDevice(any())
+        val captor = argumentCaptor<AuditEvent>()
+        verify(auditPublisher, org.mockito.kotlin.atLeastOnce()).publish(captor.capture())
+        assertEquals(true, captor.allValues.any { it.action == "auth.login.enrollment_signin" })
+    }
+
+    @Test
+    fun `the rule never runs for a bad password, a suspended account or a policy denial`() {
+        whenever(identityClient.verifyPassword(tenantId, "alice@acme.com", "correct-password")).thenReturn(VerifyPasswordResponse(valid = false))
+        assertThrows<InvalidCredentialsException> { service.login(request) }
+        verify(tenantClient, never()).checkLoginDevice(any())
     }
 
     @Test

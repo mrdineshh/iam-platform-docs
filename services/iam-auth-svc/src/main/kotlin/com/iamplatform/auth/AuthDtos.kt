@@ -109,6 +109,12 @@ enum class AuthErrorCode {
     TOTP_LOCKED,
     PUSH_DENIED,
     PUSH_TIMEOUT,
+
+    // Platform-level sign-in rule (docs/DECISIONS.md, 2026-11-19): the tenant requires an authorised laptop to sign in.
+    DEVICE_REQUIRED,
+    DEVICE_NOT_APPROVED,
+    DEVICE_NON_COMPLIANT,
+    DEVICE_CHECK_UNAVAILABLE,
 }
 
 class LoginDeniedException(reason: String, val errorCode: AuthErrorCode) : RuntimeException(reason)

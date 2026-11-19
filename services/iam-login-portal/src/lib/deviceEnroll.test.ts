@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { isValidKeyThumbprint, isValidState, loopbackCallbackUrl, parseLoopbackRedirectUri, safePostLoginNext } from "./deviceEnroll";
+import { isValidKeyThumbprint, isValidState, loopbackCallbackUrl, parseEnrollmentHandoff, parseLoopbackRedirectUri, safePostLoginNext } from "./deviceEnroll";
 
 describe("parseLoopbackRedirectUri", () => {
   it("accepts IPv4 and IPv6 loopback literals with an explicit port and the /callback path", () => {
@@ -73,5 +73,34 @@ describe("loopbackCallbackUrl", () => {
     expect(url.origin).toBe("http://127.0.0.1:5000");
     expect(url.pathname).toBe("/callback");
     expect(url.searchParams.get("nonce")).toBe("a+b/c=");
+  });
+});
+
+describe("parseEnrollmentHandoff", () => {
+  const THUMB = "ungWv48Bz-pBQUDeXa4iI7ADYaOWF3qctBD_YfIAFa0";
+  const STATE = "s".repeat(32);
+  const link = (redirect: string, thumb = THUMB, state = STATE) =>
+    `/device-enroll?redirect_uri=${encodeURIComponent(redirect)}&key_thumbprint=${thumb}&state=${state}`;
+
+  it("accepts the link the agent opens, and returns its three validated parts", () => {
+    const h = parseEnrollmentHandoff(link("http://127.0.0.1:47000/callback"));
+    expect(h?.redirectUri.toString()).toBe("http://127.0.0.1:47000/callback");
+    expect(h?.keyThumbprint).toBe(THUMB);
+    expect(h?.state).toBe(STATE);
+  });
+
+  it.each([
+    "https://evil.example/callback",
+    "http://localhost:47000/callback",
+    "http://127.0.0.1/callback",
+    "http://127.0.0.1:47000/other",
+  ])("refuses a redirect to %s (no open redirect)", (uri) => {
+    expect(parseEnrollmentHandoff(link(uri))).toBeNull();
+  });
+
+  it("refuses a malformed key thumbprint or state, or a missing parameter", () => {
+    expect(parseEnrollmentHandoff(link("http://127.0.0.1:47000/callback", "short"))).toBeNull();
+    expect(parseEnrollmentHandoff(link("http://127.0.0.1:47000/callback", THUMB, "!!"))).toBeNull();
+    expect(parseEnrollmentHandoff(`/device-enroll?state=${STATE}`)).toBeNull();
   });
 });

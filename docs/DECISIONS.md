@@ -2503,3 +2503,34 @@ any login work itself.
   reason, remove idempotent); whole tenant suite on the VM: 229 tests, 0 failures. Not tested live in a browser yet.
   Still open: an exception does not end when the laptop's posture becomes compliant (it simply stops mattering); there is no list of all active
   exceptions or reminder before one expires.
+
+- **2026-11-19 -- Platform-level sign-in rule: only an authorised laptop may sign in (new tenant setting, off by default). Tier 3, choices made by the user.**
+  Request: besides the per-app "trusted device" rule, refuse the sign-in itself, at the sign-in screen, with "you are not authorised to sign in from
+  this device". Choices put to the user and answered: applies to everyone EXCEPT administrators; "authorised" = approved AND compliant (the same rule
+  as apps, so an admin's compliance exception counts); the refusal states the specific reason.
+  Where it lives: the decision is made by iam-tenant-svc (`DeviceLoginRuleService`, which owns the tenant switch and the device state; it reuses the new
+  `TrustedDeviceGate.evaluateDevice`, so apps and sign-in cannot disagree) and ENFORCED in iam-auth-svc `AuthService.login`, after the password,
+  policy and second factor, and after the device proof is verified, but before any session exists (AP-1 one engine, AP-3 no session without the
+  platform deciding). It is asked over `POST /internal/login-device-check` (InternalOnlyFilter: 404 through the public proxy). It FAILS CLOSED: if the
+  check cannot be made the sign-in is refused with DEVICE_CHECK_UNAVAILABLE, never let through. Refusals are audited by auth-svc as `auth.login_denied`
+  (reason `device not authorised: ...`); a sign-in let in only because of a compliance exception is audited as `auth.login.allowed_compliance_exception`.
+  The switch: table `tenant_device_login_rule` (V15, no row = off), `GET/PUT /api/v1/endpoint/login-rule` (tenant admin; changes audited as
+  `tenant.device_login_rule.enabled/disabled`), a checkbox on Endpoint Security whose confirmation lists the active users who own no approved laptop and
+  would be refused. Four new `AuthErrorCode`s: DEVICE_REQUIRED, DEVICE_NOT_APPROVED, DEVICE_NON_COMPLIANT, DEVICE_CHECK_UNAVAILABLE, each with its own
+  portal message.
+  The trap and how it is closed: a new laptop has to sign in once to register itself, so the rule cannot apply to that one sign-in. A flag on the public
+  login request, or letting the portal's enrollment sign-in set the normal SSO cookie, would let anyone skip the rule: /device-enroll can be opened by
+  anyone, and a signed-in browser is a working sign-in. So the enrollment sign-in uses a separate route, `POST /internal/login/enrollment` on auth-svc
+  (service-to-service only, the same InternalOnlyFilter idea; `enforceDeviceRule=false` is a method parameter, not a request field), and the portal
+  (`finishEnrollmentSignIn`) uses that session only server-side to start the enrollment, then logs it out, and NEVER sets the SSO cookie. The only
+  thing such a sign-in can produce is a laptop of the user's own that waits for approval. Audited as `auth.login.enrollment_signin`.
+  Checked live from the internet: `/internal/login/enrollment` and `/internal/login-device-check` both answer 404; `/api/v1/login` exists. From inside
+  the network the device check answers allowed for a tenant with the rule off, and the enrollment route exists.
+  Tests: tenant `DeviceLoginRuleServiceTest` (admin exempt, every refusal reason, exception, expired exception, switch audit), auth `AuthServiceTest`
+  additions (refusal issues no session, each code, unknown code, fail closed on error and on an open breaker, who/role/device asked about, enrollment
+  skips the rule and is audited, bad password never reaches the rule) and `InternalOnlyFilterTest`, portal `deviceEnroll.test.ts` and message tests.
+  Whole suites on the VM: tenant 243 and auth 43, 0 failures; portal 80 passed (run locally). NOT yet tried live in a browser, and the rule has never been switched on.
+  Known limits: (1) admin "Switch user" (ImpersonateController) issues a session for another user without a sign-in, so it is not subject to this rule
+  (apps still apply their own); (2) with the rule on, a user whose only laptop is still pending cannot sign in until it is approved, by design; (3) the
+  agent's enrollment link opened with the old 0.3.3 agent can still reuse an existing browser session (the `prompt=login` change still needs a new MSI);
+  (4) the rule is checked after the second factor, so a person with only a password is not told whether their laptop would have been accepted.

@@ -86,3 +86,22 @@ describe("which app refusal it was", () => {
     expect(isAccessDenialReason(undefined)).toBe(false);
   });
 });
+
+describe("platform sign-in rule messages", () => {
+  it("each device refusal code has its own plain-language message that starts with the same sentence", () => {
+    for (const code of ["DEVICE_REQUIRED", "DEVICE_NOT_APPROVED", "DEVICE_NON_COMPLIANT"]) {
+      expect(denialMessage(code, "fallback")).toMatch(/^You are not authorised to sign in from this device/);
+    }
+  });
+
+  it("tells the person what to do in each case", () => {
+    expect(denialMessage("DEVICE_REQUIRED", "x")).toMatch(/Install your company's endpoint agent/);
+    expect(denialMessage("DEVICE_NOT_APPROVED", "x")).toMatch(/not been approved/);
+    expect(denialMessage("DEVICE_NON_COMPLIANT", "x")).toMatch(/security requirements/);
+  });
+
+  it("an unreachable check is a retry message, not an accusation", () => {
+    expect(denialMessage("DEVICE_CHECK_UNAVAILABLE", "x")).toMatch(/try again/);
+  });
+});
+

@@ -10,6 +10,7 @@ import com.iamplatform.auth.client.RemotePushResult
 import com.iamplatform.auth.client.RemoteUserRole
 import com.iamplatform.auth.client.RemoteUserStatus
 import com.iamplatform.auth.client.GeoResolution
+import com.iamplatform.auth.client.LoginDeviceCheckRequest
 import com.iamplatform.auth.client.SessionClient
 import com.iamplatform.auth.client.SessionContext
 import com.iamplatform.auth.client.TenantClient
@@ -24,6 +25,9 @@ import org.springframework.stereotype.Service
 import org.springframework.web.client.HttpClientErrorException
 import org.springframework.web.client.ResourceAccessException
 import java.util.UUID
+
+// The only codes iam-tenant-svc's device check may answer with; anything else is treated as DEVICE_REQUIRED.
+private val DEVICE_RULE_CODES = listOf(AuthErrorCode.DEVICE_REQUIRED, AuthErrorCode.DEVICE_NOT_APPROVED, AuthErrorCode.DEVICE_NON_COMPLIANT)
 
 private data class PolicyDecision(
     val allowed: Boolean,
@@ -50,7 +54,13 @@ class AuthService(
     private val tenantClient: TenantClient,
 ) {
 
-    fun login(request: LoginRequest): LoginResponse {
+    /**
+     * @param enforceDeviceRule false ONLY for the device-enrollment sign-in, which arrives on the service-to-service-only
+     * route (InternalOnlyFilter) and whose session the portal never hands to the browser. A new laptop has to sign in once to
+     * register itself, so the tenant's "authorised laptop to sign in" rule cannot apply to that one step. The public /login
+     * route always enforces it, and this is a parameter, not a request field, so no caller can switch it off.
+     */
+    fun login(request: LoginRequest, enforceDeviceRule: Boolean = true): LoginResponse {
         val correlationId = CorrelationId.get()
 
         val verified = identityClient.verifyPassword(request.tenantId, request.email, request.password)
@@ -133,6 +143,12 @@ class AuthService(
         val context = SessionContext(request.userAgent, country, geo?.region, geo?.city)
         // Device-bound sign-in. Looked at only when the caller sent a proof; otherwise this line changes nothing.
         val deviceId = request.deviceProof?.let { verifiedDeviceId(request, userId, it, country) }
+        val role = verified.role ?: RemoteUserRole.USER
+        if (enforceDeviceRule) {
+            enforceTenantDeviceRule(request, userId, role, deviceId, country, decision.scope)
+        } else {
+            audit(request.tenantId, userId.toString(), "auth.login.enrollment_signin", AuditResult.SUCCESS, null, request.sourceIp, geo = country)
+        }
         val session = if (deviceId != null) {
             sessionClient.issueForDevice(request.tenantId, userId, request.sourceIp, idempotencyKey = correlationId, context = context, deviceId = deviceId)
         } else {
@@ -144,7 +160,29 @@ class AuthService(
         val where = listOf(place, request.userAgent?.take(120).orEmpty()).filter { it.isNotBlank() }.joinToString(" | ").ifBlank { null }
         audit(request.tenantId, userId.toString(), "auth.login_success", AuditResult.SUCCESS, where, request.sourceIp, geo = country)
 
-        return LoginResponse(session.token, session.sessionId, session.expiresAt, role = (verified.role ?: RemoteUserRole.USER).name)
+        return LoginResponse(session.token, session.sessionId, session.expiresAt, role = role.name)
+    }
+
+    /**
+     * Platform-level "authorised laptop" rule, decided by iam-tenant-svc (which owns the tenant's switch and the device
+     * state) and enforced here, before any session exists. Fails CLOSED: if the answer cannot be had, the sign-in is
+     * refused with its own code, never let through (AP-3: no path where a session is issued without the platform deciding).
+     */
+    private fun enforceTenantDeviceRule(request: LoginRequest, userId: UUID, role: RemoteUserRole, deviceId: UUID?, country: String?, scope: String?) {
+        val answer = try {
+            tenantClient.checkLoginDevice(LoginDeviceCheckRequest(request.tenantId, userId, role.name, deviceId?.toString()))
+        } catch (ex: Exception) {
+            audit(
+                request.tenantId, userId.toString(), "auth.login_denied", AuditResult.DENIED,
+                "device rule could not be checked", request.sourceIp, geo = country, policyScopeApplied = scope,
+            )
+            throw LoginDeniedException("device rule could not be checked", AuthErrorCode.DEVICE_CHECK_UNAVAILABLE)
+        }
+        if (answer.allowed) return
+        val code = DEVICE_RULE_CODES.firstOrNull { it.name == answer.code } ?: AuthErrorCode.DEVICE_REQUIRED
+        val reason = "device not authorised: ${code.name.lowercase()}${answer.detail?.let { " ($it)" } ?: ""}"
+        audit(request.tenantId, userId.toString(), "auth.login_denied", AuditResult.DENIED, reason, request.sourceIp, geo = country, policyScopeApplied = scope)
+        throw LoginDeniedException("You are not authorised to sign in from this device.", code)
     }
 
     /**

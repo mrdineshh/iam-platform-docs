@@ -4,13 +4,13 @@ import { cookies, headers } from "next/headers";
 import { redirect } from "next/navigation";
 import { randomUUID } from "node:crypto";
 import { config } from "@/lib/config";
-import { login, precheck, type LoginResponse } from "@/lib/authClient";
+import { login, loginForEnrollment, precheck, type LoginResponse } from "@/lib/authClient";
 import { completeAuthorization } from "@/lib/oidcClient";
 import { ACCESS_DENIAL_MESSAGES, accessDenialReason, denialMessage, isAppAccessDenied } from "@/lib/errorCodes";
 import { UpstreamError } from "@/lib/http";
 import { findTenantBySubdomain, resolveTenantSubdomain, type Tenant } from "@/lib/tenant";
 import { str } from "@/lib/formData";
-import { POST_LOGIN_NEXT_COOKIE, safePostLoginNext } from "@/lib/deviceEnroll";
+import { POST_LOGIN_NEXT_COOKIE, loopbackCallbackUrl, parseEnrollmentHandoff, safePostLoginNext, startDeviceEnrollment } from "@/lib/deviceEnroll";
 import { deviceSignInRequired, issueDeviceChallenge } from "@/lib/deviceChallenge";
 import { parseDeviceProofField, type DeviceChallenge } from "@/lib/deviceProof";
 import type { LoginFormState, PrecheckActionInput, PrecheckActionResult } from "./types";
@@ -148,9 +148,14 @@ export async function loginAction(_prevState: LoginFormState, formData: FormData
     return { error: tenant.error };
   }
 
+  // The sign-in the agent started to register a new laptop (the /device-enroll link is parked in a cookie). The tenant's
+  // "authorised laptop to sign in" rule cannot apply to it -- the laptop does not exist yet -- so it goes through the
+  // service-to-service enrollment route, and its session is NEVER handed to the browser (see finishEnrollmentSignIn).
+  const enrollmentNext = portalMode ? safePostLoginNext((await cookies()).get(POST_LOGIN_NEXT_COOKIE)?.value) : null;
+
   let loginResult: LoginResponse;
   try {
-    loginResult = await login(
+    loginResult = await (enrollmentNext ? loginForEnrollment : login)(
       {
         tenantId: tenant.id,
         email,
@@ -181,6 +186,10 @@ export async function loginAction(_prevState: LoginFormState, formData: FormData
   // treating that as signed-in.
   if (!loginResult.token) {
     return { error: "Sign-in could not be completed. Please start again." };
+  }
+
+  if (enrollmentNext) {
+    return finishEnrollmentSignIn(loginResult.token, enrollmentNext, correlationId);
   }
 
   // Single sign-on: remember this session in the browser so the *next*
@@ -226,4 +235,41 @@ export async function loginAction(_prevState: LoginFormState, formData: FormData
   }
 
   redirect(redirectTarget);
+}
+
+/**
+ * Finishes the sign-in that exists only to register a laptop: start the enrollment with the session, end the session, and send
+ * the browser back to the agent's loopback listener with just the single-use, key-bound transaction. No SSO cookie is ever set,
+ * so a person who reaches this path (anyone can open /device-enroll) cannot use it to get a working sign-in around the
+ * tenant's "authorised laptop to sign in" rule: the only thing they can do is enrol a laptop of their own, which then waits
+ * for an administrator's approval like any other.
+ */
+async function finishEnrollmentSignIn(token: string, next: string, correlationId: string): Promise<never> {
+  const handoff = parseEnrollmentHandoff(next);
+  let target: string | null = null;
+  if (handoff) {
+    try {
+      const authorization = await startDeviceEnrollment(token, handoff.keyThumbprint, correlationId);
+      target = loopbackCallbackUrl(handoff.redirectUri, {
+        enrollment_transaction_id: authorization.enrollmentTransactionId,
+        nonce: authorization.nonce,
+        state: handoff.state,
+      });
+    } catch (err) {
+      console.error("[loginAction] enrollment/start failed", err);
+      // redirect_uri was validated as loopback, so telling the agent lets it stop waiting instead of hanging.
+      target = loopbackCallbackUrl(handoff.redirectUri, { error: "temporarily_unavailable", state: handoff.state });
+    }
+  }
+  try {
+    await fetch(`${config.authSvcUrl}/api/v1/logout`, {
+      method: "POST",
+      headers: { "X-Session-Token": token },
+      signal: AbortSignal.timeout(config.defaultTimeoutMs),
+    });
+  } catch {
+    // Best effort: the session was never given to the browser, and expires on its own.
+  }
+  (await cookies()).delete(POST_LOGIN_NEXT_COOKIE);
+  redirect(target ?? "/login/error?reason=device_enroll_invalid");
 }

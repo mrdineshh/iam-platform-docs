@@ -1,6 +1,6 @@
 import { Fragment, useEffect, useRef, useState } from "react";
 import {
-  approveDevice, decommissionDevice, grantComplianceException, listDeviceEvents, removeComplianceException, listDevices, rejectDevice, revokeDevice, suspendDevice, type DeviceEvent, type DeviceSummary, type PostureSignals,
+  approveDevice, decommissionDevice, getLoginRule, grantComplianceException, listDeviceEvents, removeComplianceException, setLoginRule, listDevices, rejectDevice, revokeDevice, suspendDevice, type DeviceEvent, type DeviceSummary, type PostureSignals,
 } from "@/lib/devices";
 import { listTenantUsers, type AdminUserListEntry } from "@/lib/impersonate";
 import { loadSession } from "@/lib/session";
@@ -30,15 +30,19 @@ export function EndpointDevicesPage() {
   const [query, setQuery] = useState("");
   const [showGuide, setShowGuide] = useState(false);
   const [exceptionFor, setExceptionFor] = useState<DeviceSummary | null>(null);
+  const [loginRule, setLoginRuleState] = useState<boolean | null>(null);
+  const [savingRule, setSavingRule] = useState(false);
 
   async function load() {
     setLoading(true);
     setError(null);
     try {
-      const [deviceList, userList] = await Promise.all([
+      const [deviceList, userList, rule] = await Promise.all([
         listDevices(session.tenantId, session.token),
         listTenantUsers(session.tenantId, session.token),
+        getLoginRule(session.tenantId, session.token),
       ]);
+      setLoginRuleState(rule);
       setAllDevices(deviceList);
       setUsers(Object.fromEntries(userList.map((u) => [u.id, u])));
     } catch (err) {
@@ -135,6 +139,47 @@ export function EndpointDevicesPage() {
       toast.error(errorMessage(err));
     } finally {
       setActingOn(null);
+    }
+  }
+
+  // Active non-admin users who own no approved laptop: the people who could no longer sign in the moment the rule is on.
+  function usersWithoutApprovedLaptop(): AdminUserListEntry[] {
+    const hasApproved = new Set((allDevices ?? []).filter((d) => d.lifecycleStatus === "APPROVED").map((d) => d.userId));
+    return Object.values(users).filter((u) => u.role === "USER" && u.status === "ACTIVE" && !hasApproved.has(u.id));
+  }
+
+  async function handleToggleLoginRule(next: boolean) {
+    if (next) {
+      const locked = usersWithoutApprovedLaptop();
+      const ok = await confirm({
+        title: "Require an authorised laptop to sign in?",
+        message: (
+          <>
+            From now on, people who are not administrators can only sign in from a laptop that is approved and passes the
+            security checks. Anyone else is told at the sign-in screen that they are not authorised, and is not signed in.
+            Administrators are never affected, and registering a new laptop is always allowed.
+            {locked.length > 0 ? (
+              <>
+                {" "}<strong>{locked.length} active user{locked.length === 1 ? " has" : "s have"} no approved laptop yet and could not sign in:</strong>{" "}
+                {locked.slice(0, 8).map((u) => u.email).join(", ")}{locked.length > 8 ? `, and ${locked.length - 8} more` : ""}.
+              </>
+            ) : null}
+          </>
+        ),
+        confirmLabel: "Turn on",
+        danger: true,
+      });
+      if (!ok) return;
+    }
+    setSavingRule(true);
+    try {
+      await setLoginRule(session.tenantId, next, session.token);
+      setLoginRuleState(next);
+      toast.success(next ? "Sign-in now requires an authorised laptop (administrators excepted)." : "Sign-in no longer requires an authorised laptop.");
+    } catch (err) {
+      toast.error(errorMessage(err));
+    } finally {
+      setSavingRule(false);
     }
   }
 
@@ -237,6 +282,26 @@ export function EndpointDevicesPage() {
       />
 
       {error && <Alert kind="error">{error}</Alert>}
+
+      {loginRule !== null && (
+        <div className="table-card" style={{ padding: "14px 18px", marginBottom: 14 }}>
+          <label className="checkbox-field">
+            <input
+              type="checkbox"
+              checked={loginRule}
+              disabled={savingRule}
+              onChange={(e) => void handleToggleLoginRule(e.target.checked)}
+            />
+            <strong>Only allow sign-in from an approved, compliant laptop</strong>
+            {loginRule && <StatusBadge tone="warning">On</StatusBadge>}
+          </label>
+          <p className="posture-panel__muted" style={{ margin: "6px 0 0" }}>
+            Platform-wide, at the sign-in screen (apps can still ask for more). People who are not administrators are told
+            "You are not authorised to sign in from this device" and are not signed in. Administrators are never affected,
+            so a broken laptop cannot lock you out of this console, and registering a new laptop is always allowed. Off by default.
+          </p>
+        </div>
+      )}
 
       {loading && !devices ? (
         <SkeletonRows rows={6} />

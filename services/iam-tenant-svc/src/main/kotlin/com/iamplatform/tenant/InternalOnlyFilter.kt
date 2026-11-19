@@ -31,7 +31,7 @@ class InternalOnlyFilter : OncePerRequestFilter() {
     }
 
     companion object {
-        private val GUARDED_PREFIXES = listOf("/internal/device-challenges", "/internal/agent-releases")
+        private val GUARDED_PREFIXES = listOf("/internal/device-challenges", "/internal/agent-releases", "/internal/login-device-check")
         private val PROXY_HEADERS = listOf("X-Forwarded-For", "X-Forwarded-Host", "X-Forwarded-Proto", "Forwarded", "X-Real-IP")
 
         fun isGuarded(uri: String): Boolean = GUARDED_PREFIXES.any { uri == it || uri.startsWith("$it/") }

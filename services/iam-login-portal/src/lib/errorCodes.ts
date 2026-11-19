@@ -20,7 +20,11 @@ export type AuthErrorCode =
   | "TOTP_INVALID"
   | "TOTP_LOCKED"
   | "PUSH_DENIED"
-  | "PUSH_TIMEOUT";
+  | "PUSH_TIMEOUT"
+  | "DEVICE_REQUIRED"
+  | "DEVICE_NOT_APPROVED"
+  | "DEVICE_NON_COMPLIANT"
+  | "DEVICE_CHECK_UNAVAILABLE";
 
 /** User-facing copy per denial cause -- never the raw backend `message`. */
 export function denialMessage(errorCode: string | undefined, fallback: string): string {
@@ -51,6 +55,15 @@ export function denialMessage(errorCode: string | undefined, fallback: string): 
       return "The sign-in request was denied on your device.";
     case "PUSH_TIMEOUT":
       return "No response was received on your device in time.";
+    // Platform sign-in rule: the company only lets people in from an authorised laptop.
+    case "DEVICE_REQUIRED":
+      return "You are not authorised to sign in from this device. Install your company's endpoint agent on this laptop, then sign in again.";
+    case "DEVICE_NOT_APPROVED":
+      return "You are not authorised to sign in from this device yet: this laptop has not been approved. Ask your administrator.";
+    case "DEVICE_NON_COMPLIANT":
+      return "You are not authorised to sign in from this device: it does not meet the security requirements (for example disk encryption or the firewall is off). Ask your administrator.";
+    case "DEVICE_CHECK_UNAVAILABLE":
+      return "We couldn't check this device right now. Please try again shortly.";
     default:
       return fallback;
   }

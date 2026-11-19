@@ -209,10 +209,22 @@ class InternalDeviceChallengeController(
     ): ResponseEntity<DeviceChallengeVerifyResponse> = ResponseEntity.ok(service.verify(challengeId, request, null))
 }
 
+/** Why a laptop was not accepted. One vocabulary for the per-app rule and the platform sign-in rule. */
+enum class DeviceDenial { NO_DEVICE, NOT_REGISTERED, NOT_APPROVED, NON_COMPLIANT }
+
+/**
+ * The outcome of looking at the laptop a sign-in session carries. [denial] null means accepted; [exceptionUsed] is true
+ * only when an admin's compliance exception is what let it through (so the use can be audited).
+ */
+data class DeviceVerdict(val denial: DeviceDenial?, val deviceId: UUID?, val status: String?, val exceptionUntil: Instant?, val exceptionUsed: Boolean)
+
 /**
  * The "trusted device required" rule for an application (decision D2/D4 in the spec). Called after the normal group
  * check allowed the user in; returns a denial, or null when it has no objection. Applies to administrators too -- an
  * admin without an approved, compliant laptop must not reach a flagged app either.
+ *
+ * [evaluateDevice] is the one place that decides whether a laptop is good enough; the platform sign-in rule
+ * (DeviceLoginRuleService) uses it too, so apps and sign-in can never disagree about what "authorised laptop" means.
  */
 @Service
 class TrustedDeviceGate(
@@ -222,6 +234,33 @@ class TrustedDeviceGate(
     private val posture: DevicePostureRepository,
     private val auditPublisher: AuditPublisher,
 ) {
+    fun evaluateDevice(tenantId: UUID, userId: UUID, sessionDeviceId: String?, allowPending: Boolean): DeviceVerdict {
+        val deviceId = sessionDeviceId?.let { runCatching { UUID.fromString(it) }.getOrNull() }
+        val device = deviceId?.let { devices.findById(it).orElse(null) }?.takeIf { it.tenantId == tenantId && it.userId == userId }
+        // An admin's time-limited compliance exception waives the security checks only -- and with them the
+        // NON_COMPLIANT lifecycle state those checks cause. Never pending, suspended, revoked or someone else's laptop.
+        val exempt = device?.complianceExceptionActive() == true
+        // Spec 6.4: an app's own policy decides whether a laptop still awaiting approval may open it. Anything else that is not
+        // APPROVED (suspended, revoked, rejected, non-compliant lifecycle...) stays refused, whatever that setting says.
+        val acceptedStates = buildSet {
+            add(DeviceLifecycleStatus.APPROVED.name)
+            if (allowPending) add(DeviceLifecycleStatus.PENDING_APPROVAL.name)
+            if (exempt) add(DeviceLifecycleStatus.NON_COMPLIANT.name)
+        }
+        val nonCompliant = device != null &&
+            posture.findById(device.id).map { it.postureStatus }.orElse(null) == PostureStatus.NON_COMPLIANT.name
+        val denial = when {
+            deviceId == null -> DeviceDenial.NO_DEVICE
+            device == null -> DeviceDenial.NOT_REGISTERED
+            device.lifecycleStatus !in acceptedStates -> DeviceDenial.NOT_APPROVED
+            nonCompliant && !exempt -> DeviceDenial.NON_COMPLIANT
+            else -> null
+        }
+        val exceptionUsed = denial == null && exempt && device != null &&
+            (nonCompliant || device.lifecycleStatus == DeviceLifecycleStatus.NON_COMPLIANT.name)
+        return DeviceVerdict(denial, deviceId, device?.lifecycleStatus, device?.complianceExceptionUntil, exceptionUsed)
+    }
+
     fun check(tenantId: UUID, userId: UUID, appKind: String, appId: UUID, sessionDeviceId: String?): AppAccessResponse? {
         // (requires a trusted device, also lets a pending laptop in)
         val (required, allowPending) = when (appKind.lowercase()) {
@@ -230,34 +269,21 @@ class TrustedDeviceGate(
             else -> false to false
         }
         if (!required) return null
-        // Spec 6.4: an app's own policy decides whether a laptop still awaiting approval may open it. Anything else that is not
-        // APPROVED (suspended, revoked, rejected, non-compliant lifecycle...) stays refused, whatever this setting says.
-        val deviceId = sessionDeviceId?.let { runCatching { UUID.fromString(it) }.getOrNull() }
-        val device = deviceId?.let { devices.findById(it).orElse(null) }?.takeIf { it.tenantId == tenantId && it.userId == userId }
-        // An admin's time-limited compliance exception waives the security checks only -- and with them the
-        // NON_COMPLIANT lifecycle state those checks cause. Never pending, suspended, revoked or someone else's laptop.
-        val exempt = device?.complianceExceptionActive() == true
-        val acceptedStates = buildSet {
-            add(DeviceLifecycleStatus.APPROVED.name)
-            if (allowPending) add(DeviceLifecycleStatus.PENDING_APPROVAL.name)
-            if (exempt) add(DeviceLifecycleStatus.NON_COMPLIANT.name)
-        }
-        val nonCompliant = device != null &&
-            posture.findById(device.id).map { it.postureStatus }.orElse(null) == PostureStatus.NON_COMPLIANT.name
+        val verdict = evaluateDevice(tenantId, userId, sessionDeviceId, allowPending)
         // iam-login-portal recognises these phrases to show a specific page (lib/errorCodes.ts, accessDenialReason).
         // Changing the wording only makes that page fall back to the generic message; keep them in step anyway.
-        val reason = when {
-            deviceId == null -> "This app needs a managed, approved device. Install the endpoint agent on your laptop and sign in again."
-            device == null -> "Your device is no longer registered. Enroll it again."
-            device.lifecycleStatus !in acceptedStates ->
-                "Your device is not approved (${device.lifecycleStatus.lowercase().replace('_', ' ')}). Ask your administrator."
-            nonCompliant && !exempt ->
+        val reason = when (verdict.denial) {
+            null -> null
+            DeviceDenial.NO_DEVICE -> "This app needs a managed, approved device. Install the endpoint agent on your laptop and sign in again."
+            DeviceDenial.NOT_REGISTERED -> "Your device is no longer registered. Enroll it again."
+            DeviceDenial.NOT_APPROVED ->
+                "Your device is not approved (${verdict.status.orEmpty().lowercase().replace('_', ' ')}). Ask your administrator."
+            DeviceDenial.NON_COMPLIANT ->
                 "Your device does not meet the security requirements. Your administrator can see which checks failed."
-            else -> null
         }
         if (reason == null) {
             // Let in only because of the exception: record it, so every such use traces back to the admin's decision.
-            if (exempt && device != null && (nonCompliant || device.lifecycleStatus == DeviceLifecycleStatus.NON_COMPLIANT.name)) {
+            if (verdict.exceptionUsed) {
                 auditPublisher.publish(
                     AuditEvent(
                         correlationId = CorrelationId.get(),
@@ -266,8 +292,8 @@ class TrustedDeviceGate(
                         actorId = userId.toString(),
                         action = "app.access.allowed_compliance_exception",
                         result = AuditResult.SUCCESS,
-                        reason = "appKind=$appKind; appId=$appId; exception until ${device.complianceExceptionUntil}",
-                        deviceId = deviceId.toString(),
+                        reason = "appKind=$appKind; appId=$appId; exception until ${verdict.exceptionUntil}",
+                        deviceId = verdict.deviceId.toString(),
                     ),
                 )
             }
@@ -283,7 +309,7 @@ class TrustedDeviceGate(
                 action = "app.access.denied_untrusted_device",
                 result = AuditResult.DENIED,
                 reason = reason,
-                deviceId = deviceId?.toString(),
+                deviceId = verdict.deviceId?.toString(),
             ),
         )
         return AppAccessResponse(false, reason)

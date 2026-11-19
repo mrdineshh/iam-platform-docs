@@ -61,6 +61,25 @@ export function safePostLoginNext(raw: string | undefined): string | null {
   return raw;
 }
 
+export interface EnrollmentHandoff {
+  redirectUri: URL;
+  keyThumbprint: string;
+  state: string;
+}
+
+/**
+ * Checks a saved /device-enroll link (from the iam_post_login_next cookie) exactly as /device-enroll itself checks the
+ * request: loopback redirect only, well-formed key thumbprint and state. Null if anything is off.
+ */
+export function parseEnrollmentHandoff(next: string): EnrollmentHandoff | null {
+  const params = new URL(next, "http://placeholder.invalid").searchParams;
+  const redirectUri = parseLoopbackRedirectUri(params.get("redirect_uri"));
+  const keyThumbprint = params.get("key_thumbprint");
+  const state = params.get("state");
+  if (!redirectUri || !isValidKeyThumbprint(keyThumbprint) || !isValidState(state)) return null;
+  return { redirectUri, keyThumbprint, state };
+}
+
 export interface EnrollmentAuthorization {
   enrollmentTransactionId: string;
   nonce: string;

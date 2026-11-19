@@ -112,6 +112,23 @@ export async function grantComplianceException(
 export const removeComplianceException = (tenantId: string, deviceId: string, sessionToken: string) =>
   deviceAction(tenantId, deviceId, "compliance-exception/remove", sessionToken);
 
+/** Platform-level sign-in rule: whether this tenant only lets people sign in from an approved, compliant laptop. Off by default. */
+export async function getLoginRule(tenantId: string, sessionToken: string): Promise<boolean> {
+  const r = await http.get<{ requireTrustedDevice: boolean }>(
+    `${config.tenantSvcUrl}/api/v1/endpoint/login-rule?tenantId=${encodeURIComponent(tenantId)}`,
+    { sessionToken },
+  );
+  return r.requireTrustedDevice;
+}
+
+export async function setLoginRule(tenantId: string, required: boolean, sessionToken: string): Promise<void> {
+  await http.put<unknown>(
+    `${config.tenantSvcUrl}/api/v1/endpoint/login-rule?tenantId=${encodeURIComponent(tenantId)}`,
+    { requireTrustedDevice: required },
+    { sessionToken },
+  );
+}
+
 // Mirrors iam-tenant-svc's DeviceEventResponse: one entry of a device's activity timeline (newest first).
 export interface DeviceEvent {
   eventType: string;

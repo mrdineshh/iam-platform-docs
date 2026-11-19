@@ -54,6 +54,17 @@ export async function login(request: LoginRequest, correlationId: string): Promi
 }
 
 /**
+ * The sign-in used to register a new laptop (/internal/login/enrollment on iam-auth-svc): the same checks as `login`, except
+ * the tenant's "authorised laptop to sign in" rule, because the laptop does not exist yet. That route answers 404 to anything
+ * that came through the public proxy. The session it returns must only ever be used server-side to start the enrollment and
+ * then ended -- never put in a cookie (see finishEnrollmentSignIn in app/login/actions.ts).
+ */
+export async function loginForEnrollment(request: LoginRequest, correlationId: string): Promise<LoginResponse> {
+  const timeoutMs = request.totpCode ? config.defaultTimeoutMs : config.pushWaitTimeoutMs;
+  return postJson<LoginResponse>(`${config.authSvcUrl}/internal/login/enrollment`, request, { correlationId, timeoutMs });
+}
+
+/**
  * Read-only preflight used by the login wizard's password step: finds out
  * whether a code screen is needed at all, and if so whether this is a
  * first-time enrollment, WITHOUT ever touching /login's blocking push path.
