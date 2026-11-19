@@ -42,7 +42,13 @@ class IamDeviceEntity(
     @Column(name = "created_at", nullable = false) var createdAt: Instant = Instant.now(),
     @Column(name = "updated_at", nullable = false) var updatedAt: Instant = Instant.now(),
     @Column(name = "last_seen_at") var lastSeenAt: Instant? = null,
-)
+    // Admin-granted exception to the compliance rule (see DeviceTrustService.grantComplianceException).
+    @Column(name = "compliance_exception_until") var complianceExceptionUntil: Instant? = null,
+    @Column(name = "compliance_exception_reason", length = 500) var complianceExceptionReason: String? = null,
+    @Column(name = "compliance_exception_by", length = 64) var complianceExceptionBy: String? = null,
+) {
+    fun complianceExceptionActive(now: Instant = Instant.now()): Boolean = complianceExceptionUntil?.isAfter(now) == true
+}
 
 @Entity
 @Table(name = "iam_device_hardware")
@@ -210,3 +216,4 @@ class DeviceNotFoundException(id: UUID) : RuntimeException("No device '$id' foun
 class EnrollmentTransactionInvalidException(message: String) : RuntimeException(message)
 class DeviceProofOfPossessionException(message: String) : RuntimeException(message)
 class DeviceLimitExceededException(message: String) : RuntimeException(message)
+class DeviceStateConflictException(message: String) : RuntimeException(message)

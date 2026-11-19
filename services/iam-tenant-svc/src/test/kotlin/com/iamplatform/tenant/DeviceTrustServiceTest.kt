@@ -306,6 +306,62 @@ class DeviceTrustServiceTest {
     }
 
     @Test
+    fun `grantComplianceException sets an end date, keeps the reason and records it`() {
+        val deviceId = UUID.randomUUID()
+        val device = IamDeviceEntity(deviceId, tenantId, userId, UUID.randomUUID(), ownership = "BYOD", lifecycleStatus = DeviceLifecycleStatus.APPROVED.name)
+        whenever(deviceRepository.findById(deviceId)).thenReturn(Optional.of(device))
+        val before = Instant.now()
+
+        service.grantComplianceException(tenantId, deviceId, "admin-1", 7, "  BitLocker rollout next week  ", "1.2.3.4")
+
+        val until = device.complianceExceptionUntil!!
+        assertTrue(until.isAfter(before.plusSeconds(7 * 86400 - 5)) && until.isBefore(Instant.now().plusSeconds(7 * 86400 + 5)))
+        assertEquals("BitLocker rollout next week", device.complianceExceptionReason)
+        assertEquals("admin-1", device.complianceExceptionBy)
+        assertTrue(device.complianceExceptionActive())
+        verify(auditPublisher).publish(argThat<AuditEvent> { action == "device.compliance_exception.granted" && reason!!.contains("BitLocker") })
+    }
+
+    @Test
+    fun `grantComplianceException refuses a device that is not approved`() {
+        for (status in listOf("PENDING_APPROVAL", "SUSPENDED", "REVOKED", "REJECTED", "DECOMMISSIONED")) {
+            val deviceId = UUID.randomUUID()
+            val device = IamDeviceEntity(deviceId, tenantId, userId, UUID.randomUUID(), ownership = "BYOD", lifecycleStatus = status)
+            whenever(deviceRepository.findById(deviceId)).thenReturn(Optional.of(device))
+            assertThrows<DeviceStateConflictException>(status) { service.grantComplianceException(tenantId, deviceId, "admin-1", 7, "why", null) }
+            assertNull(device.complianceExceptionUntil, status)
+        }
+    }
+
+    @Test
+    fun `grantComplianceException refuses more than 30 days, zero days and an empty reason`() {
+        val deviceId = UUID.randomUUID()
+        val device = IamDeviceEntity(deviceId, tenantId, userId, UUID.randomUUID(), ownership = "BYOD", lifecycleStatus = DeviceLifecycleStatus.APPROVED.name)
+        whenever(deviceRepository.findById(deviceId)).thenReturn(Optional.of(device))
+        assertThrows<IllegalArgumentException> { service.grantComplianceException(tenantId, deviceId, "admin-1", 31, "why", null) }
+        assertThrows<IllegalArgumentException> { service.grantComplianceException(tenantId, deviceId, "admin-1", 0, "why", null) }
+        assertThrows<IllegalArgumentException> { service.grantComplianceException(tenantId, deviceId, "admin-1", 7, "   ", null) }
+        assertNull(device.complianceExceptionUntil)
+    }
+
+    @Test
+    fun `removeComplianceException clears it, and does nothing when there is none`() {
+        val deviceId = UUID.randomUUID()
+        val device = IamDeviceEntity(
+            deviceId, tenantId, userId, UUID.randomUUID(), ownership = "BYOD", lifecycleStatus = DeviceLifecycleStatus.APPROVED.name,
+            complianceExceptionUntil = Instant.now().plusSeconds(3600), complianceExceptionReason = "x", complianceExceptionBy = "admin-1",
+        )
+        whenever(deviceRepository.findById(deviceId)).thenReturn(Optional.of(device))
+
+        service.removeComplianceException(tenantId, deviceId, "admin-2", null, null)
+        service.removeComplianceException(tenantId, deviceId, "admin-2", null, null)
+
+        assertNull(device.complianceExceptionUntil)
+        assertNull(device.complianceExceptionReason)
+        verify(auditPublisher).publish(argThat<AuditEvent> { action == "device.compliance_exception.removed" })
+    }
+
+    @Test
     fun `decommission retires the device and its certificate but deletes nothing`() {
         val deviceId = UUID.randomUUID()
         val device = IamDeviceEntity(deviceId, tenantId, userId, UUID.randomUUID(), ownership = "BYOD", lifecycleStatus = DeviceLifecycleStatus.APPROVED.name)

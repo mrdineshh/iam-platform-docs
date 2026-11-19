@@ -1,6 +1,6 @@
 import { Fragment, useEffect, useRef, useState } from "react";
 import {
-  approveDevice, decommissionDevice, listDeviceEvents, listDevices, rejectDevice, revokeDevice, suspendDevice, type DeviceEvent, type DeviceSummary, type PostureSignals,
+  approveDevice, decommissionDevice, grantComplianceException, listDeviceEvents, removeComplianceException, listDevices, rejectDevice, revokeDevice, suspendDevice, type DeviceEvent, type DeviceSummary, type PostureSignals,
 } from "@/lib/devices";
 import { listTenantUsers, type AdminUserListEntry } from "@/lib/impersonate";
 import { loadSession } from "@/lib/session";
@@ -29,6 +29,7 @@ export function EndpointDevicesPage() {
   const [filter, setFilter] = useState<FleetFilter>("ALL");
   const [query, setQuery] = useState("");
   const [showGuide, setShowGuide] = useState(false);
+  const [exceptionFor, setExceptionFor] = useState<DeviceSummary | null>(null);
 
   async function load() {
     setLoading(true);
@@ -129,6 +130,40 @@ export function EndpointDevicesPage() {
     try {
       await revokeDevice(session.tenantId, device.id, session.token);
       toast.success(`${deviceLabel(device)} revoked.`);
+      await load();
+    } catch (err) {
+      toast.error(errorMessage(err));
+    } finally {
+      setActingOn(null);
+    }
+  }
+
+  async function handleGrantException(device: DeviceSummary, days: number, reason: string) {
+    setActingOn(device.id);
+    try {
+      await grantComplianceException(session.tenantId, device.id, days, reason, session.token);
+      toast.success(`${deviceLabel(device)} may now open protected apps for ${days} day${days === 1 ? "" : "s"}, even though it fails security checks.`);
+      setExceptionFor(null);
+      await load();
+    } catch (err) {
+      toast.error(errorMessage(err));
+    } finally {
+      setActingOn(null);
+    }
+  }
+
+  async function handleEndException(device: DeviceSummary) {
+    const ok = await confirm({
+      title: "End this exception?",
+      message: <>{deviceLabel(device)} will be held to the security checks again straight away.</>,
+      confirmLabel: "End exception",
+      danger: true,
+    });
+    if (!ok) return;
+    setActingOn(device.id);
+    try {
+      await removeComplianceException(session.tenantId, device.id, session.token);
+      toast.success("Exception ended.");
       await load();
     } catch (err) {
       toast.error(errorMessage(err));
@@ -267,6 +302,11 @@ export function EndpointDevicesPage() {
                         {d.postureStatus === "COMPLIANT" ? "Compliant" : d.postureStatus === "NON_COMPLIANT" ? "Non-compliant" : "Unknown"}
                       </StatusBadge>
                     ) : "—"}
+                    {d.complianceExceptionUntil && (
+                      <div className="posture-panel__muted" title={d.complianceExceptionReason ?? undefined}>
+                        Exception until {new Date(d.complianceExceptionUntil).toLocaleDateString()}
+                      </div>
+                    )}
                   </td>
                   <td>{d.certificateStatus ? <StatusBadge tone={d.certificateStatus === "ACTIVE" ? "success" : "neutral"}>{d.certificateStatus}</StatusBadge> : "—"}</td>
                   <td>
@@ -291,6 +331,16 @@ export function EndpointDevicesPage() {
                       {(d.lifecycleStatus === "APPROVED" || d.lifecycleStatus === "NON_COMPLIANT") && (
                         <button type="button" className="btn-secondary btn-sm" disabled={actingOn === d.id} onClick={() => void handleSuspend(d)}>
                           Suspend
+                        </button>
+                      )}
+                      {(d.lifecycleStatus === "APPROVED" || d.lifecycleStatus === "NON_COMPLIANT") && !d.complianceExceptionUntil && (
+                        <button type="button" className="btn-secondary btn-sm" disabled={actingOn === d.id} onClick={() => setExceptionFor(d)}>
+                          Allow despite failed checks
+                        </button>
+                      )}
+                      {d.complianceExceptionUntil && (
+                        <button type="button" className="btn-secondary btn-sm" disabled={actingOn === d.id} onClick={() => void handleEndException(d)}>
+                          End exception
                         </button>
                       )}
                       {d.lifecycleStatus === "SUSPENDED" && (
@@ -329,6 +379,14 @@ export function EndpointDevicesPage() {
         </>
       ) : null}
       {showGuide && <InstallGuideModal onClose={() => setShowGuide(false)} />}
+      {exceptionFor && (
+        <ComplianceExceptionDialog
+          device={exceptionFor}
+          busy={actingOn === exceptionFor.id}
+          onCancel={() => setExceptionFor(null)}
+          onGrant={(days, reason) => void handleGrantException(exceptionFor, days, reason)}
+        />
+      )}
     </main>
   );
 }
@@ -373,6 +431,9 @@ const EVENT_LABELS: Record<string, string> = {
   "device.rejected": "Rejected by an admin",
   "device.suspended": "Suspended by an admin",
   "device.revoked": "Revoked by an admin",
+  "device.decommissioned": "Removed from service by an admin",
+  "device.compliance_exception.granted": "Allowed despite failed security checks (exception granted)",
+  "device.compliance_exception.removed": "Security-check exception ended",
   "device.noncompliant": "Became non-compliant",
   "device.posture_enforced": "Suspended automatically (non-compliant)",
   "device.posture_restored": "Restored (compliant again)",
@@ -572,6 +633,60 @@ function Fact({ label, value }: { label: string; value?: string | null }) {
       <dt>{label}</dt>
       <dd>{value || "Unknown"}</dd>
     </div>
+  );
+}
+
+/** Asks the admin how long, and why. Both are required: this lets a laptop that fails security checks reach protected apps. */
+function ComplianceExceptionDialog({ device, busy, onCancel, onGrant }: {
+  device: DeviceSummary; busy: boolean; onCancel: () => void; onGrant: (days: number, reason: string) => void;
+}) {
+  const dialogRef = useRef<HTMLDialogElement>(null);
+  const [days, setDays] = useState(7);
+  const [reason, setReason] = useState("");
+  useEffect(() => { dialogRef.current?.showModal(); }, []);
+  const ready = reason.trim().length > 0 && !busy;
+
+  return (
+    <dialog ref={dialogRef} className="guide-modal" onClose={onCancel}>
+      <div className="guide-modal__header">
+        <h2>Allow {deviceLabel(device)} despite failed security checks</h2>
+        <button type="button" className="guide-modal__close" onClick={onCancel}>✕</button>
+      </div>
+      <form
+        onSubmit={(e) => { e.preventDefault(); if (ready) onGrant(days, reason.trim()); }}
+        className="guide-modal__body"
+      >
+        <p className="guide-note">
+          While this lasts, this laptop can open apps that require a trusted device, even if BitLocker, the firewall or
+          antivirus checks fail. It must still be approved, belong to the signed-in user, and be running the agent.
+          Every use is recorded. It ends by itself on the date below.
+        </p>
+        <label className="login-form__field">
+          <span>How long</span>
+          <select value={days} onChange={(e) => setDays(Number(e.target.value))}>
+            <option value={1}>1 day</option>
+            <option value={7}>7 days</option>
+            <option value={30}>30 days (maximum)</option>
+          </select>
+        </label>
+        <label className="login-form__field">
+          <span>Reason (required, saved with the device)</span>
+          <textarea
+            value={reason}
+            maxLength={500}
+            rows={3}
+            placeholder="For example: BitLocker rollout for this team is next week"
+            onChange={(e) => setReason(e.target.value)}
+          />
+        </label>
+        <div className="guide-modal__footer" style={{ padding: 0, border: 0 }}>
+          <button type="button" className="btn-secondary" onClick={onCancel}>Cancel</button>
+          <button type="submit" disabled={!ready}>
+            <PendingLabel pending={busy} idle="Allow this laptop" busy="Saving…" />
+          </button>
+        </div>
+      </form>
+    </dialog>
   );
 }
 

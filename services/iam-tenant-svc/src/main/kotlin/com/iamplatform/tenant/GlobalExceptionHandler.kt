@@ -41,7 +41,7 @@ class GlobalExceptionHandler {
             ErrorResponse.of(HttpStatus.CONFLICT.value(), "Conflict", ex.message ?: "", request.requestURI),
         )
 
-    @ExceptionHandler(SubdomainAlreadyExistsException::class, SamlSpEntityIdAlreadyExistsException::class, CannotSuspendSelfException::class)
+    @ExceptionHandler(SubdomainAlreadyExistsException::class, SamlSpEntityIdAlreadyExistsException::class, CannotSuspendSelfException::class, DeviceStateConflictException::class)
     fun handleConflict(ex: RuntimeException, request: HttpServletRequest): ResponseEntity<ErrorResponse> =
         ResponseEntity.status(HttpStatus.CONFLICT).body(
             ErrorResponse.of(HttpStatus.CONFLICT.value(), "Conflict", ex.message ?: "", request.requestURI),

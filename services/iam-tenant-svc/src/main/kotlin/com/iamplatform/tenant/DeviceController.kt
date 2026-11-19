@@ -160,6 +160,34 @@ class DeviceController(
         return ResponseEntity.noContent().build()
     }
 
+    @PostMapping("/devices/{deviceId}/compliance-exception")
+    fun grantComplianceException(
+        @PathVariable deviceId: UUID,
+        @RequestParam tenantId: UUID,
+        @Valid @RequestBody request: ComplianceExceptionRequest,
+        @RequestHeader("X-Session-Token") sessionToken: String,
+        httpRequest: HttpServletRequest,
+    ): ResponseEntity<Void> {
+        val admin = adminAccessGuard.requireValidSession(sessionToken)
+        adminAccessGuard.requireTenantAdmin(sessionToken, tenantId)
+        deviceTrustService.grantComplianceException(tenantId, deviceId, admin.userId.toString(), request.days, request.reason, httpRequest.remoteAddr)
+        return ResponseEntity.noContent().build()
+    }
+
+    @PostMapping("/devices/{deviceId}/compliance-exception/remove")
+    fun removeComplianceException(
+        @PathVariable deviceId: UUID,
+        @RequestParam tenantId: UUID,
+        @RequestBody(required = false) request: DeviceActionRequest?,
+        @RequestHeader("X-Session-Token") sessionToken: String,
+        httpRequest: HttpServletRequest,
+    ): ResponseEntity<Void> {
+        val admin = adminAccessGuard.requireValidSession(sessionToken)
+        adminAccessGuard.requireTenantAdmin(sessionToken, tenantId)
+        deviceTrustService.removeComplianceException(tenantId, deviceId, admin.userId.toString(), request?.reason, httpRequest.remoteAddr)
+        return ResponseEntity.noContent().build()
+    }
+
     @PostMapping("/devices/{deviceId}/heartbeat")
     fun heartbeat(
         @PathVariable deviceId: UUID,

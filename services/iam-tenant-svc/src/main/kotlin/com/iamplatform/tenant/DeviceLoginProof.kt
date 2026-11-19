@@ -232,11 +232,18 @@ class TrustedDeviceGate(
         if (!required) return null
         // Spec 6.4: an app's own policy decides whether a laptop still awaiting approval may open it. Anything else that is not
         // APPROVED (suspended, revoked, rejected, non-compliant lifecycle...) stays refused, whatever this setting says.
-        val acceptedStates =
-            if (allowPending) setOf(DeviceLifecycleStatus.APPROVED.name, DeviceLifecycleStatus.PENDING_APPROVAL.name) else setOf(DeviceLifecycleStatus.APPROVED.name)
-
         val deviceId = sessionDeviceId?.let { runCatching { UUID.fromString(it) }.getOrNull() }
         val device = deviceId?.let { devices.findById(it).orElse(null) }?.takeIf { it.tenantId == tenantId && it.userId == userId }
+        // An admin's time-limited compliance exception waives the security checks only -- and with them the
+        // NON_COMPLIANT lifecycle state those checks cause. Never pending, suspended, revoked or someone else's laptop.
+        val exempt = device?.complianceExceptionActive() == true
+        val acceptedStates = buildSet {
+            add(DeviceLifecycleStatus.APPROVED.name)
+            if (allowPending) add(DeviceLifecycleStatus.PENDING_APPROVAL.name)
+            if (exempt) add(DeviceLifecycleStatus.NON_COMPLIANT.name)
+        }
+        val nonCompliant = device != null &&
+            posture.findById(device.id).map { it.postureStatus }.orElse(null) == PostureStatus.NON_COMPLIANT.name
         // iam-login-portal recognises these phrases to show a specific page (lib/errorCodes.ts, accessDenialReason).
         // Changing the wording only makes that page fall back to the generic message; keep them in step anyway.
         val reason = when {
@@ -244,10 +251,28 @@ class TrustedDeviceGate(
             device == null -> "Your device is no longer registered. Enroll it again."
             device.lifecycleStatus !in acceptedStates ->
                 "Your device is not approved (${device.lifecycleStatus.lowercase().replace('_', ' ')}). Ask your administrator."
-            posture.findById(device.id).map { it.postureStatus }.orElse(null) == PostureStatus.NON_COMPLIANT.name ->
+            nonCompliant && !exempt ->
                 "Your device does not meet the security requirements. Your administrator can see which checks failed."
             else -> null
-        } ?: return null
+        }
+        if (reason == null) {
+            // Let in only because of the exception: record it, so every such use traces back to the admin's decision.
+            if (exempt && device != null && (nonCompliant || device.lifecycleStatus == DeviceLifecycleStatus.NON_COMPLIANT.name)) {
+                auditPublisher.publish(
+                    AuditEvent(
+                        correlationId = CorrelationId.get(),
+                        tenantId = tenantId,
+                        actorType = ActorType.USER,
+                        actorId = userId.toString(),
+                        action = "app.access.allowed_compliance_exception",
+                        result = AuditResult.SUCCESS,
+                        reason = "appKind=$appKind; appId=$appId; exception until ${device.complianceExceptionUntil}",
+                        deviceId = deviceId.toString(),
+                    ),
+                )
+            }
+            return null
+        }
 
         auditPublisher.publish(
             AuditEvent(

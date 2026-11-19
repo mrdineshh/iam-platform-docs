@@ -1,8 +1,11 @@
 package com.iamplatform.tenant
 
 import jakarta.validation.Valid
+import jakarta.validation.constraints.Max
+import jakarta.validation.constraints.Min
 import jakarta.validation.constraints.NotBlank
 import jakarta.validation.constraints.NotNull
+import jakarta.validation.constraints.Size
 import java.time.Instant
 import java.util.UUID
 
@@ -80,6 +83,10 @@ data class DeviceSummaryResponse(
     val createdAt: Instant,
     // Spec Section 5.1 layered identity, shown to admins. Hashes only: the raw serial / hardware UUID never reach the backend.
     val identity: DeviceIdentityDetails? = null,
+    // Set only while an exception is in force; an expired one reads as none.
+    val complianceExceptionUntil: Instant? = null,
+    val complianceExceptionReason: String? = null,
+    val complianceExceptionBy: String? = null,
 )
 
 /** The layers of spec Section 5.1 next to the platform device_id (which is [DeviceSummaryResponse.id]). */
@@ -96,6 +103,12 @@ data class DeviceIdentityDetails(
 )
 
 // ---- Approval actions (Section 6.3) ----
+
+/** Admin grants a time-limited exception to the compliance rule for one device. Reason is mandatory (spec 13.2). */
+data class ComplianceExceptionRequest(
+    @field:Min(1) @field:Max(30) val days: Int,
+    @field:NotBlank @field:Size(max = 500) val reason: String,
+)
 
 data class DeviceActionRequest(
     val reason: String? = null,

@@ -2482,3 +2482,24 @@ any login work itself.
   Tests: three new `DeviceTrustServiceTest` cases (retires + revokes certificate + never deletes; idempotent; wrong tenant refused); run on the
   VM with the other device suites: 50 tests, 0 failures. Not yet done from spec 13.2: a reason prompt on privileged actions, "force policy sync",
   "request re-enrolment", the platform/enforcement-capability inventory fields.
+
+- **2026-11-19 -- Admin console: time-limited compliance exception for one device (spec 6.2, 6.4, 13.2). Tier 3, scope chosen by the user.**
+  Request: let an admin allow a laptop that fails the required security checks (BitLocker / firewall / antivirus) to keep using apps that
+  require a trusted device. This deliberately loosens a device-trust rule, so the three open choices were put to the user and answered:
+  scope = ONE DEVICE (not an app, not a user); duration = admin picks 1, 7 or 30 days (hard maximum 30, ends by itself); reason = REQUIRED.
+  Behaviour: `POST /devices/{id}/compliance-exception {days, reason}` and `.../compliance-exception/remove` (tenant admin only), stored on
+  `iam_devices` (V14: `compliance_exception_until/_reason/_by`). `TrustedDeviceGate` treats an unexpired exception as waiving ONLY the compliance
+  check (the NON_COMPLIANT posture, and the NON_COMPLIANT lifecycle state that posture enforcement sets). It never helps a pending, suspended,
+  revoked, rejected or decommissioned device, another user's laptop, or a sign-in with no verified device proof, and it does not stop the device
+  being flagged non-compliant in the console. Granting is allowed only for APPROVED / NON_COMPLIANT devices; granting again replaces the end date;
+  an expired exception reads as none everywhere (gate, console). Audit: `device.compliance_exception.granted` (actor, days, end date, reason),
+  `device.compliance_exception.removed`, and `app.access.allowed_compliance_exception` each time the exception is what let a sign-in through, so every
+  use traces back to the admin's decision (AP-8 spirit). The console shows "Allow despite failed checks" (dialog: days + required reason), an
+  "Exception until <date>" note in the Compliance column and an "End exception" button.
+  Fault found and fixed while testing, mine: the first version called `publishDeviceEvent` as well as `audit()`, so every grant or removal was audited
+  twice, once wrongly attributed to the AGENT (`publishDeviceEvent` hard-codes the agent as actor). `audit()` already records the activity entry and the
+  audit event, so the extra call was removed; the unit tests caught it. Tests: 6 gate cases (active, lifecycle state, expired, never lets other
+  states in, someone else's laptop, no exception audit when compliant) and 4 service cases (grant, refuse non-approved, refuse 0 / 31 days / empty
+  reason, remove idempotent); whole tenant suite on the VM: 229 tests, 0 failures. Not tested live in a browser yet.
+  Still open: an exception does not end when the laptop's posture becomes compliant (it simply stops mattering); there is no list of all active
+  exceptions or reminder before one expires.

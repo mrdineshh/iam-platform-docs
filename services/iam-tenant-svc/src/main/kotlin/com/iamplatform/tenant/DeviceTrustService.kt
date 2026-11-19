@@ -43,6 +43,12 @@ private val TERMINAL_STATUSES = listOf(
     DeviceLifecycleStatus.REJECTED.name, DeviceLifecycleStatus.REVOKED.name, DeviceLifecycleStatus.DECOMMISSIONED.name,
 )
 
+// Admin actions shown as warnings in a device's activity list.
+private val WARNING_ACTIONS = setOf("device.revoked", "device.suspended", "device.compliance_exception.granted")
+
+// An exception waives only the compliance rule, so it only makes sense on a device that is otherwise trusted.
+private val EXCEPTION_ELIGIBLE_STATUSES = setOf(DeviceLifecycleStatus.APPROVED.name, DeviceLifecycleStatus.NON_COMPLIANT.name)
+
 @Service
 class DeviceTrustService(
     private val deviceRepository: IamDeviceRepository,
@@ -282,6 +288,9 @@ class DeviceTrustService(
             certificateStatus = cert?.status,
             createdAt = device.createdAt,
             identity = identityDetails(device),
+            complianceExceptionUntil = device.complianceExceptionUntil.takeIf { device.complianceExceptionActive() },
+            complianceExceptionReason = device.complianceExceptionReason.takeIf { device.complianceExceptionActive() },
+            complianceExceptionBy = device.complianceExceptionBy.takeIf { device.complianceExceptionActive() },
         )
     }
 
@@ -354,6 +363,44 @@ class DeviceTrustService(
         recordApproval(deviceId, ApprovalMode.MANUAL, ApprovalDecision.REVOKED, actorId, reason)
         revokeActiveCertificate(deviceId, reason)
         audit(tenantId, deviceId, actorId, "device.revoked", AuditResult.SUCCESS, reason, sourceIp)
+    }
+
+    /**
+     * Lets one approved device open trusted-device apps for [days] (1-30) even though it fails the required security
+     * checks. Only the compliance rule is waived: the device must still be approved, belong to the signed-in user and
+     * prove its key. Ends by itself; granting again replaces the previous end date. Audited with its reason.
+     */
+    @Transactional
+    fun grantComplianceException(tenantId: UUID, deviceId: UUID, actorId: String, days: Int, reason: String, sourceIp: String?) {
+        require(days in 1..30) { "days must be between 1 and 30" }
+        val trimmed = reason.trim()
+        require(trimmed.isNotEmpty()) { "a reason is required" }
+        val device = requireDevice(tenantId, deviceId)
+        if (device.lifecycleStatus !in EXCEPTION_ELIGIBLE_STATUSES) {
+            throw DeviceStateConflictException(
+                "Only an approved device can be given an exception (this one is ${device.lifecycleStatus.lowercase().replace('_', ' ')})",
+            )
+        }
+        val until = Instant.now().plus(Duration.ofDays(days.toLong()))
+        device.complianceExceptionUntil = until
+        device.complianceExceptionReason = trimmed
+        device.complianceExceptionBy = actorId
+        device.updatedAt = Instant.now()
+        deviceRepository.save(device)
+        audit(tenantId, deviceId, actorId, "device.compliance_exception.granted", AuditResult.SUCCESS, "${days}d (until $until): $trimmed", sourceIp)
+    }
+
+    /** Ends an exception early. Idempotent: a device without one is left untouched and nothing is recorded. */
+    @Transactional
+    fun removeComplianceException(tenantId: UUID, deviceId: UUID, actorId: String, reason: String?, sourceIp: String?) {
+        val device = requireDevice(tenantId, deviceId)
+        if (device.complianceExceptionUntil == null) return
+        device.complianceExceptionUntil = null
+        device.complianceExceptionReason = null
+        device.complianceExceptionBy = null
+        device.updatedAt = Instant.now()
+        deviceRepository.save(device)
+        audit(tenantId, deviceId, actorId, "device.compliance_exception.removed", AuditResult.SUCCESS, reason, sourceIp)
     }
 
     private fun revokeActiveCertificate(deviceId: UUID, reason: String?) {
@@ -635,7 +682,7 @@ class DeviceTrustService(
                 tenantId = tenantId,
                 deviceId = deviceId,
                 eventType = action,
-                severity = if (action == "device.revoked" || action == "device.suspended") EventSeverity.WARNING.name else EventSeverity.INFO.name,
+                severity = if (action in WARNING_ACTIONS) EventSeverity.WARNING.name else EventSeverity.INFO.name,
                 metadataJson = objectMapper.writeValueAsString(mapOf("actor" to actorId, "reason" to reason)),
             ),
         )

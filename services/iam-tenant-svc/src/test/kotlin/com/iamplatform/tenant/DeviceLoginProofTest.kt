@@ -6,6 +6,7 @@ import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.assertThrows
 import org.mockito.kotlin.any
+import org.mockito.kotlin.argThat
 import org.mockito.kotlin.argumentCaptor
 import org.mockito.kotlin.eq
 import org.mockito.kotlin.mock
@@ -213,8 +214,56 @@ class TrustedDeviceGateTest {
         assertNull(gate.check(tenantId, userId, "oidc", appId, null))
     }
 
-    private fun device(status: String = "APPROVED", owner: UUID = userId, tenant: UUID = tenantId) {
-        whenever(devices.findById(deviceId)).thenReturn(Optional.of(IamDeviceEntity(deviceId, tenant, owner, UUID.randomUUID(), ownership = "BYOD", lifecycleStatus = status)))
+    private fun device(status: String = "APPROVED", owner: UUID = userId, tenant: UUID = tenantId, exceptionUntil: java.time.Instant? = null) {
+        whenever(devices.findById(deviceId)).thenReturn(
+            Optional.of(
+                IamDeviceEntity(deviceId, tenant, owner, UUID.randomUUID(), ownership = "BYOD", lifecycleStatus = status, complianceExceptionUntil = exceptionUntil),
+            ),
+        )
+    }
+
+    private val inAWeek get() = java.time.Instant.now().plusSeconds(7 * 86400)
+    private val anHourAgo get() = java.time.Instant.now().minusSeconds(3600)
+
+    @Test
+    fun `an active compliance exception lets a non-compliant approved laptop in, and that use is audited`() {
+        app(true); device(exceptionUntil = inAWeek); posture("NON_COMPLIANT")
+        assertNull(gate.check(tenantId, userId, "oidc", appId, deviceId.toString()))
+        verify(auditPublisher).publish(argThat<AuditEvent> { action == "app.access.allowed_compliance_exception" })
+    }
+
+    @Test
+    fun `an active compliance exception also covers the NON_COMPLIANT lifecycle state`() {
+        app(true); device(status = "NON_COMPLIANT", exceptionUntil = inAWeek); posture("NON_COMPLIANT")
+        assertNull(gate.check(tenantId, userId, "oidc", appId, deviceId.toString()))
+    }
+
+    @Test
+    fun `an expired compliance exception counts for nothing`() {
+        app(true); device(exceptionUntil = anHourAgo); posture("NON_COMPLIANT")
+        assertTrue(gate.check(tenantId, userId, "oidc", appId, deviceId.toString())!!.reason!!.contains("security requirements"))
+    }
+
+    @Test
+    fun `a compliance exception never lets a pending, suspended, revoked or decommissioned laptop in`() {
+        app(true); posture("NON_COMPLIANT")
+        for (status in listOf("PENDING_APPROVAL", "SUSPENDED", "REVOKED", "REJECTED", "DECOMMISSIONED")) {
+            device(status = status, exceptionUntil = inAWeek)
+            assertNotNull(gate.check(tenantId, userId, "oidc", appId, deviceId.toString()), status)
+        }
+    }
+
+    @Test
+    fun `a compliance exception on someone else's laptop does not help`() {
+        app(true); device(owner = UUID.randomUUID(), exceptionUntil = inAWeek); posture("NON_COMPLIANT")
+        assertNotNull(gate.check(tenantId, userId, "oidc", appId, deviceId.toString()))
+    }
+
+    @Test
+    fun `a compliant laptop with an exception is let in without an exception audit`() {
+        app(true); device(exceptionUntil = inAWeek); posture("COMPLIANT")
+        assertNull(gate.check(tenantId, userId, "oidc", appId, deviceId.toString()))
+        verify(auditPublisher, never()).publish(any())
     }
 
     private fun posture(status: String) {

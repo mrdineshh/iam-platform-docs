@@ -23,6 +23,10 @@ export interface DeviceSummary {
   certificateStatus: "ACTIVE" | "EXPIRED" | "REVOKED" | null;
   createdAt: string;
   identity: DeviceIdentityDetails | null;
+  // Present only while an admin's compliance exception is in force.
+  complianceExceptionUntil: string | null;
+  complianceExceptionReason: string | null;
+  complianceExceptionBy: string | null;
 }
 
 // Spec Section 5.1 layers; `id` above is the immutable platform device_id.
@@ -90,6 +94,23 @@ export const revokeDevice = (tenantId: string, deviceId: string, sessionToken: s
  */
 export const decommissionDevice = (tenantId: string, deviceId: string, sessionToken: string, reason?: string) =>
   deviceAction(tenantId, deviceId, "decommission", sessionToken, reason);
+
+/**
+ * Lets one approved device open trusted-device apps for `days` (1-30) even though it fails the required security
+ * checks. The reason is mandatory and is kept on the device and in the audit trail.
+ */
+export async function grantComplianceException(
+  tenantId: string, deviceId: string, days: number, reason: string, sessionToken: string,
+): Promise<void> {
+  await http.post<void>(
+    `${config.tenantSvcUrl}/api/v1/endpoint/devices/${deviceId}/compliance-exception?tenantId=${encodeURIComponent(tenantId)}`,
+    { days, reason },
+    { sessionToken },
+  );
+}
+
+export const removeComplianceException = (tenantId: string, deviceId: string, sessionToken: string) =>
+  deviceAction(tenantId, deviceId, "compliance-exception/remove", sessionToken);
 
 // Mirrors iam-tenant-svc's DeviceEventResponse: one entry of a device's activity timeline (newest first).
 export interface DeviceEvent {
