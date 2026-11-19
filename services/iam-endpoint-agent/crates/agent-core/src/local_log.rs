@@ -25,6 +25,8 @@ pub fn event_id(event_type: &str) -> u32 {
         "agent.update_rejected" => 1021,
         "agent.update_failed" => 1022,
         "agent.browser_policy_failed" => 1011,
+        "agent.browser_block_applied" => 1012,
+        "agent.browser_block_failed" => 1013,
         _ => 1999,
     }
 }
@@ -71,6 +73,8 @@ mod tests {
             "agent.stopped",
             "agent.browser_policy_applied",
             "agent.browser_policy_failed",
+            "agent.browser_block_applied",
+            "agent.browser_block_failed",
             "agent.update_installing",
             "agent.update_rejected",
             "agent.update_failed",

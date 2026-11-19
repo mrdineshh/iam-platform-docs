@@ -174,6 +174,26 @@ async fn run_agent(config: AgentConfig, data_dir: PathBuf, shutdown: watch::Rece
         },
         Err(err) => tracing::error!(%err, "browser sign-in restriction not applied"),
     }
+    // Personal Microsoft accounts (outlook.com, hotmail.com, live.com): the sign-in pages are put on each browser's URL block
+    // list, keeping whatever else is on it. A lower-assurance domain control (spec 8.2), applied at every start like the above.
+    match agent_core::browser_policy::personal_microsoft_block(&config.allowed_identity_domains) {
+        Ok(lists) if lists.is_empty() => {}
+        Ok(lists) => {
+            for list in &lists {
+                match agent_core::browser_policy::BrowserPolicyApplier::merge_url_blocklist(&platform::browser_policy_applier(), list) {
+                    Ok(()) => {
+                        tracing::info!(browser = list.browser, "personal Microsoft sign-in blocked");
+                        log.write("INFO", "agent.browser_block_applied", &format!("personal Microsoft account sign-in blocked in {}", list.browser));
+                    }
+                    Err(err) => {
+                        tracing::error!(browser = list.browser, %err, "could not block personal Microsoft sign-in");
+                        log.write("ERROR", "agent.browser_block_failed", &format!("{}: {err}", list.browser));
+                    }
+                }
+            }
+        }
+        Err(err) => tracing::error!(%err, "personal Microsoft sign-in block not applied"),
+    }
     let result = new_agent(config, data_dir).with_local_log(log.clone()).run(platform::posture_collector(), shutdown).await;
     log.write("INFO", "agent.stopped", "IAM endpoint agent stopped");
     result?;

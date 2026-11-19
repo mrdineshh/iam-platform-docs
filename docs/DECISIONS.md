@@ -2551,3 +2551,26 @@ any login work itself.
   Tests: five new `AuthServiceTest` cases (refused before any 2FA step, fails closed, asked about the verified device and role and lets an authorised laptop on,
   the enrollment precheck skips the rule, a wrong password never reaches it). Auth 48 tests, 0 failures on the VM; portal 80 passed, type-check clean.
   Not yet tried live in a browser.
+
+- **2026-11-19 -- Endpoint agent 0.3.4: block personal Microsoft (Outlook) sign-in on the web in Chrome and Edge (spec 8.2, P1-24 partial). Tier 3, requested by the user.**
+  Reported: signing in to Outlook on the web with a personal Outlook account was not restricted. Checked first: the agent was running and
+  Chrome/Edge both had the correct `RestrictSigninToPattern` (and Chrome `AllowedDomainsForApps`), so nothing was broken. Those two settings only
+  govern signing in to the BROWSER profile, plus a Google-only header for Google sites; Edge has no Microsoft counterpart, and the proper Microsoft
+  control (Entra tenant restrictions, spec 8.2) needs an Entra tenant, which the owner had already decided to skip. The spec's stated fallback is
+  "documented browser/domain controls" at lower assurance. The user chose that fallback.
+  What it does: when the identity restriction is on (allowed domains set), the agent adds `login.live.com`, `outlook.live.com`, `account.live.com`
+  and `signup.live.com` to each browser's `URLBlocklist` (Chrome `HKLM\SOFTWARE\Policies\Google\Chrome\URLBlocklist`, Edge `...\Microsoft\Edge\URLBlocklist`).
+  The browsers' own enterprise policy, no traffic inspection (AP-7). Work and school accounts sign in at login.microsoftonline.com and are not
+  listed (a unit test guards that). Skipped when an allowed domain is outlook.com, hotmail.com, live.com or msn.com (the admin allowed it on purpose).
+  Applied at every service start, like the other browser policy; the events are 1012 (applied) and 1013 (failed).
+  Safe with other tools: a block list is numbered values ("1","2",...) that a company's own group policy may share, and a browser stops reading it at
+  the first gap. So `RegistryBrowserPolicy::merge_url_blocklist` READS the list, keeps every entry that is not ours (`merge_block_list`, pure and
+  unit-tested: order kept, case-insensitive, no duplicates, idempotent), appends ours and writes it back as 1..N, deleting numbers beyond the end. This is the one
+  place the agent reads the browser policy key; the doc comment that said it never reads was updated.
+  Limits: lower assurance by design (a URL block can be dodged by a browser or profile the policy does not reach, private windows are covered by the
+  policy but other browsers are not); it also stops personal Outlook, OneDrive and Xbox sign-in pages in those two browsers on enrolled laptops;
+  turning the feature off does not remove the entries (same as the existing sign-in restriction, which has never cleaned up either); Firefox, Safari and
+  Entra tenant restrictions remain undone.
+  Tests: 10 new agent-core tests (block lists, work sign-in never blocked, allowed personal domain skips it, merge keeps others / no duplicates /
+  idempotent); `cargo test --workspace` 170 passed on the VM and the Windows executable built. NOT yet tried live: the registry reading and writing and
+  the blocking itself still need the 0.3.4 installer put on a laptop, and Edge/Chrome restarted.

@@ -77,6 +77,17 @@ impl agent_core::browser_policy::BrowserPolicyApplier for LoggingBrowserPolicy {
         }
         Ok(())
     }
+
+    fn merge_url_blocklist(&self, list: &agent_core::browser_policy::UrlBlockList) -> Result<(), agent_core::browser_policy::BrowserPolicyError> {
+        Self::log_block(list);
+        Ok(())
+    }
+}
+
+impl LoggingBrowserPolicy {
+    fn log_block(list: &agent_core::browser_policy::UrlBlockList) {
+        tracing::info!(browser = list.browser, urls = ?list.urls, "would add to the browser URL block list (not Windows)");
+    }
 }
 
 pub fn browser_policy_applier() -> LoggingBrowserPolicy {
