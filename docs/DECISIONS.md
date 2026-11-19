@@ -2533,4 +2533,21 @@ any login work itself.
   Known limits: (1) admin "Switch user" (ImpersonateController) issues a session for another user without a sign-in, so it is not subject to this rule
   (apps still apply their own); (2) with the rule on, a user whose only laptop is still pending cannot sign in until it is approved, by design; (3) the
   agent's enrollment link opened with the old 0.3.3 agent can still reuse an existing browser session (the `prompt=login` change still needs a new MSI);
-  (4) the rule is checked after the second factor, so a person with only a password is not told whether their laptop would have been accepted.
+  (4) see the follow-up entry below: the rule is now also asked at the password step.
+
+- **2026-11-19 -- Sign-in rule: refuse at the password step, not after the code (follow-up to the entry above). Tier 3, requested by the user.**
+  The first version asked the rule only inside `login()`, i.e. after the second factor, so a person on an unauthorised laptop typed a code (or was sent a
+  push on their phone) and only then heard "not authorised". Now `AuthService.precheck` asks the same rule right after the password and the location policy,
+  before any second-factor step or authenticator-QR offer, and `login()` asks again (that remains the decision that counts; precheck is the early answer).
+  The portal asks the agent for a proof at the password step (`proofForPasswordStep`, same safe-by-default behaviour: no agent or any error means no proof) and
+  sends it with the precheck; the final submit gets its own proof because a challenge is single use. The agent's laptop-registration sign-in is exempt at this
+  step too, through `POST /internal/login/precheck-enrollment` (service-to-service only, `enforceDeviceRule=false` is a method parameter). Checked: both internal
+  routes answer 404 from the internet, the public precheck exists, and the internal route exists from inside the network.
+  Not done on purpose: refusing at the EMAIL step. That would tell anyone, with no password, whether an email belongs to a user and whether that user is an
+  administrator (admins are exempt) -- a user-enumeration leak. At the password step the person has already proved they know the password, and precheck already
+  reveals more than this (whether a code is needed). Accepted trade-off: someone who knows only the password can learn that this laptop would be refused.
+  Side effect that is also a gain: no push notification is sent to the real user's phone for a sign-in that is going to be refused.
+  A user with no authenticator yet and an unauthorised laptop is refused before being offered the QR; they register a laptop through the agent first.
+  Tests: five new `AuthServiceTest` cases (refused before any 2FA step, fails closed, asked about the verified device and role and lets an authorised laptop on,
+  the enrollment precheck skips the rule, a wrong password never reaches it). Auth 48 tests, 0 failures on the VM; portal 80 passed, type-check clean.
+  Not yet tried live in a browser.

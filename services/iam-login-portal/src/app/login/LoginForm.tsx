@@ -113,6 +113,29 @@ export function LoginForm({ deviceSignIn = false, clientId, redirectUri, scope, 
     })();
   }
 
+  /**
+   * Asks the endpoint agent for a fresh signed proof for the password step, so the platform can tell this person right now
+   * whether this laptop is allowed to sign in. Only ever adds a proof: no agent, a blocked local call or any error returns
+   * nothing and the step carries on exactly as before. The final submit asks for its own proof (a challenge is single use).
+   */
+  async function proofForPasswordStep(): Promise<string | undefined> {
+    if (!deviceSignIn) return undefined;
+    const promptPending = warmUp.current !== null && !warmUpDone.current;
+    try {
+      const proof = await Promise.race([
+        obtainDeviceProof({
+          origin: window.location.origin,
+          requestChallenge: () => issueDeviceChallengeAction(tenantOverride),
+          waitFor: promptPending ? (warmUp.current ?? undefined) : undefined,
+        }),
+        new Promise<null>((resolve) => setTimeout(() => resolve(null), promptPending ? 22000 : 4000)),
+      ]);
+      return proof ? JSON.stringify(proof) : undefined;
+    } catch {
+      return undefined;
+    }
+  }
+
   async function handlePasswordNext() {
     if (!password) {
       setStepError("Enter your password.");
@@ -121,7 +144,8 @@ export function LoginForm({ deviceSignIn = false, clientId, redirectUri, scope, 
     setStepError(null);
     setChecking(true);
     try {
-      const result = await precheckAction({ tenantOverride, email, password });
+      const deviceProof = await proofForPasswordStep();
+      const result = await precheckAction({ tenantOverride, email, password, deviceProof });
       if (!result.ok) {
         setStepError(result.error);
         return;

@@ -82,6 +82,10 @@ data class PrecheckRequest(
     val sourceIp: String = "",
 
     val userAgent: String? = null,
+
+    // Same optional proof as LoginRequest.deviceProof, so the platform's "authorised laptop to sign in" rule can be applied
+    // at the password step, before a code is asked for. Only ever consulted; a bad or missing one is just "no device".
+    val deviceProof: DeviceProof? = null,
 )
 
 data class PrecheckResponse(

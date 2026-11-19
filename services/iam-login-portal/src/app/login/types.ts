@@ -19,6 +19,8 @@ export interface PrecheckActionInput {
   tenantOverride: string | null;
   email: string;
   password: string;
+  // The endpoint agent's signed proof as JSON, when this organization uses device sign-in and the agent answered.
+  deviceProof?: string;
 }
 
 export type PrecheckActionResult =

@@ -4,7 +4,7 @@ import { cookies, headers } from "next/headers";
 import { redirect } from "next/navigation";
 import { randomUUID } from "node:crypto";
 import { config } from "@/lib/config";
-import { login, loginForEnrollment, precheck, type LoginResponse } from "@/lib/authClient";
+import { login, loginForEnrollment, precheck, precheckForEnrollment, type LoginResponse } from "@/lib/authClient";
 import { completeAuthorization } from "@/lib/oidcClient";
 import { ACCESS_DENIAL_MESSAGES, accessDenialReason, denialMessage, isAppAccessDenied } from "@/lib/errorCodes";
 import { UpstreamError } from "@/lib/http";
@@ -53,9 +53,15 @@ export async function precheckAction(input: PrecheckActionInput): Promise<Preche
     return { ok: false, error: tenant.error };
   }
 
+  // Same exemption as the final sign-in: the password step of the agent's laptop-registration sign-in is not held to the
+  // "authorised laptop" rule (the laptop does not exist yet). Any other sign-in asks the rule right here, so a person on an
+  // unauthorised laptop hears so after the password instead of after typing a code or approving a push.
+  const enrollmentNext = safePostLoginNext((await cookies()).get(POST_LOGIN_NEXT_COOKIE)?.value);
+  const deviceProof = parseDeviceProofField(input.deviceProof);
+
   try {
-    const result = await precheck(
-      { tenantId: tenant.id, email: input.email, password: input.password, sourceIp, userAgent },
+    const result = await (enrollmentNext ? precheckForEnrollment : precheck)(
+      { tenantId: tenant.id, email: input.email, password: input.password, sourceIp, userAgent, deviceProof },
       correlationId,
     );
     if (!result.mfaRequired) {

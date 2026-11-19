@@ -32,6 +32,8 @@ export interface PrecheckRequest {
   password: string;
   sourceIp: string;
   userAgent?: string;
+  // Lets the platform's "authorised laptop to sign in" rule answer at the password step instead of after the code.
+  deviceProof?: DeviceProof;
 }
 
 export interface PrecheckResponse {
@@ -71,6 +73,14 @@ export async function loginForEnrollment(request: LoginRequest, correlationId: s
  */
 export async function precheck(request: PrecheckRequest, correlationId: string): Promise<PrecheckResponse> {
   return postJson<PrecheckResponse>(`${config.authSvcUrl}/api/v1/login/precheck`, request, {
+    correlationId,
+    timeoutMs: config.defaultTimeoutMs,
+  });
+}
+
+/** The password step of the enrollment sign-in: exempt from the "authorised laptop" rule, like `loginForEnrollment`. */
+export async function precheckForEnrollment(request: PrecheckRequest, correlationId: string): Promise<PrecheckResponse> {
+  return postJson<PrecheckResponse>(`${config.authSvcUrl}/internal/login/precheck-enrollment`, request, {
     correlationId,
     timeoutMs: config.defaultTimeoutMs,
   });

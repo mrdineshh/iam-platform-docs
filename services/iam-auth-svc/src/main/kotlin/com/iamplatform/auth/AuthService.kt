@@ -142,10 +142,10 @@ class AuthService(
         // with a 503, not a hang or a partial state").
         val context = SessionContext(request.userAgent, country, geo?.region, geo?.city)
         // Device-bound sign-in. Looked at only when the caller sent a proof; otherwise this line changes nothing.
-        val deviceId = request.deviceProof?.let { verifiedDeviceId(request, userId, it, country) }
+        val deviceId = request.deviceProof?.let { verifiedDeviceId(request.tenantId, request.sourceIp, userId, it, country) }
         val role = verified.role ?: RemoteUserRole.USER
         if (enforceDeviceRule) {
-            enforceTenantDeviceRule(request, userId, role, deviceId, country, decision.scope)
+            enforceTenantDeviceRule(request.tenantId, request.sourceIp, userId, role, deviceId, country, decision.scope)
         } else {
             audit(request.tenantId, userId.toString(), "auth.login.enrollment_signin", AuditResult.SUCCESS, null, request.sourceIp, geo = country)
         }
@@ -168,20 +168,20 @@ class AuthService(
      * state) and enforced here, before any session exists. Fails CLOSED: if the answer cannot be had, the sign-in is
      * refused with its own code, never let through (AP-3: no path where a session is issued without the platform deciding).
      */
-    private fun enforceTenantDeviceRule(request: LoginRequest, userId: UUID, role: RemoteUserRole, deviceId: UUID?, country: String?, scope: String?) {
+    private fun enforceTenantDeviceRule(tenantId: UUID, sourceIp: String, userId: UUID, role: RemoteUserRole, deviceId: UUID?, country: String?, scope: String?) {
         val answer = try {
-            tenantClient.checkLoginDevice(LoginDeviceCheckRequest(request.tenantId, userId, role.name, deviceId?.toString()))
+            tenantClient.checkLoginDevice(LoginDeviceCheckRequest(tenantId, userId, role.name, deviceId?.toString()))
         } catch (ex: Exception) {
             audit(
-                request.tenantId, userId.toString(), "auth.login_denied", AuditResult.DENIED,
-                "device rule could not be checked", request.sourceIp, geo = country, policyScopeApplied = scope,
+                tenantId, userId.toString(), "auth.login_denied", AuditResult.DENIED,
+                "device rule could not be checked", sourceIp, geo = country, policyScopeApplied = scope,
             )
             throw LoginDeniedException("device rule could not be checked", AuthErrorCode.DEVICE_CHECK_UNAVAILABLE)
         }
         if (answer.allowed) return
         val code = DEVICE_RULE_CODES.firstOrNull { it.name == answer.code } ?: AuthErrorCode.DEVICE_REQUIRED
         val reason = "device not authorised: ${code.name.lowercase()}${answer.detail?.let { " ($it)" } ?: ""}"
-        audit(request.tenantId, userId.toString(), "auth.login_denied", AuditResult.DENIED, reason, request.sourceIp, geo = country, policyScopeApplied = scope)
+        audit(tenantId, userId.toString(), "auth.login_denied", AuditResult.DENIED, reason, sourceIp, geo = country, policyScopeApplied = scope)
         throw LoginDeniedException("You are not authorised to sign in from this device.", code)
     }
 
@@ -198,7 +198,7 @@ class AuthService(
      * read-only preflight, not a side-door around AP-1's single
      * session-issuing engine).
      */
-    fun precheck(request: PrecheckRequest): PrecheckResponse {
+    fun precheck(request: PrecheckRequest, enforceDeviceRule: Boolean = true): PrecheckResponse {
         val verified = identityClient.verifyPassword(request.tenantId, request.email, request.password)
         if (verified.locked) {
             audit(request.tenantId, request.email, "auth.login_denied", AuditResult.DENIED, "account locked", request.sourceIp)
@@ -226,6 +226,15 @@ class AuthService(
                 else -> AuthErrorCode.POLICY_DENIED
             }
             throw LoginDeniedException(decision.reason ?: "denied by policy", errorCode)
+        }
+
+        // The platform "authorised laptop to sign in" rule, asked here as well so the person hears "you are not authorised
+        // to sign in from this device" right after the password -- BEFORE a code is requested or a push is sent to their
+        // phone. login() asks again and that is the decision that counts; this one is only the early answer.
+        // Same exemption as login(): false only for the enrollment sign-in, on the service-to-service-only route.
+        if (enforceDeviceRule) {
+            val proven = request.deviceProof?.let { verifiedDeviceId(request.tenantId, request.sourceIp, userId, it, country) }
+            enforceTenantDeviceRule(request.tenantId, request.sourceIp, userId, verified.role ?: RemoteUserRole.USER, proven, country, decision.scope)
         }
 
         if (!decision.mfaRequired) {
@@ -285,14 +294,14 @@ class AuthService(
      * authenticated; a missing, wrong or unverifiable proof only means the session carries no device (so apps that
      * require a trusted device will refuse it, and everything else is unaffected).
      */
-    private fun verifiedDeviceId(request: LoginRequest, userId: UUID, proof: DeviceProof, country: String?): UUID? {
+    private fun verifiedDeviceId(tenantId: UUID, sourceIp: String, userId: UUID, proof: DeviceProof, country: String?): UUID? {
         val verified = try {
             tenantClient.verifyDeviceProof(proof.challengeId, VerifyDeviceProofRequest(userId, proof.deviceId, proof.signature, proof.origin))
         } catch (ex: Exception) {
             null
         }
         if (verified == null) {
-            audit(request.tenantId, userId.toString(), "auth.device_proof_not_accepted", AuditResult.DENIED, "device proof missing, invalid or unverifiable", request.sourceIp, geo = country)
+            audit(tenantId, userId.toString(), "auth.device_proof_not_accepted", AuditResult.DENIED, "device proof missing, invalid or unverifiable", sourceIp, geo = country)
         }
         return verified?.deviceId
     }

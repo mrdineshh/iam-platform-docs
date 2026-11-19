@@ -1,6 +1,7 @@
 package com.iamplatform.auth
 
 import com.iamplatform.auth.client.DeviceClient
+import com.iamplatform.auth.client.EnsurePendingResult
 import com.iamplatform.auth.client.EvaluateResponse
 import com.iamplatform.auth.client.GeoClient
 import com.iamplatform.auth.client.GeoResolution
@@ -418,6 +419,76 @@ class AuthServiceTest {
         val result = service.login(request.copy(deviceProof = proof))
 
         assertEquals("tok-plain", result.token)
+    }
+
+    // ---- The same rule at the password step (precheck) ----
+
+    private val precheckRequest = PrecheckRequest(tenantId, "alice@acme.com", "correct-password", "8.8.8.8")
+
+    private fun arrangePasswordAndPolicy(role: RemoteUserRole? = null) {
+        whenever(identityClient.verifyPassword(tenantId, "alice@acme.com", "correct-password"))
+            .thenReturn(VerifyPasswordResponse(valid = true, userId = userId, status = RemoteUserStatus.ACTIVE, role = role))
+        whenever(geoClient.resolve("8.8.8.8")).thenReturn(GeoResolution("8.8.8.8", resolved = true, country = "US"))
+        whenever(policyClient.evaluate(tenantId, userId, null, "US", "8.8.8.8")).thenReturn(EvaluateResponse(allowed = true))
+    }
+
+    @Test
+    fun `precheck refuses an unauthorised laptop right after the password, before any second factor is set up or asked`() {
+        arrangePasswordAndPolicy()
+        whenever(tenantClient.checkLoginDevice(any())).thenReturn(LoginDeviceCheckResponse(false, "DEVICE_REQUIRED"))
+
+        val ex = assertThrows<LoginDeniedException> { service.precheck(precheckRequest) }
+
+        assertEquals(AuthErrorCode.DEVICE_REQUIRED, ex.errorCode)
+        verify(deviceClient, never()).ensurePending(any(), any())
+        verify(deviceClient, never()).resetAndEnroll(any(), any())
+        verify(deviceClient, never()).sendPush(any(), any())
+        val captor = argumentCaptor<AuditEvent>()
+        verify(auditPublisher, org.mockito.kotlin.atLeastOnce()).publish(captor.capture())
+        assertEquals(true, captor.allValues.any { it.action == "auth.login_denied" && it.reason!!.contains("device_required") })
+    }
+
+    @Test
+    fun `precheck fails closed when the rule cannot be checked`() {
+        arrangePasswordAndPolicy()
+        whenever(tenantClient.checkLoginDevice(any())).thenThrow(RuntimeException("tenant-svc is down"))
+        assertEquals(AuthErrorCode.DEVICE_CHECK_UNAVAILABLE, assertThrows<LoginDeniedException> { service.precheck(precheckRequest) }.errorCode)
+        verify(deviceClient, never()).ensurePending(any(), any())
+    }
+
+    @Test
+    fun `precheck asks the rule about the verified device and the user's role, and lets an authorised laptop through to the next step`() {
+        arrangePasswordAndPolicy(role = RemoteUserRole.USER)
+        whenever(tenantClient.verifyDeviceProof(eq(proof.challengeId), any())).thenReturn(VerifiedDeviceProof(proof.deviceId, "SOFTWARE"))
+        whenever(deviceClient.ensurePending(tenantId, userId)).thenReturn(EnsurePendingResult(alreadyActive = true, null, null, null))
+
+        val result = service.precheck(precheckRequest.copy(deviceProof = proof))
+
+        assertEquals(true, result.mfaRequired)
+        val captor = argumentCaptor<LoginDeviceCheckRequest>()
+        verify(tenantClient).checkLoginDevice(captor.capture())
+        assertEquals(proof.deviceId.toString(), captor.firstValue.deviceId)
+        assertEquals("USER", captor.firstValue.role)
+        assertEquals(userId, captor.firstValue.userId)
+    }
+
+    @Test
+    fun `the enrollment precheck skips the rule, so a new laptop can still be registered`() {
+        arrangePasswordAndPolicy()
+        whenever(tenantClient.checkLoginDevice(any())).thenReturn(LoginDeviceCheckResponse(false, "DEVICE_REQUIRED"))
+        whenever(deviceClient.ensurePending(tenantId, userId)).thenReturn(EnsurePendingResult(alreadyActive = true, null, null, null))
+
+        val result = service.precheck(precheckRequest, enforceDeviceRule = false)
+
+        assertEquals(true, result.mfaRequired)
+        verify(tenantClient, never()).checkLoginDevice(any())
+    }
+
+    @Test
+    fun `precheck never reaches the rule for a wrong password`() {
+        whenever(identityClient.verifyPassword(tenantId, "alice@acme.com", "correct-password")).thenReturn(VerifyPasswordResponse(valid = false))
+        assertThrows<InvalidCredentialsException> { service.precheck(precheckRequest) }
+        verify(tenantClient, never()).checkLoginDevice(any())
     }
 
     // ---- Platform-level "authorised laptop to sign in" rule ----
