@@ -4,7 +4,7 @@ import { BrandHeader } from "../BrandHeader";
 import { useActionState, useEffect, useRef, useState, type FormEvent } from "react";
 import { useFormStatus } from "react-dom";
 import QRCode from "qrcode";
-import { issueDeviceChallengeAction, loginAction, precheckAction } from "./actions";
+import { earlyDeviceCheckAction, issueDeviceChallengeAction, loginAction, precheckAction } from "./actions";
 import { obtainDeviceProof, warmUpAgentPermission } from "@/lib/deviceProof";
 import { enterAction, type LoginStep } from "@/lib/loginSteps";
 import { initialLoginFormState } from "./types";
@@ -44,6 +44,9 @@ export function LoginForm({ deviceSignIn = false, clientId, redirectUri, scope, 
   const [stepError, setStepError] = useState<string | null>(null);
   const [checking, setChecking] = useState(false);
   const [qrDataUrl, setQrDataUrl] = useState<string | null>(null);
+  // The heads-up shown on the email screen when this laptop would not be allowed to sign in (see earlyDeviceCheckAction).
+  const [deviceNotice, setDeviceNotice] = useState<string | null>(null);
+  const [emailChecking, setEmailChecking] = useState(false);
   const formRef = useRef<HTMLFormElement>(null);
   const proofRef = useRef<HTMLInputElement>(null);
   // Device-bound sign-in bookkeeping (see onSubmitCapture). Refs, not state: they must not re-render anything.
@@ -85,7 +88,7 @@ export function LoginForm({ deviceSignIn = false, clientId, redirectUri, scope, 
     const onEnter = enterAction(step);
     if (onEnter === "advance-username") {
       event.preventDefault();
-      goToPassword();
+      void goToPassword();
       return;
     }
     if (onEnter === "advance-password") {
@@ -150,13 +153,44 @@ export function LoginForm({ deviceSignIn = false, clientId, redirectUri, scope, 
     }
   }
 
-  function goToPassword() {
+  function advanceToPassword() {
+    setStepError(null);
+    setDeviceNotice(null);
+    setStep("password");
+  }
+
+  /**
+   * Next on the email screen. When this organization uses device sign-in, first asks the platform whether THIS laptop would be
+   * allowed in, so the person hears "you are not authorised to sign in from this device" right after typing the email instead
+   * of after the password. Only the laptop's signed proof is sent, never the email, and it is only a heads-up: an administrator
+   * is exempt and that is not knowable before the password, so the notice carries a way to carry on, and the real decision is
+   * still taken after the password. Any failure just moves on to the password screen as before.
+   */
+  async function goToPassword(skipDeviceCheck = false) {
+    if (emailChecking) return;
     if (!email.trim()) {
       setStepError("Enter your username.");
       return;
     }
+    if (!deviceSignIn || skipDeviceCheck) {
+      advanceToPassword();
+      return;
+    }
     setStepError(null);
-    setStep("password");
+    setEmailChecking(true);
+    try {
+      const proof = await proofForPasswordStep();
+      const { notice } = await earlyDeviceCheckAction(tenantOverride, proof);
+      if (notice) {
+        setDeviceNotice(notice);
+        return;
+      }
+      advanceToPassword();
+    } catch {
+      advanceToPassword();
+    } finally {
+      setEmailChecking(false);
+    }
   }
 
   async function handlePasswordNext() {
@@ -221,15 +255,29 @@ export function LoginForm({ deviceSignIn = false, clientId, redirectUri, scope, 
             <input
               type="email"
               value={email}
-              onChange={(e) => setEmail(e.target.value)}
+              onChange={(e) => {
+                setEmail(e.target.value);
+                setDeviceNotice(null);
+              }}
               required
               autoComplete="username"
               autoFocus
             />
           </label>
+          {deviceNotice && (
+            <div role="alert" className="login-form__error">
+              <p style={{ margin: 0 }}>{deviceNotice}</p>
+              <p className="hint" style={{ margin: "6px 0 0" }}>
+                Administrators are not restricted to authorised laptops.{" "}
+                <button type="button" className="login-form__button--secondary" onClick={() => void goToPassword(true)}>
+                  I am an administrator, continue
+                </button>
+              </p>
+            </div>
+          )}
           <div className="login-form__buttons">
-            <button type="button" onClick={goToPassword}>
-              Next
+            <button type="button" onClick={() => void goToPassword()} disabled={emailChecking}>
+              {emailChecking ? "Checking this device…" : "Next"}
             </button>
           </div>
         </>

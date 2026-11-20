@@ -175,9 +175,17 @@ class DeviceLoginProofService(
 class TrustedDeviceRequirementService(
     private val oidcClients: OidcClientRepository,
     private val samlSps: SamlSpRepository,
+    private val loginRules: TenantDeviceLoginRuleRepository,
 ) {
+    /**
+     * True when the sign-in page should ask the laptop's agent for a proof: some app requires a trusted device, OR the tenant's
+     * platform sign-in rule is on. Without the second half a tenant that switched the rule on but flagged no app would never get
+     * a proof requested, and every non-administrator would be refused even on an authorised laptop.
+     */
     fun tenantRequires(tenantId: UUID): Boolean =
-        oidcClients.existsByTenantIdAndRequireTrustedDeviceTrue(tenantId) || samlSps.existsByTenantIdAndRequireTrustedDeviceTrue(tenantId)
+        oidcClients.existsByTenantIdAndRequireTrustedDeviceTrue(tenantId) ||
+            samlSps.existsByTenantIdAndRequireTrustedDeviceTrue(tenantId) ||
+            loginRules.findById(tenantId).map { it.requireTrustedDevice }.orElse(false)
 }
 
 data class TrustedDeviceRequiredResponse(val required: Boolean)

@@ -14,6 +14,7 @@ import java.util.Optional
 import java.util.UUID
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class DeviceLoginRuleServiceTest {
@@ -23,7 +24,8 @@ class DeviceLoginRuleServiceTest {
     private val posture = mock<DevicePostureRepository>()
     private val auditPublisher = mock<AuditPublisher>()
     private val gate = TrustedDeviceGate(mock<OidcClientRepository>(), mock<SamlSpRepository>(), devices, posture, auditPublisher)
-    private val service = DeviceLoginRuleService(rules, gate, auditPublisher)
+    private val proofs = mock<DeviceLoginProofService>()
+    private val service = DeviceLoginRuleService(rules, gate, auditPublisher, devices, proofs)
 
     private val tenantId = UUID.randomUUID()
     private val userId = UUID.randomUUID()
@@ -137,6 +139,80 @@ class DeviceLoginRuleServiceTest {
         whenever(rules.existsById(tenantId)).thenReturn(true)
         service.set(tenantId, true, "admin-1", "1.2.3.4")
         verify(auditPublisher, org.mockito.kotlin.times(1)).publish(any())
+    }
+
+    // ---- the early (email step) preview ----
+
+    private val challengeId = UUID.randomUUID()
+
+    private fun preview(proof: Boolean = true) = service.preview(
+        LoginDevicePreviewRequest(tenantId, if (proof) challengeId else null, if (proof) deviceId else null, if (proof) "sig" else null, if (proof) "https://login.example.com" else null),
+    )
+
+    private fun proofAccepted() {
+        whenever(proofs.verify(org.mockito.kotlin.eq(challengeId), any(), org.mockito.kotlin.anyOrNull()))
+            .thenReturn(DeviceChallengeVerifyResponse(deviceId, "SOFTWARE"))
+    }
+
+    @Test
+    fun `preview says nothing should be shown when the tenant rule is off`() {
+        ruleOn(false)
+        val answer = preview(proof = false)
+        assertFalse(answer.ruleOn)
+        assertTrue(answer.authorised)
+        verify(devices, never()).findById(any())
+    }
+
+    @Test
+    fun `preview with no proof at all is DEVICE_REQUIRED, and the email never takes part`() {
+        ruleOn()
+        val answer = preview(proof = false)
+        assertTrue(answer.ruleOn)
+        assertFalse(answer.authorised)
+        assertEquals("DEVICE_REQUIRED", answer.code)
+    }
+
+    @Test
+    fun `preview with a proof the platform rejects is DEVICE_REQUIRED`() {
+        ruleOn(); device(); posture("COMPLIANT")
+        whenever(proofs.verify(any(), any(), org.mockito.kotlin.anyOrNull())).thenThrow(DeviceProofOfPossessionException("rejected"))
+        assertEquals("DEVICE_REQUIRED", preview().code)
+    }
+
+    @Test
+    fun `preview with a claimed device in another tenant is DEVICE_REQUIRED and never reaches proof verification`() {
+        ruleOn()
+        whenever(devices.findById(deviceId)).thenReturn(
+            Optional.of(IamDeviceEntity(deviceId, UUID.randomUUID(), userId, UUID.randomUUID(), ownership = "BYOD", lifecycleStatus = "APPROVED")),
+        )
+        assertEquals("DEVICE_REQUIRED", preview().code)
+        verify(proofs, never()).verify(any(), any(), org.mockito.kotlin.anyOrNull())
+    }
+
+    @Test
+    fun `preview accepts a proven, approved, compliant laptop`() {
+        ruleOn(); device(); posture("COMPLIANT"); proofAccepted()
+        val answer = preview()
+        assertTrue(answer.ruleOn)
+        assertTrue(answer.authorised)
+        assertNull(answer.code)
+    }
+
+    @Test
+    fun `preview refuses a proven laptop that is not approved or not compliant, with the reason`() {
+        ruleOn(); proofAccepted()
+        device(status = "PENDING_APPROVAL"); posture("COMPLIANT")
+        assertEquals("DEVICE_NOT_APPROVED", preview().code)
+        device(); posture("NON_COMPLIANT")
+        assertEquals("DEVICE_NON_COMPLIANT", preview().code)
+    }
+
+    @Test
+    fun `preview honours an active compliance exception but does not audit it, because it is not a sign-in`() {
+        ruleOn(); proofAccepted()
+        device(exceptionUntil = Instant.now().plusSeconds(3600)); posture("NON_COMPLIANT")
+        assertTrue(preview().authorised)
+        verify(auditPublisher, never()).publish(any())
     }
 
     @Test

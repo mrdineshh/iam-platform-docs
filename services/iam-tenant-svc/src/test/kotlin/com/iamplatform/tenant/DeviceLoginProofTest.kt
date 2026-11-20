@@ -335,7 +335,8 @@ class TrustedDeviceRequirementServiceTest {
 
     private val oidc = mock<OidcClientRepository>()
     private val saml = mock<SamlSpRepository>()
-    private val service = TrustedDeviceRequirementService(oidc, saml)
+    private val loginRules = mock<TenantDeviceLoginRuleRepository>()
+    private val service = TrustedDeviceRequirementService(oidc, saml, loginRules)
     private val tenantId = UUID.randomUUID()
 
     @Test
@@ -350,6 +351,18 @@ class TrustedDeviceRequirementServiceTest {
         whenever(oidc.existsByTenantIdAndRequireTrustedDeviceTrue(tenantId)).thenReturn(false)
         whenever(saml.existsByTenantIdAndRequireTrustedDeviceTrue(tenantId)).thenReturn(true)
         assertEquals(true, service.tenantRequires(tenantId))
+    }
+
+    @Test
+    fun `the platform sign-in rule alone makes the tenant require a proof, even with no flagged app`() {
+        whenever(loginRules.findById(tenantId)).thenReturn(Optional.of(TenantDeviceLoginRuleEntity(tenantId, true)))
+        assertEquals(true, service.tenantRequires(tenantId))
+    }
+
+    @Test
+    fun `the platform sign-in rule switched off requires nothing`() {
+        whenever(loginRules.findById(tenantId)).thenReturn(Optional.of(TenantDeviceLoginRuleEntity(tenantId, false)))
+        assertEquals(false, service.tenantRequires(tenantId))
     }
 
     @Test

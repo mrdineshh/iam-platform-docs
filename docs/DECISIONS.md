@@ -2600,3 +2600,24 @@ any login work itself.
   Tests: agent-core 188 (18 new: verifier incl. tampered / replayed / other-key / malformed controls, removal, and the sync behaviour above), tenant 256,
   console version-comparison tests; `cargo test --workspace` and the Windows build ran on the VM. Not yet tried live: switching it from the console and a laptop
   on 0.3.5 applying and removing the block. (A console test in `tenant.test.ts` fails on a clean checkout of the previous commit too; unrelated, left alone.)
+
+- **2026-11-20 -- Sign-in rule: tell the person right after the EMAIL, not only after the password (follow-up to the 2026-11-19 entries). Tier 3, requested by the user; a bug in the earlier feature found and fixed on the way.**
+  Request: the "not authorised to sign in from this device" message should appear as soon as the email is entered. The 2026-11-19 follow-up had refused this because
+  an email-based refusal tells anyone, with no password, whether an address belongs to a user and whether that user is an administrator (admins are exempt).
+  What is built: the early answer is decided from the LAPTOP alone. The sign-in page, on Next after the email, asks the agent for a signed proof and sends
+  only that proof (no email) to `POST /internal/login-device-check/preview` (tenant-svc, internal-only: 404 from the internet, verified). The platform verifies the
+  proof with the same code as the real sign-in (`DeviceLoginProofService.verify`, using the device's own owner as the user, because the owner is unknown here), then
+  applies the same verdict (`TrustedDeviceGate.evaluateDevice`). It answers {ruleOn, authorised, code}: nothing is shown when the tenant has the rule off; nothing is
+  audited (it is not a sign-in); an admin's compliance exception counts. The answer cannot depend on who is typing, so it leaks nothing about any email.
+  Trade-off the user should know: it is a HEADS-UP, not a hard stop. Administrators are exempt from the rule, and that cannot be known before the password without
+  revealing which emails are administrators, so the message carries an "I am an administrator, continue" button, and the real decision (with the admin exemption) is
+  still taken after the password by the existing check in iam-auth-svc, which is unchanged. A non-administrator who clicks past it is refused there as before.
+  A hard stop at the email step would either lock administrators out of the portal on any laptop without the agent, or have to ask the server about the email (the leak).
+  Any failure of the early check just moves on to the password screen.
+  Bug fixed: the sign-in page asked the agent for a proof only when an APP required a trusted device (`TrustedDeviceRequirementService.tenantRequires`). With the
+  platform rule on and no flagged app, no proof was ever requested, so every non-administrator was refused even on an authorised laptop. `tenantRequires` now also
+  returns true when the tenant's rule is on (found while wiring the early check; the tenant being tested has an app flagged, which hid it).
+  Tests: tenant 265, 0 failures on the VM (new: the rule alone makes the tenant require a proof; preview with rule off, no proof, rejected proof, a device from another
+  tenant never reaching proof verification, approved+compliant, pending, non-compliant, exception honoured and not audited); portal 87 passed (`earlyDeviceNotice`).
+  Real browser (headless Chrome, made-up account) re-run: Enter on the username and password steps and the admin console still move on with the rule off.
+  NOT tried live: the notice itself, because that needs the tenant's rule switched on (an admin action), a laptop that is not authorised, and a real browser.

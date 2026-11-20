@@ -11,7 +11,8 @@ import { UpstreamError } from "@/lib/http";
 import { findTenantBySubdomain, resolveTenantSubdomain, type Tenant } from "@/lib/tenant";
 import { str } from "@/lib/formData";
 import { POST_LOGIN_NEXT_COOKIE, loopbackCallbackUrl, parseEnrollmentHandoff, safePostLoginNext, startDeviceEnrollment } from "@/lib/deviceEnroll";
-import { deviceSignInRequired, issueDeviceChallenge } from "@/lib/deviceChallenge";
+import { deviceSignInRequired, issueDeviceChallenge, previewLoginDevice } from "@/lib/deviceChallenge";
+import { earlyDeviceNotice } from "@/lib/earlyDeviceCheck";
 import { parseDeviceProofField, type DeviceChallenge } from "@/lib/deviceProof";
 import type { LoginFormState, PrecheckActionInput, PrecheckActionResult } from "./types";
 
@@ -88,6 +89,24 @@ export async function precheckAction(input: PrecheckActionInput): Promise<Preche
       }
     }
     return { ok: false, error: "Sign-in is temporarily unavailable. Please try again." };
+  }
+}
+
+/**
+ * Called when the email is entered, before any password: would this organization let THIS laptop sign in? Returns the sentence to
+ * show, or null for "say nothing". It is only a heads-up -- it never blocks: an administrator is exempt from the rule and that is
+ * only known after the password, so the real refusal still happens there. The email is not sent anywhere by this call, so it cannot
+ * be used to find out whether an address belongs to a user or an administrator. Any failure returns null.
+ */
+export async function earlyDeviceCheckAction(tenantOverride: string | null, deviceProof?: string): Promise<{ notice: string | null }> {
+  const correlationId = randomUUID();
+  try {
+    const tenant = await resolveTenant(tenantOverride, correlationId);
+    if ("error" in tenant) return { notice: null };
+    const proof = parseDeviceProofField(deviceProof);
+    return { notice: earlyDeviceNotice(await previewLoginDevice(tenant.id, proof, correlationId)) };
+  } catch {
+    return { notice: null };
   }
 }
 

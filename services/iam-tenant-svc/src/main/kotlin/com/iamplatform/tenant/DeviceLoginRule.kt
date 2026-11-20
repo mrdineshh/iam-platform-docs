@@ -60,11 +60,30 @@ data class LoginDeviceCheckRequest(
 /** [code] is one of DEVICE_REQUIRED, DEVICE_NOT_APPROVED, DEVICE_NON_COMPLIANT when [allowed] is false. */
 data class LoginDeviceCheckResponse(val allowed: Boolean, val code: String? = null, val detail: String? = null)
 
+/**
+ * Asked by the login page as soon as the email is entered, BEFORE any password. It carries only what the laptop's agent signed,
+ * and NO email: the answer is about this laptop and this tenant's rule, never about who is signing in, so it cannot be used to
+ * learn whether an email belongs to a user or an administrator. All proof fields are optional; a missing or bad one just means
+ * "no verified laptop".
+ */
+data class LoginDevicePreviewRequest(
+    @field:NotNull val tenantId: UUID?,
+    val challengeId: UUID? = null,
+    val deviceId: UUID? = null,
+    val signature: String? = null,
+    val origin: String? = null,
+)
+
+/** [ruleOn] false means the tenant does not restrict sign-in by laptop and nothing should be shown. */
+data class LoginDevicePreviewResponse(val ruleOn: Boolean, val authorised: Boolean, val code: String? = null, val detail: String? = null)
+
 @Service
 class DeviceLoginRuleService(
     private val rules: TenantDeviceLoginRuleRepository,
     private val gate: TrustedDeviceGate,
     private val auditPublisher: AuditPublisher,
+    private val devices: IamDeviceRepository,
+    private val proofs: DeviceLoginProofService,
 ) {
     fun isRequired(tenantId: UUID): Boolean = rules.findById(tenantId).map { it.requireTrustedDevice }.orElse(false)
 
@@ -101,29 +120,60 @@ class DeviceLoginRuleService(
         if (!isRequired(tenantId)) return ALLOWED
 
         val verdict = gate.evaluateDevice(tenantId, userId, request.deviceId, allowPending = false)
-        return when (verdict.denial) {
-            null -> {
-                if (verdict.exceptionUsed) {
-                    auditPublisher.publish(
-                        AuditEvent(
-                            correlationId = CorrelationId.get(),
-                            tenantId = tenantId,
-                            actorType = ActorType.USER,
-                            actorId = userId.toString(),
-                            action = "auth.login.allowed_compliance_exception",
-                            result = AuditResult.SUCCESS,
-                            reason = "exception until ${verdict.exceptionUntil}",
-                            deviceId = verdict.deviceId.toString(),
-                        ),
-                    )
-                }
-                ALLOWED
-            }
-            DeviceDenial.NO_DEVICE, DeviceDenial.NOT_REGISTERED -> LoginDeviceCheckResponse(false, "DEVICE_REQUIRED")
-            DeviceDenial.NOT_APPROVED ->
-                LoginDeviceCheckResponse(false, "DEVICE_NOT_APPROVED", verdict.status.orEmpty().lowercase().replace('_', ' '))
-            DeviceDenial.NON_COMPLIANT -> LoginDeviceCheckResponse(false, "DEVICE_NON_COMPLIANT")
+        if (verdict.denial != null) return refusalOf(verdict)
+        if (verdict.exceptionUsed) {
+            auditPublisher.publish(
+                AuditEvent(
+                    correlationId = CorrelationId.get(),
+                    tenantId = tenantId,
+                    actorType = ActorType.USER,
+                    actorId = userId.toString(),
+                    action = "auth.login.allowed_compliance_exception",
+                    result = AuditResult.SUCCESS,
+                    reason = "exception until ${verdict.exceptionUntil}",
+                    deviceId = verdict.deviceId.toString(),
+                ),
+            )
         }
+        return ALLOWED
+    }
+
+    /**
+     * The early answer for the email step: is THIS laptop one the tenant would let sign in? Decided from the laptop alone (its
+     * signed proof, then the same verdict as the real sign-in), so the email never takes part. Nothing is audited here -- it is
+     * not a sign-in -- and an administrator's exemption is deliberately NOT applied: it depends on who is signing in, which this
+     * step must not learn. The login page therefore shows this as a warning an administrator can step past; the real decision
+     * is still made after the password by [check].
+     */
+    fun preview(request: LoginDevicePreviewRequest): LoginDevicePreviewResponse {
+        val tenantId = request.tenantId!!
+        if (!isRequired(tenantId)) return LoginDevicePreviewResponse(ruleOn = false, authorised = true)
+        val proven = proveDevice(tenantId, request)
+        val verdict = gate.evaluateDevice(tenantId, proven?.userId ?: UUID(0, 0), proven?.id?.toString(), allowPending = false)
+        val refusal = if (verdict.denial == null) null else refusalOf(verdict)
+        return LoginDevicePreviewResponse(ruleOn = true, authorised = refusal == null, code = refusal?.code, detail = refusal?.detail)
+    }
+
+    /** The laptop the request proves it is (signature over a fresh challenge), or null. Any problem at all means "no laptop". */
+    private fun proveDevice(tenantId: UUID, request: LoginDevicePreviewRequest): IamDeviceEntity? {
+        val challengeId = request.challengeId ?: return null
+        val deviceId = request.deviceId ?: return null
+        val signature = request.signature?.takeIf { it.isNotBlank() } ?: return null
+        val origin = request.origin?.takeIf { it.isNotBlank() } ?: return null
+        val device = devices.findById(deviceId).orElse(null)?.takeIf { it.tenantId == tenantId } ?: return null
+        return try {
+            proofs.verify(challengeId, DeviceChallengeVerifyRequest(device.userId, device.id, signature, origin), null)
+            device
+        } catch (ex: DeviceProofOfPossessionException) {
+            null
+        }
+    }
+
+    private fun refusalOf(verdict: DeviceVerdict): LoginDeviceCheckResponse = when (verdict.denial) {
+        DeviceDenial.NO_DEVICE, DeviceDenial.NOT_REGISTERED, null -> LoginDeviceCheckResponse(false, "DEVICE_REQUIRED")
+        DeviceDenial.NOT_APPROVED ->
+            LoginDeviceCheckResponse(false, "DEVICE_NOT_APPROVED", verdict.status.orEmpty().lowercase().replace('_', ' '))
+        DeviceDenial.NON_COMPLIANT -> LoginDeviceCheckResponse(false, "DEVICE_NON_COMPLIANT")
     }
 
     private companion object {
@@ -168,4 +218,8 @@ class LoginDeviceCheckController(private val service: DeviceLoginRuleService) {
     @PostMapping
     fun check(@Valid @RequestBody request: LoginDeviceCheckRequest): ResponseEntity<LoginDeviceCheckResponse> =
         ResponseEntity.ok(service.check(request))
+
+    @PostMapping("/preview")
+    fun preview(@Valid @RequestBody request: LoginDevicePreviewRequest): ResponseEntity<LoginDevicePreviewResponse> =
+        ResponseEntity.ok(service.preview(request))
 }
