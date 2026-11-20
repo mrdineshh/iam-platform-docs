@@ -65,6 +65,9 @@ data class VerifyPasswordRequest(
 /** Just enough to evaluate a person's sign-in policy before they have typed a password: who they are and which OU they are in. */
 data class UserLookupResponse(val id: UUID, val groupId: UUID?)
 
+/** In the body, not the address: an email in a query string gets percent-encoded twice by the calling client and then never matches. */
+data class UserLookupRequest(@field:NotNull val tenantId: UUID?, @field:NotBlank val email: String)
+
 data class VerifyPasswordResponse(
     val valid: Boolean,
     val userId: UUID? = null,

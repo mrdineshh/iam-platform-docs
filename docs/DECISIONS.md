@@ -2640,3 +2640,13 @@ any login work itself.
   so a generic exception propagates (pre-existing behaviour, test corrected, not changed). Real browser (headless Chrome, this laptop's address, made-up email): Enter on the
   email screen showed "Sign-in isn't allowed from your current location or network." and stayed on that screen. NOTE for anyone testing from the same address: the tenant
   allowed-IP list did not contain it at the time, so every email is stopped there, exactly as it would have been after the password.
+- **2026-11-20 -- FAULT in the early location check, found and fixed the same day (mine). It refused users whom the real sign-in would have allowed.**
+  Reported: rs@demo.econz.net could no longer sign in ("Sign-in isn't allowed from your current location or network") after the email-step check went live.
+  I first told the user the cause was only the tenant-wide allowed-IP list and not my change; that was wrong. A read-only look at policy_db (with the user's
+  permission) showed the tenant list is `27.34.250.10/32`, but rs has a USER-level list `0.0.0.0/0`, which by the merge rule wins (no tenant hard cap), so the real
+  sign-in after the password allows rs. The early check had refused rs because it never recognised the user (`userKnown=false` in the new diagnostic log):
+  `IdentityClient.lookupUser` put the email in the query string already percent-encoded, and the shared RestClient encodes the URI template again, so
+  "rs%40demo.econz.net" arrived as "rs%2540demo.econz.net", matched no user, and the tenant-wide policy was applied to everyone. Fix: the lookup is now
+  `POST /api/v1/users/lookup` with {tenantId, email} in the body (identity and auth). Verified live: rs from 110.235.228.135 -> allowed (userKnown=true); a made-up
+  email from the same address -> refused by the tenant list, as before. Identity 39 and auth 54 tests pass. Lesson: the unit tests mocked `lookupUser`, so the
+  encoding bug was invisible to them; the diagnostic log line (address, userKnown, decision) is what exposed it.

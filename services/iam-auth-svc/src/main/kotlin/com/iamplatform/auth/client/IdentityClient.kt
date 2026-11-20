@@ -67,7 +67,9 @@ class IdentityClient(
     /** Null when no such user (HTTP 404). Any other failure propagates, so the caller decides what an unreachable service means. */
     fun lookupUser(tenantId: UUID, email: String): RemoteUserLookup? =
         try {
-            client.get("/api/v1/users/lookup?tenantId=$tenantId&email=${java.net.URLEncoder.encode(email, Charsets.UTF_8)}", RemoteUserLookup::class.java)
+            // POST with the email in the body: putting it in the address made the shared client encode it a second time
+            // ("rs%40..." became "rs%2540..."), so no user was ever found and the tenant-wide rule was applied instead.
+            client.post("/api/v1/users/lookup", mapOf("tenantId" to tenantId, "email" to email), RemoteUserLookup::class.java)
         } catch (ex: org.springframework.web.client.HttpClientErrorException.NotFound) {
             null
         }

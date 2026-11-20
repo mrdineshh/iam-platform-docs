@@ -33,10 +33,10 @@ class UserController(
     fun listUsers(@RequestParam tenantId: UUID): ResponseEntity<List<UserResponse>> =
         ResponseEntity.ok(userService.listUsers(tenantId).map { it.toResponse() })
 
-    // Service-to-service (iam-auth-svc's early location check). A literal path, so it never collides with "/{id}".
-    @GetMapping("/lookup")
-    fun lookup(@RequestParam tenantId: UUID, @RequestParam email: String): ResponseEntity<UserLookupResponse> =
-        userService.lookup(tenantId, email)?.let { ResponseEntity.ok(it) } ?: ResponseEntity.notFound().build()
+    // Service-to-service (iam-auth-svc's early location check). POST with the email in the body, see UserLookupRequest.
+    @PostMapping("/lookup")
+    fun lookup(@Valid @RequestBody request: UserLookupRequest): ResponseEntity<UserLookupResponse> =
+        userService.lookup(request.tenantId!!, request.email)?.let { ResponseEntity.ok(it) } ?: ResponseEntity.notFound().build()
 
     @GetMapping("/{id}")
     fun getUser(@PathVariable id: UUID): ResponseEntity<UserResponse> =
