@@ -162,11 +162,12 @@ export function LoginForm({ deviceSignIn = false, clientId, redirectUri, scope, 
   /**
    * Next on the email screen. When this organization uses device sign-in, first asks the platform whether THIS laptop would be
    * allowed in, so the person hears "you are not authorised to sign in from this device" right after typing the email instead
-   * of after the password. Only the laptop's signed proof is sent, never the email, and it is only a heads-up: an administrator
-   * is exempt and that is not knowable before the password, so the notice carries a way to carry on, and the real decision is
-   * still taken after the password. Any failure just moves on to the password screen as before.
+   * of after the password. Only the laptop's signed proof is sent, never the email. A refusal stops the person on this screen,
+   * administrators included (owner's decision 2026-11-20: an administrator on an unauthorised laptop cannot use this portal from
+   * it; the Admin Console sign-in is separate and unaffected). The check after the password is unchanged. Any failure of this
+   * early check just moves on to the password screen as before.
    */
-  async function goToPassword(skipDeviceCheck = false) {
+  async function goToPassword() {
     if (emailChecking) return;
     if (!email.trim()) {
       setStepError("Enter your username.");
@@ -182,8 +183,8 @@ export function LoginForm({ deviceSignIn = false, clientId, redirectUri, scope, 
         setStepError(ip.notice);
         return;
       }
-      // 2. Laptop rule: only a heads-up an administrator can step past (see above).
-      if (deviceSignIn && !skipDeviceCheck) {
+      // 2. Laptop rule: also stops the person here (see above).
+      if (deviceSignIn) {
         const proof = await proofForPasswordStep();
         const { notice } = await earlyDeviceCheckAction(tenantOverride, proof);
         if (notice) {
@@ -271,15 +272,9 @@ export function LoginForm({ deviceSignIn = false, clientId, redirectUri, scope, 
             />
           </label>
           {deviceNotice && (
-            <div role="alert" className="login-form__error">
-              <p style={{ margin: 0 }}>{deviceNotice}</p>
-              <p className="hint" style={{ margin: "6px 0 0" }}>
-                Administrators are not restricted to authorised laptops.{" "}
-                <button type="button" className="login-form__button--secondary" onClick={() => void goToPassword(true)}>
-                  I am an administrator, continue
-                </button>
-              </p>
-            </div>
+            <p role="alert" className="login-form__error">
+              {deviceNotice}
+            </p>
           )}
           <div className="login-form__buttons">
             <button type="button" onClick={() => void goToPassword()} disabled={emailChecking}>
