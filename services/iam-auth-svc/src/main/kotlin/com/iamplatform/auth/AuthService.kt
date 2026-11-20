@@ -260,12 +260,40 @@ class AuthService(
         }
     }
 
+    /**
+     * Early answer for the email step: would the location and network rules (country and IP lists) let this person in from this
+     * address? Uses the same merged policy as the real sign-in (`resolvePolicy`), for the OU of the user with this email, or the
+     * tenant-wide policy when there is no such user or the lookup fails.
+     *
+     * What it reveals, said plainly: the real sign-in only reveals a policy refusal after the correct password, whereas this
+     * reveals it from the email alone. For anyone whose own rules differ from the tenant's, an outsider can therefore tell that
+     * such an email exists and that its rules refuse their address. Where the tenant-wide rule is what refuses them, the answer is
+     * the same for a real and a made-up email and tells nothing about the address. Nothing else is revealed (not whether the
+     * account is suspended or locked, its role, or whether it has a password) and the real check after the password is unchanged.
+     * Not audited: it is not a sign-in. Never touches a password, a second factor or a push.
+     */
+    fun ipPreview(request: IpPreviewRequest): IpPreviewResponse {
+        val user = try {
+            identityClient.lookupUser(request.tenantId, request.email)
+        } catch (ex: Exception) {
+            null
+        }
+        val (_, decision, _) = resolvePolicy(request.tenantId, user?.id, user?.groupId, request.sourceIp)
+        if (decision.allowed) return IpPreviewResponse(allowed = true)
+        val code = when (decision.reason) {
+            "location could not be verified" -> AuthErrorCode.LOCATION_UNVERIFIED
+            "policy could not be evaluated" -> AuthErrorCode.POLICY_UNAVAILABLE
+            else -> AuthErrorCode.POLICY_DENIED
+        }
+        return IpPreviewResponse(allowed = false, errorCode = code.name, reason = decision.reason)
+    }
+
     fun logout(token: String) {
         sessionClient.terminate(token, reason = "logout")
     }
 
     /** Shared by login() and precheck() -- resolves geo + merged policy, including mfaRequired. */
-    private fun resolvePolicy(tenantId: UUID, userId: UUID, groupId: UUID?, sourceIp: String): Triple<String?, PolicyDecision, GeoResolution?> {
+    private fun resolvePolicy(tenantId: UUID, userId: UUID?, groupId: UUID?, sourceIp: String): Triple<String?, PolicyDecision, GeoResolution?> {
         // Section 4.6: iam-geo-svc unreachable -> unresolved/high-risk, never
         // an automatic pass. Caught here, not left to propagate, so an
         // infra blip on the geo lookup degrades to a denial, not a 503.

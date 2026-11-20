@@ -4,7 +4,7 @@ import { BrandHeader } from "../BrandHeader";
 import { useActionState, useEffect, useRef, useState, type FormEvent } from "react";
 import { useFormStatus } from "react-dom";
 import QRCode from "qrcode";
-import { earlyDeviceCheckAction, issueDeviceChallengeAction, loginAction, precheckAction } from "./actions";
+import { earlyDeviceCheckAction, earlyIpCheckAction, issueDeviceChallengeAction, loginAction, precheckAction } from "./actions";
 import { obtainDeviceProof, warmUpAgentPermission } from "@/lib/deviceProof";
 import { enterAction, type LoginStep } from "@/lib/loginSteps";
 import { initialLoginFormState } from "./types";
@@ -172,18 +172,24 @@ export function LoginForm({ deviceSignIn = false, clientId, redirectUri, scope, 
       setStepError("Enter your username.");
       return;
     }
-    if (!deviceSignIn || skipDeviceCheck) {
-      advanceToPassword();
-      return;
-    }
     setStepError(null);
+    setDeviceNotice(null);
     setEmailChecking(true);
     try {
-      const proof = await proofForPasswordStep();
-      const { notice } = await earlyDeviceCheckAction(tenantOverride, proof);
-      if (notice) {
-        setDeviceNotice(notice);
+      // 1. Location and network rules: apply to everyone, administrators included, so a refusal stops the person right here.
+      const ip = await earlyIpCheckAction(tenantOverride, email.trim());
+      if (ip.notice) {
+        setStepError(ip.notice);
         return;
+      }
+      // 2. Laptop rule: only a heads-up an administrator can step past (see above).
+      if (deviceSignIn && !skipDeviceCheck) {
+        const proof = await proofForPasswordStep();
+        const { notice } = await earlyDeviceCheckAction(tenantOverride, proof);
+        if (notice) {
+          setDeviceNotice(notice);
+          return;
+        }
       }
       advanceToPassword();
     } catch {
@@ -277,7 +283,7 @@ export function LoginForm({ deviceSignIn = false, clientId, redirectUri, scope, 
           )}
           <div className="login-form__buttons">
             <button type="button" onClick={() => void goToPassword()} disabled={emailChecking}>
-              {emailChecking ? "Checking this device…" : "Next"}
+              {emailChecking ? "Checking…" : "Next"}
             </button>
           </div>
         </>

@@ -38,6 +38,6 @@ class PolicyClient(
         "policy-svc",
     )
 
-    fun evaluate(tenantId: UUID, userId: UUID, ouId: UUID?, country: String, sourceIp: String?): EvaluateResponse =
+    fun evaluate(tenantId: UUID, userId: UUID?, ouId: UUID?, country: String, sourceIp: String?): EvaluateResponse =
         client.post("/api/v1/evaluate", EvaluateRequest(tenantId, userId, ouId, country, sourceIp), EvaluateResponse::class.java)
 }

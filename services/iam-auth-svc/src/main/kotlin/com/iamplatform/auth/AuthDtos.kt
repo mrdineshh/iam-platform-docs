@@ -88,6 +88,25 @@ data class PrecheckRequest(
     val deviceProof: DeviceProof? = null,
 )
 
+/**
+ * Asked by the sign-in page as soon as the email is entered, before any password: would the tenant's location and network rules
+ * let this person in from here? Carries the email so the person's OU rules apply. See AuthService.ipPreview for what it reveals.
+ */
+data class IpPreviewRequest(
+    @field:NotNull
+    val tenantId: UUID,
+
+    @field:NotBlank
+    val email: String,
+
+    val sourceIp: String = "",
+
+    val userAgent: String? = null,
+)
+
+/** [errorCode] is an [AuthErrorCode] name (POLICY_DENIED, LOCATION_UNVERIFIED, POLICY_UNAVAILABLE) when [allowed] is false. */
+data class IpPreviewResponse(val allowed: Boolean, val errorCode: String? = null, val reason: String? = null)
+
 data class PrecheckResponse(
     val mfaRequired: Boolean,
     val enrollmentRequired: Boolean,

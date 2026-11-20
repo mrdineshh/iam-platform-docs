@@ -62,6 +62,9 @@ data class VerifyPasswordRequest(
     val password: String,
 )
 
+/** Just enough to evaluate a person's sign-in policy before they have typed a password: who they are and which OU they are in. */
+data class UserLookupResponse(val id: UUID, val groupId: UUID?)
+
 data class VerifyPasswordResponse(
     val valid: Boolean,
     val userId: UUID? = null,

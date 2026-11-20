@@ -1,6 +1,7 @@
 import { config } from "./config";
 import { postJson } from "./http";
 import type { DeviceProof } from "./deviceProof";
+import type { IpPreview } from "./earlyIpCheck";
 
 export interface LoginRequest {
   tenantId: string;
@@ -53,6 +54,22 @@ export interface PrecheckResponse {
 export async function login(request: LoginRequest, correlationId: string): Promise<LoginResponse> {
   const timeoutMs = request.totpCode ? config.defaultTimeoutMs : config.pushWaitTimeoutMs;
   return postJson<LoginResponse>(`${config.authSvcUrl}/api/v1/login`, request, { correlationId, timeoutMs });
+}
+
+/**
+ * The early location check for the email step (/internal/login/ip-preview on iam-auth-svc): would the tenant's country and IP rules
+ * let this person in from this address? Internal-only (404 through the public proxy). Null on ANY failure: a problem here must only
+ * ever mean "show nothing", because the real check is made after the password.
+ */
+export async function previewIp(
+  request: { tenantId: string; email: string; sourceIp: string; userAgent?: string },
+  correlationId: string,
+): Promise<IpPreview | null> {
+  try {
+    return await postJson<IpPreview>(`${config.authSvcUrl}/internal/login/ip-preview`, request, { correlationId, timeoutMs: 4000 });
+  } catch {
+    return null;
+  }
 }
 
 /**

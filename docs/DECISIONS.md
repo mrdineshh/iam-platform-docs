@@ -2621,3 +2621,22 @@ any login work itself.
   tenant never reaching proof verification, approved+compliant, pending, non-compliant, exception honoured and not audited); portal 87 passed (`earlyDeviceNotice`).
   Real browser (headless Chrome, made-up account) re-run: Enter on the username and password steps and the admin console still move on with the rule off.
   NOT tried live: the notice itself, because that needs the tenant's rule switched on (an admin action), a laptop that is not authorised, and a real browser.
+
+- **2026-11-20 -- Sign-in: tell the person right after the EMAIL when the tenant's location / IP rules refuse their address (follow-up to the laptop heads-up above). Tier 3, requested by the user.**
+  Request: when an email is entered and the address is not allowed by the IP restriction, show the restriction message at once, not after the password.
+  Built: `POST /internal/login/ip-preview` on iam-auth-svc (internal-only, 404 from the internet, verified) runs the SAME merged policy as the real sign-in
+  (`resolvePolicy`: geo lookup then policy-svc evaluate) for the OU of the user with that email, or the tenant-wide policy when there is no such user or the lookup fails.
+  New `GET /api/v1/users/lookup?tenantId&email` on iam-identity-svc returns only {id, groupId} (no hash, status, role or lock state; 404 if none; internal service).
+  `PolicyClient.evaluate` now accepts a null user. The sign-in page asks on Next / Enter and, unlike the laptop heads-up, STOPS the person on the email screen: the location
+  and network rules apply to everyone including administrators, so there is no exemption to step past. Same wording as the refusal after the password (POLICY_DENIED,
+  LOCATION_UNVERIFIED, POLICY_UNAVAILABLE); the server's raw reason text is never shown. Any failure of the check moves on to the password screen, which still decides.
+  Order on the email screen: location/network first (stops), then the laptop heads-up (can be stepped past by an administrator). Not audited (it is not a sign-in).
+  What it reveals, said plainly (Tier 3, accepted by the requester): the real sign-in shows a policy refusal only after the CORRECT password; this shows it from the email
+  alone. Where the tenant-wide rule is what refuses the address, the answer is identical for a real and a made-up email (checked live: four combinations, same answer) and tells
+  nothing. Where a person's OU or personal rule differs from the tenant's, an outsider can learn that such an email exists and that its rules refuse their address. It does not
+  reveal whether the account is suspended or locked, its role, or whether it has a password; it cannot reach a password check, second factor or push. No rate limit was added.
+  Tests: identity 39, auth 54 (6 new `ipPreview` cases incl. unknown user uses tenant policy with no user/OU, failed lookup, location unverifiable, policy unavailable, nothing
+  checked or audited), portal 91 (`earlyIpNotice`), all green. Found while writing: `orNull` treats only ResourceAccessException and an open circuit breaker as "unavailable",
+  so a generic exception propagates (pre-existing behaviour, test corrected, not changed). Real browser (headless Chrome, this laptop's address, made-up email): Enter on the
+  email screen showed "Sign-in isn't allowed from your current location or network." and stayed on that screen. NOTE for anyone testing from the same address: the tenant
+  allowed-IP list did not contain it at the time, so every email is stopped there, exactly as it would have been after the password.

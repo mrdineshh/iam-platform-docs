@@ -4,7 +4,8 @@ import { cookies, headers } from "next/headers";
 import { redirect } from "next/navigation";
 import { randomUUID } from "node:crypto";
 import { config } from "@/lib/config";
-import { login, loginForEnrollment, precheck, precheckForEnrollment, type LoginResponse } from "@/lib/authClient";
+import { login, loginForEnrollment, precheck, precheckForEnrollment, previewIp, type LoginResponse } from "@/lib/authClient";
+import { earlyIpNotice } from "@/lib/earlyIpCheck";
 import { completeAuthorization } from "@/lib/oidcClient";
 import { ACCESS_DENIAL_MESSAGES, accessDenialReason, denialMessage, isAppAccessDenied } from "@/lib/errorCodes";
 import { UpstreamError } from "@/lib/http";
@@ -89,6 +90,26 @@ export async function precheckAction(input: PrecheckActionInput): Promise<Preche
       }
     }
     return { ok: false, error: "Sign-in is temporarily unavailable. Please try again." };
+  }
+}
+
+/**
+ * Called when the email is entered, before any password: would the tenant's location and network rules (country and IP lists) let
+ * this person in from here? Returns the sentence to show, or null for "say nothing", and any failure also returns null: the real
+ * check after the password is the one that counts. The rule applies to everyone, so unlike the laptop heads-up this one stops the
+ * person on the email screen.
+ */
+export async function earlyIpCheckAction(tenantOverride: string | null, email: string): Promise<{ notice: string | null }> {
+  const correlationId = randomUUID();
+  try {
+    const requestHeaders = await headers();
+    const sourceIp = requestHeaders.get("x-iam-internal-real-ip") ?? "";
+    const userAgent = requestHeaders.get("user-agent") ?? undefined;
+    const tenant = await resolveTenant(tenantOverride, correlationId);
+    if ("error" in tenant) return { notice: null };
+    return { notice: earlyIpNotice(await previewIp({ tenantId: tenant.id, email, sourceIp, userAgent }, correlationId)) };
+  } catch {
+    return { notice: null };
   }
 }
 

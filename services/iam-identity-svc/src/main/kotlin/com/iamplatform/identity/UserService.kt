@@ -172,6 +172,13 @@ class UserService(
         )
     }
 
+    /**
+     * The user with this email in this tenant, or null. Matches exactly as verifyPassword does. Used by iam-auth-svc's early
+     * location check (before a password exists); returns nothing secret -- no hash, status, role or lock state.
+     */
+    fun lookup(tenantId: UUID, email: String): UserLookupResponse? =
+        repository.findByTenantIdAndEmail(tenantId, email)?.let { UserLookupResponse(it.id, it.groupId) }
+
     // No audit event published here -- this is an internal credential check,
     // not itself the security decision. iam-auth-svc (Service 7), the actual
     // login orchestrator, publishes the login outcome. Same reasoning as

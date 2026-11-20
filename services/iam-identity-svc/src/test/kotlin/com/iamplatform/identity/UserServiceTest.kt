@@ -135,6 +135,22 @@ class UserServiceTest {
     }
 
     @Test
+    fun `lookup returns the id and OU of a known email and nothing else`() {
+        val id = UUID.randomUUID()
+        val group = UUID.randomUUID()
+        whenever(repository.findByTenantIdAndEmail(tenantId, "a@acme.com")).thenReturn(
+            UserEntity(id = id, tenantId = tenantId, email = "a@acme.com", displayName = "Alice", passwordHash = "secret-hash", groupId = group),
+        )
+        assertEquals(UserLookupResponse(id, group), service.lookup(tenantId, "a@acme.com"))
+    }
+
+    @Test
+    fun `lookup of an unknown email is null, and never touches the password check`() {
+        assertNull(service.lookup(tenantId, "nobody@acme.com"))
+        verify(passwordService, never()).matches(any(), any())
+    }
+
+    @Test
     fun `verifyPassword includes role on a correct password`() {
         val id = UUID.randomUUID()
         val user = UserEntity(id = id, tenantId = tenantId, email = "a@acme.com", displayName = "Alice", passwordHash = "stored-hash", role = UserRole.ADMIN)

@@ -31,6 +31,9 @@ data class VerifyPasswordResponse(
 // Added for the break-glass 2FA reset path (BreakGlassService) -- it needs
 // to resolve a user by email without a password, which verify-password
 // can't do.
+/** Who an email belongs to and which OU they are in, or nothing: see iam-identity-svc's /users/lookup. */
+data class RemoteUserLookup(val id: UUID, val groupId: UUID?)
+
 data class RemoteUserListEntry(val id: UUID, val email: String, val role: RemoteUserRole)
 
 /**
@@ -60,6 +63,14 @@ class IdentityClient(
             VerifyPasswordRequest(tenantId, email, password),
             VerifyPasswordResponse::class.java,
         )
+
+    /** Null when no such user (HTTP 404). Any other failure propagates, so the caller decides what an unreachable service means. */
+    fun lookupUser(tenantId: UUID, email: String): RemoteUserLookup? =
+        try {
+            client.get("/api/v1/users/lookup?tenantId=$tenantId&email=${java.net.URLEncoder.encode(email, Charsets.UTF_8)}", RemoteUserLookup::class.java)
+        } catch (ex: org.springframework.web.client.HttpClientErrorException.NotFound) {
+            null
+        }
 
     fun listUsers(tenantId: UUID): List<RemoteUserListEntry> =
         client.get("/api/v1/users?tenantId=$tenantId", Array<RemoteUserListEntry>::class.java).toList()

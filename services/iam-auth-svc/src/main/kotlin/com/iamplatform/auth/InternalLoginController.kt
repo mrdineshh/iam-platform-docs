@@ -25,6 +25,13 @@ class InternalLoginController(private val authService: AuthService) {
         return ResponseEntity.ok(authService.precheck(request.copy(sourceIp = ip, userAgent = userAgent), enforceDeviceRule = false))
     }
 
+    // Early location check for the email step. Internal-only like the rest of this controller, so it cannot be called from the internet.
+    @PostMapping("/ip-preview")
+    fun ipPreview(@Valid @RequestBody request: IpPreviewRequest, servletRequest: HttpServletRequest): ResponseEntity<IpPreviewResponse> {
+        val (ip, _) = ClientContext.resolve(servletRequest, request.sourceIp, request.userAgent)
+        return ResponseEntity.ok(authService.ipPreview(request.copy(sourceIp = ip)))
+    }
+
     @PostMapping("/enrollment")
     fun enrollmentLogin(@Valid @RequestBody request: LoginRequest, servletRequest: HttpServletRequest): ResponseEntity<LoginResponse> {
         val (ip, userAgent) = ClientContext.resolve(servletRequest, request.sourceIp, request.userAgent)

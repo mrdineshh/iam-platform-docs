@@ -13,6 +13,7 @@ import com.iamplatform.auth.client.PolicyClient
 import com.iamplatform.auth.client.PushSendResult
 import com.iamplatform.auth.client.RemoteDeviceStatus
 import com.iamplatform.auth.client.RemotePushResult
+import com.iamplatform.auth.client.RemoteUserLookup
 import com.iamplatform.auth.client.RemoteUserRole
 import com.iamplatform.auth.client.RemoteUserStatus
 import com.iamplatform.auth.client.SessionClient
@@ -419,6 +420,82 @@ class AuthServiceTest {
         val result = service.login(request.copy(deviceProof = proof))
 
         assertEquals("tok-plain", result.token)
+    }
+
+    // ---- Early location check at the email step (ipPreview) ----
+
+    private val ipRequest = IpPreviewRequest(tenantId, "alice@acme.com", "8.8.8.8")
+    private val groupId = UUID.randomUUID()
+
+    private fun arrangeGeo() {
+        whenever(geoClient.resolve("8.8.8.8")).thenReturn(GeoResolution("8.8.8.8", resolved = true, country = "US"))
+    }
+
+    @Test
+    fun `ipPreview evaluates the OU of the user with that email and allows what the policy allows`() {
+        arrangeGeo()
+        whenever(identityClient.lookupUser(tenantId, "alice@acme.com")).thenReturn(RemoteUserLookup(userId, groupId))
+        whenever(policyClient.evaluate(tenantId, userId, groupId, "US", "8.8.8.8")).thenReturn(EvaluateResponse(allowed = true))
+
+        assertEquals(IpPreviewResponse(allowed = true), service.ipPreview(ipRequest))
+    }
+
+    @Test
+    fun `ipPreview refuses with POLICY_DENIED and the reason when the policy says the address is not allowed`() {
+        arrangeGeo()
+        whenever(identityClient.lookupUser(tenantId, "alice@acme.com")).thenReturn(RemoteUserLookup(userId, groupId))
+        whenever(policyClient.evaluate(tenantId, userId, groupId, "US", "8.8.8.8"))
+            .thenReturn(EvaluateResponse(allowed = false, reason = "source IP is not in allowedCidrs"))
+
+        val answer = service.ipPreview(ipRequest)
+
+        assertEquals(false, answer.allowed)
+        assertEquals("POLICY_DENIED", answer.errorCode)
+        assertEquals("source IP is not in allowedCidrs", answer.reason)
+    }
+
+    @Test
+    fun `ipPreview for an unknown email uses the tenant-wide policy, with no user and no OU`() {
+        arrangeGeo()
+        whenever(identityClient.lookupUser(tenantId, "alice@acme.com")).thenReturn(null)
+        whenever(policyClient.evaluate(tenantId, null, null, "US", "8.8.8.8")).thenReturn(EvaluateResponse(allowed = true))
+
+        assertEquals(true, service.ipPreview(ipRequest).allowed)
+        verify(policyClient).evaluate(tenantId, null, null, "US", "8.8.8.8")
+    }
+
+    @Test
+    fun `ipPreview treats a failed user lookup like an unknown user`() {
+        arrangeGeo()
+        whenever(identityClient.lookupUser(any(), any())).thenThrow(RuntimeException("identity-svc is down"))
+        whenever(policyClient.evaluate(tenantId, null, null, "US", "8.8.8.8")).thenReturn(EvaluateResponse(allowed = true))
+
+        assertEquals(true, service.ipPreview(ipRequest).allowed)
+    }
+
+    @Test
+    fun `ipPreview maps an unresolvable location and an unavailable policy to their own codes`() {
+        whenever(identityClient.lookupUser(any(), any())).thenReturn(null)
+        whenever(geoClient.resolve("8.8.8.8")).thenReturn(GeoResolution("8.8.8.8", resolved = false))
+        assertEquals("LOCATION_UNVERIFIED", service.ipPreview(ipRequest).errorCode)
+
+        arrangeGeo()
+        whenever(policyClient.evaluate(any(), anyOrNull(), anyOrNull(), any(), anyOrNull())).thenThrow(org.springframework.web.client.ResourceAccessException("policy-svc is down"))
+        assertEquals("POLICY_UNAVAILABLE", service.ipPreview(ipRequest).errorCode)
+    }
+
+    @Test
+    fun `ipPreview never checks a password, a second factor or a push, and records nothing`() {
+        arrangeGeo()
+        whenever(identityClient.lookupUser(any(), any())).thenReturn(RemoteUserLookup(userId, groupId))
+        whenever(policyClient.evaluate(any(), anyOrNull(), anyOrNull(), any(), anyOrNull())).thenReturn(EvaluateResponse(allowed = false, reason = "denied"))
+
+        service.ipPreview(ipRequest)
+
+        verify(identityClient, never()).verifyPassword(any(), any(), any())
+        verify(deviceClient, never()).sendPush(any(), any())
+        verify(deviceClient, never()).ensurePending(any(), any())
+        verify(auditPublisher, never()).publish(any())
     }
 
     // ---- The same rule at the password step (precheck) ----
