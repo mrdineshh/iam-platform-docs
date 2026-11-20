@@ -6,6 +6,7 @@ import { useFormStatus } from "react-dom";
 import QRCode from "qrcode";
 import { issueDeviceChallengeAction, loginAction, precheckAction } from "./actions";
 import { obtainDeviceProof, warmUpAgentPermission } from "@/lib/deviceProof";
+import { enterAction, type LoginStep } from "@/lib/loginSteps";
 import { initialLoginFormState } from "./types";
 
 interface Props {
@@ -21,7 +22,7 @@ interface Props {
   headline?: string | null;
 }
 
-type Step = "username" | "password" | "enroll" | "code" | "submitting-no-code";
+type Step = LoginStep;
 
 /**
  * Four-screen wizard (username -> password -> [enroll QR | code] ->
@@ -79,6 +80,19 @@ export function LoginForm({ deviceSignIn = false, clientId, redirectUri, scope, 
    * timeout, an error of any kind -- the form is submitted anyway, exactly as it would be without this feature.
    */
   function onSubmitCapture(event: FormEvent<HTMLFormElement>) {
+    // Enter in the username or password box submits the form, but Next on those screens is not a submit button. Make Enter do
+    // exactly what clicking Next does instead of firing the real sign-in half filled in (see lib/loginSteps.ts).
+    const onEnter = enterAction(step);
+    if (onEnter === "advance-username") {
+      event.preventDefault();
+      goToPassword();
+      return;
+    }
+    if (onEnter === "advance-password") {
+      event.preventDefault();
+      if (!checking) void handlePasswordNext();
+      return;
+    }
     if (!deviceSignIn || proofReady.current) {
       proofReady.current = false;
       return;
@@ -134,6 +148,15 @@ export function LoginForm({ deviceSignIn = false, clientId, redirectUri, scope, 
     } catch {
       return undefined;
     }
+  }
+
+  function goToPassword() {
+    if (!email.trim()) {
+      setStepError("Enter your username.");
+      return;
+    }
+    setStepError(null);
+    setStep("password");
   }
 
   async function handlePasswordNext() {
@@ -205,17 +228,7 @@ export function LoginForm({ deviceSignIn = false, clientId, redirectUri, scope, 
             />
           </label>
           <div className="login-form__buttons">
-            <button
-              type="button"
-              onClick={() => {
-                if (!email.trim()) {
-                  setStepError("Enter your username.");
-                  return;
-                }
-                setStepError(null);
-                setStep("password");
-              }}
-            >
+            <button type="button" onClick={goToPassword}>
               Next
             </button>
           </div>
