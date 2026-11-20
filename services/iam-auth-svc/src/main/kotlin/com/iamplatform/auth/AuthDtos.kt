@@ -105,7 +105,11 @@ data class IpPreviewRequest(
 )
 
 /** [errorCode] is an [AuthErrorCode] name (POLICY_DENIED, LOCATION_UNVERIFIED, POLICY_UNAVAILABLE) when [allowed] is false. */
-data class IpPreviewResponse(val allowed: Boolean, val errorCode: String? = null, val reason: String? = null)
+/**
+ * [policyScope] says which level of the merged policy decided (TENANT, OU or USER), so an administrator can tell why an address was
+ * refused. Internal-only: the sign-in page does not pass it on to the person.
+ */
+data class IpPreviewResponse(val allowed: Boolean, val errorCode: String? = null, val reason: String? = null, val policyScope: String? = null)
 
 data class PrecheckResponse(
     val mfaRequired: Boolean,

@@ -279,13 +279,13 @@ class AuthService(
             null
         }
         val (_, decision, _) = resolvePolicy(request.tenantId, user?.id, user?.groupId, request.sourceIp)
-        if (decision.allowed) return IpPreviewResponse(allowed = true)
+        if (decision.allowed) return IpPreviewResponse(allowed = true, policyScope = decision.scope)
         val code = when (decision.reason) {
             "location could not be verified" -> AuthErrorCode.LOCATION_UNVERIFIED
             "policy could not be evaluated" -> AuthErrorCode.POLICY_UNAVAILABLE
             else -> AuthErrorCode.POLICY_DENIED
         }
-        return IpPreviewResponse(allowed = false, errorCode = code.name, reason = decision.reason)
+        return IpPreviewResponse(allowed = false, errorCode = code.name, reason = decision.reason, policyScope = decision.scope)
     }
 
     fun logout(token: String) {

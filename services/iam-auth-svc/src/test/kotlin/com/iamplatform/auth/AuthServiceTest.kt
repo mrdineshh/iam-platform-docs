@@ -445,13 +445,14 @@ class AuthServiceTest {
         arrangeGeo()
         whenever(identityClient.lookupUser(tenantId, "alice@acme.com")).thenReturn(RemoteUserLookup(userId, groupId))
         whenever(policyClient.evaluate(tenantId, userId, groupId, "US", "8.8.8.8"))
-            .thenReturn(EvaluateResponse(allowed = false, reason = "source IP is not in allowedCidrs"))
+            .thenReturn(EvaluateResponse(allowed = false, reason = "source IP is not in allowedCidrs", policyScopeApplied = "USER"))
 
         val answer = service.ipPreview(ipRequest)
 
         assertEquals(false, answer.allowed)
         assertEquals("POLICY_DENIED", answer.errorCode)
         assertEquals("source IP is not in allowedCidrs", answer.reason)
+        assertEquals("USER", answer.policyScope)
     }
 
     @Test
