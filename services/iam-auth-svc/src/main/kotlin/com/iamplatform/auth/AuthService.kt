@@ -37,6 +37,8 @@ private data class PolicyDecision(
     val totpReenrollEveryLogin: Boolean = false,
 )
 
+private val ipPreviewLog = org.slf4j.LoggerFactory.getLogger("IpPreview")
+
 /**
  * The single AuthenticationEngine (AP-1) -- every login decision, whatever
  * the future upstream source (password here; Google Workspace in Service 8),
@@ -278,7 +280,12 @@ class AuthService(
         } catch (ex: Exception) {
             null
         }
-        val (_, decision, _) = resolvePolicy(request.tenantId, user?.id, user?.groupId, request.sourceIp)
+        val (country, decision, _) = resolvePolicy(request.tenantId, user?.id, user?.groupId, request.sourceIp)
+        // One line per early check so an administrator can see which address the platform actually saw and what it decided. No email, no token.
+        ipPreviewLog.info(
+            "ip-preview tenant={} ip={} country={} userKnown={} allowed={} scope={} reason={}",
+            request.tenantId, request.sourceIp, country ?: "unresolved", user != null, decision.allowed, decision.scope ?: "-", decision.reason ?: "-",
+        )
         if (decision.allowed) return IpPreviewResponse(allowed = true, policyScope = decision.scope)
         val code = when (decision.reason) {
             "location could not be verified" -> AuthErrorCode.LOCATION_UNVERIFIED
