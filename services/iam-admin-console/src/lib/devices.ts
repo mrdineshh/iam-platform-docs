@@ -109,8 +109,8 @@ export async function grantComplianceException(
   );
 }
 
-export const removeComplianceException = (tenantId: string, deviceId: string, sessionToken: string) =>
-  deviceAction(tenantId, deviceId, "compliance-exception/remove", sessionToken);
+export const removeComplianceException = (tenantId: string, deviceId: string, sessionToken: string, reason: string) =>
+  deviceAction(tenantId, deviceId, "compliance-exception/remove", sessionToken, reason);
 
 /** Platform-level sign-in rule: whether this tenant only lets people sign in from an approved, compliant laptop. Off by default. */
 export async function getLoginRule(tenantId: string, sessionToken: string): Promise<boolean> {
@@ -121,10 +121,10 @@ export async function getLoginRule(tenantId: string, sessionToken: string): Prom
   return r.requireTrustedDevice;
 }
 
-export async function setLoginRule(tenantId: string, required: boolean, sessionToken: string): Promise<void> {
+export async function setLoginRule(tenantId: string, required: boolean, reason: string, sessionToken: string): Promise<void> {
   await http.put<unknown>(
     `${config.tenantSvcUrl}/api/v1/endpoint/login-rule?tenantId=${encodeURIComponent(tenantId)}`,
-    { requireTrustedDevice: required },
+    { requireTrustedDevice: required, reason },
     { sessionToken },
   );
 }
@@ -141,10 +141,10 @@ export async function getBrowserControls(tenantId: string, sessionToken: string)
   return r.blockPersonalMicrosoft;
 }
 
-export async function setBrowserControls(tenantId: string, blockPersonalMicrosoft: boolean, sessionToken: string): Promise<void> {
+export async function setBrowserControls(tenantId: string, blockPersonalMicrosoft: boolean, reason: string, sessionToken: string): Promise<void> {
   await http.put<unknown>(
     `${config.tenantSvcUrl}/api/v1/endpoint/browser-controls?tenantId=${encodeURIComponent(tenantId)}`,
-    { blockPersonalMicrosoft },
+    { blockPersonalMicrosoft, reason },
     { sessionToken },
   );
 }

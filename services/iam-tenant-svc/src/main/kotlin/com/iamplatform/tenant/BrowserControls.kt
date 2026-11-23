@@ -11,7 +11,9 @@ import jakarta.persistence.Id
 import jakarta.persistence.Table
 import jakarta.servlet.http.HttpServletRequest
 import jakarta.validation.Valid
+import jakarta.validation.constraints.NotBlank
 import jakarta.validation.constraints.NotNull
+import jakarta.validation.constraints.Size
 import org.springframework.data.jpa.repository.JpaRepository
 import org.springframework.http.ResponseEntity
 import org.springframework.stereotype.Service
@@ -48,7 +50,11 @@ interface TenantBrowserControlsRepository : JpaRepository<TenantBrowserControlsE
 
 data class BrowserControlsResponse(val blockPersonalMicrosoft: Boolean)
 
-data class BrowserControlsRequest(@field:NotNull val blockPersonalMicrosoft: Boolean?)
+data class BrowserControlsRequest(
+    @field:NotNull val blockPersonalMicrosoft: Boolean?,
+    // Spec 13.2: a privileged action, so it carries the administrator's reason.
+    @field:NotBlank @field:Size(max = 500) val reason: String? = null,
+)
 
 @Service
 class BrowserControlsService(
@@ -59,7 +65,7 @@ class BrowserControlsService(
         controls.findById(tenantId).map { it.blockPersonalMicrosoft }.orElse(false)
 
     @Transactional
-    fun setBlockPersonalMicrosoft(tenantId: UUID, blocked: Boolean, actorId: String, sourceIp: String?) {
+    fun setBlockPersonalMicrosoft(tenantId: UUID, blocked: Boolean, actorId: String, reason: String, sourceIp: String?) {
         val existing = controls.findById(tenantId).orElse(null)
         // Switching to what it already is changes nothing and is not recorded as a decision.
         if (existing != null && existing.blockPersonalMicrosoft == blocked) return
@@ -77,6 +83,7 @@ class BrowserControlsService(
                 actorId = actorId,
                 action = if (blocked) "tenant.browser_controls.personal_microsoft_block.enabled" else "tenant.browser_controls.personal_microsoft_block.disabled",
                 result = AuditResult.SUCCESS,
+                reason = reason,
                 sourceIp = sourceIp,
             ),
         )
@@ -108,7 +115,7 @@ class BrowserControlsController(
     ): ResponseEntity<BrowserControlsResponse> {
         val admin = adminAccessGuard.requireValidSession(sessionToken)
         adminAccessGuard.requireTenantAdmin(sessionToken, tenantId)
-        service.setBlockPersonalMicrosoft(tenantId, request.blockPersonalMicrosoft!!, admin.userId.toString(), httpRequest.remoteAddr)
+        service.setBlockPersonalMicrosoft(tenantId, request.blockPersonalMicrosoft!!, admin.userId.toString(), request.reason!!.trim(), httpRequest.remoteAddr)
         return ResponseEntity.ok(BrowserControlsResponse(request.blockPersonalMicrosoft))
     }
 }

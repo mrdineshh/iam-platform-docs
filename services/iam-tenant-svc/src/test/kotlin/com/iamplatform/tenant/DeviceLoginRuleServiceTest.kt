@@ -131,13 +131,13 @@ class DeviceLoginRuleServiceTest {
 
     @Test
     fun `switching the rule on is stored and audited, and doing it again changes nothing`() {
-        service.set(tenantId, true, "admin-1", "1.2.3.4")
+        service.set(tenantId, true, "admin-1", "test reason", "1.2.3.4")
         verify(rules).save(argThat<TenantDeviceLoginRuleEntity> { requireTrustedDevice && updatedBy == "admin-1" })
-        verify(auditPublisher).publish(argThat<AuditEvent> { action == "tenant.device_login_rule.enabled" })
+        verify(auditPublisher).publish(argThat<AuditEvent> { action == "tenant.device_login_rule.enabled" && reason == "test reason" })
 
         ruleOn()
         whenever(rules.existsById(tenantId)).thenReturn(true)
-        service.set(tenantId, true, "admin-1", "1.2.3.4")
+        service.set(tenantId, true, "admin-1", "test reason", "1.2.3.4")
         verify(auditPublisher, org.mockito.kotlin.times(1)).publish(any())
     }
 

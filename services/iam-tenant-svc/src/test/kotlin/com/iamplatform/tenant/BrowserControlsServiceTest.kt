@@ -42,15 +42,15 @@ class BrowserControlsServiceTest {
 
     @Test
     fun `switching on stores it with who did it and audits it`() {
-        service.setBlockPersonalMicrosoft(tenantId, true, "admin-1", "1.2.3.4")
+        service.setBlockPersonalMicrosoft(tenantId, true, "admin-1", "test reason", "1.2.3.4")
         verify(repo).save(argThat<TenantBrowserControlsEntity> { blockPersonalMicrosoft && updatedBy == "admin-1" })
-        verify(audit).publish(argThat<AuditEvent> { action == "tenant.browser_controls.personal_microsoft_block.enabled" && actorId == "admin-1" })
+        verify(audit).publish(argThat<AuditEvent> { action == "tenant.browser_controls.personal_microsoft_block.enabled" && actorId == "admin-1" && reason == "test reason" })
     }
 
     @Test
     fun `switching off an enabled tenant is stored and audited`() {
         row(true)
-        service.setBlockPersonalMicrosoft(tenantId, false, "admin-2", null)
+        service.setBlockPersonalMicrosoft(tenantId, false, "admin-2", "test reason", null)
         verify(repo).save(argThat<TenantBrowserControlsEntity> { !blockPersonalMicrosoft })
         verify(audit).publish(argThat<AuditEvent> { action == "tenant.browser_controls.personal_microsoft_block.disabled" })
     }
@@ -58,14 +58,14 @@ class BrowserControlsServiceTest {
     @Test
     fun `setting what it already is changes nothing and records nothing`() {
         row(true)
-        service.setBlockPersonalMicrosoft(tenantId, true, "admin-1", null)
+        service.setBlockPersonalMicrosoft(tenantId, true, "admin-1", "test reason", null)
         verify(repo, never()).save(any<TenantBrowserControlsEntity>())
         verify(audit, never()).publish(any())
     }
 
     @Test
     fun `switching off a tenant that never chose creates no row and no audit`() {
-        service.setBlockPersonalMicrosoft(tenantId, false, "admin-1", null)
+        service.setBlockPersonalMicrosoft(tenantId, false, "admin-1", "test reason", null)
         verify(repo, never()).save(any<TenantBrowserControlsEntity>())
         verify(audit, never()).publish(any())
         assertEquals(false, service.isBlockingPersonalMicrosoft(tenantId))
@@ -73,7 +73,7 @@ class BrowserControlsServiceTest {
 
     @Test
     fun `one audit event per real change`() {
-        service.setBlockPersonalMicrosoft(tenantId, true, "admin-1", null)
+        service.setBlockPersonalMicrosoft(tenantId, true, "admin-1", "test reason", null)
         verify(audit, times(1)).publish(any())
     }
 }

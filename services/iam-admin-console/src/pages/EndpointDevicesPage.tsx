@@ -6,7 +6,7 @@ import { listTenantUsers, type AdminUserListEntry } from "@/lib/impersonate";
 import { loadSession } from "@/lib/session";
 import { UpstreamError } from "@/lib/http";
 import { Alert, EmptyState, PageHeader, PendingLabel, SkeletonRows, StatusBadge, TableToolbar } from "@/components/ui";
-import { useConfirm, useToast } from "@/components/feedback";
+import { useConfirmReason, useToast } from "@/components/feedback";
 
 /**
  * Endpoint Device Trust spec Section 13 ("Endpoint Security dashboard" +
@@ -17,7 +17,8 @@ import { useConfirm, useToast } from "@/components/feedback";
  */
 export function EndpointDevicesPage() {
   const session = loadSession()!;
-  const confirm = useConfirm();
+  // Spec 13.2: every privileged action here asks for confirmation AND a reason, and the reason is kept in the audit log.
+  const confirm = useConfirmReason();
   const toast = useToast();
   const [allDevices, setAllDevices] = useState<DeviceSummary[] | null>(null);
   const [showRemoved, setShowRemoved] = useState(false);
@@ -68,9 +69,21 @@ export function EndpointDevicesPage() {
   }, []);
 
   async function handleApprove(device: DeviceSummary) {
+    const reactivating = device.lifecycleStatus === "SUSPENDED";
+    const reason = await confirm({
+      title: reactivating ? "Reactivate this device?" : "Approve this device?",
+      message: (
+        <>
+          {deviceLabel(device)} will be able to satisfy device-trust requirements during sign-in
+          {reactivating ? ", from its next request" : ""}.
+        </>
+      ),
+      confirmLabel: reactivating ? "Reactivate device" : "Approve device",
+    });
+    if (reason === null) return;
     setActingOn(device.id);
     try {
-      await approveDevice(session.tenantId, device.id, session.token);
+      await approveDevice(session.tenantId, device.id, session.token, reason);
       toast.success(`${deviceLabel(device)} approved. It can now satisfy device-trust requirements during sign-in.`);
       await load();
     } catch (err) {
@@ -81,16 +94,16 @@ export function EndpointDevicesPage() {
   }
 
   async function handleReject(device: DeviceSummary) {
-    const ok = await confirm({
+    const reason = await confirm({
       title: "Reject this device?",
       message: <>{deviceLabel(device)} will not be able to satisfy device-trust requirements. It can re-enroll later.</>,
       confirmLabel: "Reject device",
       danger: true,
     });
-    if (!ok) return;
+    if (reason === null) return;
     setActingOn(device.id);
     try {
-      await rejectDevice(session.tenantId, device.id, session.token);
+      await rejectDevice(session.tenantId, device.id, session.token, reason);
       toast.success(`${deviceLabel(device)} rejected.`);
       await load();
     } catch (err) {
@@ -101,16 +114,16 @@ export function EndpointDevicesPage() {
   }
 
   async function handleSuspend(device: DeviceSummary) {
-    const ok = await confirm({
+    const reason = await confirm({
       title: "Suspend this device?",
       message: <>{deviceLabel(device)} will immediately stop satisfying device-trust requirements, on its very next request. This can be reversed by approving it again.</>,
       confirmLabel: "Suspend device",
       danger: true,
     });
-    if (!ok) return;
+    if (reason === null) return;
     setActingOn(device.id);
     try {
-      await suspendDevice(session.tenantId, device.id, session.token);
+      await suspendDevice(session.tenantId, device.id, session.token, reason);
       toast.success(`${deviceLabel(device)} suspended.`);
       await load();
     } catch (err) {
@@ -121,7 +134,7 @@ export function EndpointDevicesPage() {
   }
 
   async function handleRevoke(device: DeviceSummary) {
-    const ok = await confirm({
+    const reason = await confirm({
       title: "Revoke this device?",
       message: (
         <>
@@ -133,10 +146,10 @@ export function EndpointDevicesPage() {
       confirmLabel: "Revoke device",
       danger: true,
     });
-    if (!ok) return;
+    if (reason === null) return;
     setActingOn(device.id);
     try {
-      await revokeDevice(session.tenantId, device.id, session.token);
+      await revokeDevice(session.tenantId, device.id, session.token, reason);
       toast.success(`${deviceLabel(device)} revoked.`);
       await load();
     } catch (err) {
@@ -160,31 +173,35 @@ export function EndpointDevicesPage() {
   }
 
   async function handleToggleBrowserBlock(next: boolean) {
-    if (next) {
-      const older = laptopsOnOlderAgents();
-      const ok = await confirm({
-        title: "Block personal Microsoft sign-in?",
-        message: (
-          <>
-            On enrolled laptops, Chrome and Edge will no longer open the pages where a personal Outlook, Hotmail or live.com account
-            signs in (and personal Outlook, OneDrive and Xbox sign-in with them). Work and school accounts are not affected. This is
-            a lower-assurance control: it blocks these pages in Chrome and Edge only. Laptops pick it up within a few minutes;
-            a browser that is already open may need a restart.
-            {older > 0 ? (
-              <>
-                {" "}<strong>{older} laptop{older === 1 ? " runs" : "s run"} an agent older than {BROWSER_CONTROLS_MIN_AGENT} and will ignore this until updated.</strong>
-              </>
-            ) : null}
-          </>
-        ),
-        confirmLabel: "Turn on",
-        danger: true,
-      });
-      if (!ok) return;
-    }
+    const older = laptopsOnOlderAgents();
+    const reason = await (next
+      ? confirm({
+          title: "Block personal Microsoft sign-in?",
+          message: (
+            <>
+              On enrolled laptops, Chrome and Edge will no longer open the pages where a personal Outlook, Hotmail or live.com account
+              signs in (and personal Outlook, OneDrive and Xbox sign-in with them). Work and school accounts are not affected. This is
+              a lower-assurance control: it blocks these pages in Chrome and Edge only. Laptops pick it up within a few minutes;
+              a browser that is already open may need a restart.
+              {older > 0 ? (
+                <>
+                  {" "}<strong>{older} laptop{older === 1 ? " runs" : "s run"} an agent older than {BROWSER_CONTROLS_MIN_AGENT} and will ignore this until updated.</strong>
+                </>
+              ) : null}
+            </>
+          ),
+          confirmLabel: "Turn on",
+          danger: true,
+        })
+      : confirm({
+          title: "Allow personal Microsoft sign-in again?",
+          message: <>Enrolled laptops will take personal Outlook, Hotmail and live.com sign-in pages off their browser block list from their next policy refresh.</>,
+          confirmLabel: "Turn off",
+        }));
+    if (reason === null) return;
     setSavingBlock(true);
     try {
-      await setBrowserControls(session.tenantId, next, session.token);
+      await setBrowserControls(session.tenantId, next, reason, session.token);
       setBrowserBlock(next);
       toast.success(next ? "Personal Microsoft sign-in will be blocked on enrolled laptops." : "Personal Microsoft sign-in will be allowed again.");
     } catch (err) {
@@ -195,31 +212,35 @@ export function EndpointDevicesPage() {
   }
 
   async function handleToggleLoginRule(next: boolean) {
-    if (next) {
-      const locked = usersWithoutApprovedLaptop();
-      const ok = await confirm({
-        title: "Require an authorised laptop to sign in?",
-        message: (
-          <>
-            From now on, people who are not administrators can only sign in from a laptop that is approved and passes the
-            security checks. Anyone else is told at the sign-in screen that they are not authorised, and is not signed in.
-            Administrators are never affected, and registering a new laptop is always allowed.
-            {locked.length > 0 ? (
-              <>
-                {" "}<strong>{locked.length} active user{locked.length === 1 ? " has" : "s have"} no approved laptop yet and could not sign in:</strong>{" "}
-                {locked.slice(0, 8).map((u) => u.email).join(", ")}{locked.length > 8 ? `, and ${locked.length - 8} more` : ""}.
-              </>
-            ) : null}
-          </>
-        ),
-        confirmLabel: "Turn on",
-        danger: true,
-      });
-      if (!ok) return;
-    }
+    const locked = usersWithoutApprovedLaptop();
+    const reason = await (next
+      ? confirm({
+          title: "Require an authorised laptop to sign in?",
+          message: (
+            <>
+              From now on, people who are not administrators can only sign in from a laptop that is approved and passes the
+              security checks. Anyone else is told at the sign-in screen that they are not authorised, and is not signed in.
+              Administrators can always sign in to this Admin Console, and registering a new laptop is always allowed.
+              {locked.length > 0 ? (
+                <>
+                  {" "}<strong>{locked.length} active user{locked.length === 1 ? " has" : "s have"} no approved laptop yet and could not sign in:</strong>{" "}
+                  {locked.slice(0, 8).map((u) => u.email).join(", ")}{locked.length > 8 ? `, and ${locked.length - 8} more` : ""}.
+                </>
+              ) : null}
+            </>
+          ),
+          confirmLabel: "Turn on",
+          danger: true,
+        })
+      : confirm({
+          title: "Stop requiring an authorised laptop to sign in?",
+          message: <>People will be able to sign in from any laptop again. Apps marked "Trusted device" still require an approved, compliant laptop.</>,
+          confirmLabel: "Turn off",
+        }));
+    if (reason === null) return;
     setSavingRule(true);
     try {
-      await setLoginRule(session.tenantId, next, session.token);
+      await setLoginRule(session.tenantId, next, reason, session.token);
       setLoginRuleState(next);
       toast.success(next ? "Sign-in now requires an authorised laptop (administrators excepted)." : "Sign-in no longer requires an authorised laptop.");
     } catch (err) {
@@ -244,16 +265,16 @@ export function EndpointDevicesPage() {
   }
 
   async function handleEndException(device: DeviceSummary) {
-    const ok = await confirm({
+    const reason = await confirm({
       title: "End this exception?",
       message: <>{deviceLabel(device)} will be held to the security checks again straight away.</>,
       confirmLabel: "End exception",
       danger: true,
     });
-    if (!ok) return;
+    if (reason === null) return;
     setActingOn(device.id);
     try {
-      await removeComplianceException(session.tenantId, device.id, session.token);
+      await removeComplianceException(session.tenantId, device.id, session.token, reason);
       toast.success("Exception ended.");
       await load();
     } catch (err) {
@@ -264,7 +285,7 @@ export function EndpointDevicesPage() {
   }
 
   async function handleRemove(device: DeviceSummary) {
-    const ok = await confirm({
+    const reason = await confirm({
       title: "Remove this device?",
       message: (
         <>
@@ -277,10 +298,10 @@ export function EndpointDevicesPage() {
       confirmLabel: "Remove device",
       danger: true,
     });
-    if (!ok) return;
+    if (reason === null) return;
     setActingOn(device.id);
     try {
-      await decommissionDevice(session.tenantId, device.id, session.token);
+      await decommissionDevice(session.tenantId, device.id, session.token, reason);
       toast.success(`${deviceLabel(device)} removed. Its history is kept.`);
       await load();
     } catch (err) {

@@ -31,9 +31,12 @@ export interface ConfirmOptions {
 }
 
 type ConfirmFn = (options: ConfirmOptions) => Promise<boolean>;
+/** Like ConfirmFn, but the dialog also asks for a reason: resolves to the trimmed reason, or null if cancelled. */
+type ConfirmReasonFn = (options: ConfirmOptions) => Promise<string | null>;
 
 const ToastContext = createContext<ToastApi | null>(null);
 const ConfirmContext = createContext<ConfirmFn | null>(null);
+const ConfirmReasonContext = createContext<ConfirmReasonFn | null>(null);
 
 export function useToast(): ToastApi {
   const ctx = useContext(ToastContext);
@@ -44,6 +47,16 @@ export function useToast(): ToastApi {
 export function useConfirm(): ConfirmFn {
   const ctx = useContext(ConfirmContext);
   if (!ctx) throw new Error("useConfirm must be used inside <FeedbackProvider>");
+  return ctx;
+}
+
+/**
+ * Confirmation that also asks for a reason (spec 13.2: privileged actions need confirmation, reason and audit). The confirm button
+ * stays disabled until a reason is typed.
+ */
+export function useConfirmReason(): ConfirmReasonFn {
+  const ctx = useContext(ConfirmReasonContext);
+  if (!ctx) throw new Error("useConfirmReason must be used inside <FeedbackProvider>");
   return ctx;
 }
 
@@ -75,21 +88,27 @@ export function FeedbackProvider({ children }: { children: ReactNode }) {
     [push],
   );
 
-  const [dialog, setDialog] = useState<(ConfirmOptions & { resolve: (ok: boolean) => void }) | null>(null);
+  const [dialog, setDialog] = useState<(ConfirmOptions & { withReason: boolean; resolve: (reason: string | null) => void }) | null>(null);
 
   const confirm = useCallback<ConfirmFn>(
-    (options) => new Promise<boolean>((resolve) => setDialog({ ...options, resolve })),
+    (options) => new Promise<boolean>((resolve) => setDialog({ ...options, withReason: false, resolve: (r) => resolve(r !== null) })),
     [],
   );
 
-  function close(ok: boolean) {
-    dialog?.resolve(ok);
+  const confirmReason = useCallback<ConfirmReasonFn>(
+    (options) => new Promise<string | null>((resolve) => setDialog({ ...options, withReason: true, resolve })),
+    [],
+  );
+
+  function close(ok: boolean, reason = "") {
+    dialog?.resolve(ok ? reason.trim() : null);
     setDialog(null);
   }
 
   return (
     <ToastContext.Provider value={toastApi}>
       <ConfirmContext.Provider value={confirm}>
+        <ConfirmReasonContext.Provider value={confirmReason}>
         {children}
 
         <div className="toast-stack" aria-live="polite">
@@ -103,14 +122,17 @@ export function FeedbackProvider({ children }: { children: ReactNode }) {
           ))}
         </div>
 
-        {dialog && <ConfirmDialog options={dialog} onClose={close} />}
+        {dialog && <ConfirmDialog options={dialog} withReason={dialog.withReason} onClose={close} />}
+        </ConfirmReasonContext.Provider>
       </ConfirmContext.Provider>
     </ToastContext.Provider>
   );
 }
 
-function ConfirmDialog({ options, onClose }: { options: ConfirmOptions; onClose: (ok: boolean) => void }) {
+function ConfirmDialog({ options, withReason, onClose }: { options: ConfirmOptions; withReason: boolean; onClose: (ok: boolean, reason?: string) => void }) {
   const cancelRef = useRef<HTMLButtonElement>(null);
+  const [reason, setReason] = useState("");
+  const canConfirm = !withReason || reason.trim().length > 0;
 
   useEffect(() => {
     // Default focus on Cancel so a stray Enter never confirms a destructive action.
@@ -135,11 +157,17 @@ function ConfirmDialog({ options, onClose }: { options: ConfirmOptions; onClose:
           {options.title}
         </h3>
         <div className="modal__body">{options.message}</div>
+        {withReason && (
+          <label className="login-form__field" style={{ marginTop: 12 }}>
+            <span>Reason (required, kept in the audit log)</span>
+            <textarea value={reason} maxLength={500} rows={3} onChange={(e) => setReason(e.target.value)} placeholder="For example: laptop reported lost" />
+          </label>
+        )}
         <div className="modal__actions">
           <button ref={cancelRef} type="button" className="btn-secondary" onClick={() => onClose(false)}>
             {options.cancelLabel ?? "Cancel"}
           </button>
-          <button type="button" className={options.danger ? "btn-solid-danger" : ""} onClick={() => onClose(true)}>
+          <button type="button" className={options.danger ? "btn-solid-danger" : ""} disabled={!canConfirm} onClick={() => onClose(true, reason)}>
             {options.confirmLabel ?? "Confirm"}
           </button>
         </div>

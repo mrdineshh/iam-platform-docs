@@ -13,6 +13,7 @@ import jakarta.servlet.http.HttpServletRequest
 import jakarta.validation.Valid
 import jakarta.validation.constraints.NotBlank
 import jakarta.validation.constraints.NotNull
+import jakarta.validation.constraints.Size
 import org.springframework.data.jpa.repository.JpaRepository
 import org.springframework.http.ResponseEntity
 import org.springframework.stereotype.Service
@@ -46,7 +47,11 @@ interface TenantDeviceLoginRuleRepository : JpaRepository<TenantDeviceLoginRuleE
 
 data class DeviceLoginRuleResponse(val requireTrustedDevice: Boolean)
 
-data class DeviceLoginRuleRequest(@field:NotNull val requireTrustedDevice: Boolean?)
+data class DeviceLoginRuleRequest(
+    @field:NotNull val requireTrustedDevice: Boolean?,
+    // Spec 13.2: switching a tenant-wide sign-in rule is a privileged action and carries the administrator's reason.
+    @field:NotBlank @field:Size(max = 500) val reason: String? = null,
+)
 
 /** Asked by iam-auth-svc after the password and second factor succeeded and before any session is issued. */
 data class LoginDeviceCheckRequest(
@@ -88,7 +93,7 @@ class DeviceLoginRuleService(
     fun isRequired(tenantId: UUID): Boolean = rules.findById(tenantId).map { it.requireTrustedDevice }.orElse(false)
 
     @Transactional
-    fun set(tenantId: UUID, required: Boolean, actorId: String, sourceIp: String?) {
+    fun set(tenantId: UUID, required: Boolean, actorId: String, reason: String, sourceIp: String?) {
         val row = rules.findById(tenantId).orElse(null) ?: TenantDeviceLoginRuleEntity(tenantId)
         if (row.requireTrustedDevice == required && rules.existsById(tenantId)) return
         row.requireTrustedDevice = required
@@ -103,6 +108,7 @@ class DeviceLoginRuleService(
                 actorId = actorId,
                 action = if (required) "tenant.device_login_rule.enabled" else "tenant.device_login_rule.disabled",
                 result = AuditResult.SUCCESS,
+                reason = reason,
                 sourceIp = sourceIp,
             ),
         )
@@ -206,7 +212,7 @@ class DeviceLoginRuleController(
     ): ResponseEntity<DeviceLoginRuleResponse> {
         val admin = adminAccessGuard.requireValidSession(sessionToken)
         adminAccessGuard.requireTenantAdmin(sessionToken, tenantId)
-        service.set(tenantId, request.requireTrustedDevice!!, admin.userId.toString(), httpRequest.remoteAddr)
+        service.set(tenantId, request.requireTrustedDevice!!, admin.userId.toString(), request.reason!!.trim(), httpRequest.remoteAddr)
         return ResponseEntity.ok(DeviceLoginRuleResponse(request.requireTrustedDevice))
     }
 }

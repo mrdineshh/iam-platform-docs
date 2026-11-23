@@ -2650,3 +2650,17 @@ any login work itself.
   `POST /api/v1/users/lookup` with {tenantId, email} in the body (identity and auth). Verified live: rs from 110.235.228.135 -> allowed (userKnown=true); a made-up
   email from the same address -> refused by the tenant list, as before. Identity 39 and auth 54 tests pass. Lesson: the unit tests mocked `lookupUser`, so the
   encoding bug was invisible to them; the diagnostic log line (address, userKnown, decision) is what exposed it.
+- **2026-11-23 -- Endpoint Security admin actions: confirmation + REQUIRED reason + audit on every privileged action (spec 13.2). Tier 2.**
+  Spec 13.2: "All privileged actions require RBAC, confirmation, reason and audit." Before: approve/reactivate had no confirmation; no action asked for a reason
+  (the API accepted an optional one the console never sent); the two tenant switches confirmed only when turned on and recorded no reason.
+  Now: the console's confirmation dialog has a reason box (`useConfirmReason`, confirm disabled until a reason is typed) on approve, reactivate, reject, suspend,
+  revoke, remove (decommission), end compliance exception, and on BOTH directions of the two tenant switches (sign-in rule, personal-Microsoft block). The server
+  REQUIRES it: `DeviceActionRequest.reason` and the two switch requests are `@NotBlank @Size(max=500)` and the device-action bodies are now required, so a call
+  without a reason gets 400 before anything changes (verified live with a made-up device and session: no reason or blank -> 400; with a reason -> 401 from the
+  session check). The reason goes into the audit event (`reason` field) and, for device actions, into the device activity list as before. Granting a compliance
+  exception already required one. Text corrected: the sign-in rule's confirmation no longer says administrators are "never affected" (the portal's email-step check
+  stops everyone since 2026-11-20); it says they can always sign in to the Admin Console.
+  Tests: tenant 268 (new DeviceActionReasonTest; switch services now assert the reason reaches the audit event). Console type-check clean; its one failing test
+  (tenant.test.ts) fails on a clean checkout too and is unrelated.
+  Still open from 13.2: "force policy sync" and "request re-enrolment" (both need an agent change: the agent only polls, there is no push channel), and the extra
+  inventory fields and detail tabs. Not tried in a browser yet.

@@ -110,8 +110,12 @@ data class ComplianceExceptionRequest(
     @field:NotBlank @field:Size(max = 500) val reason: String,
 )
 
+/**
+ * Every privileged Endpoint Security action carries the administrator's reason (spec 13.2: "All privileged actions require RBAC,
+ * confirmation, reason and audit"). Required: an action without one is refused with 400 before anything changes.
+ */
 data class DeviceActionRequest(
-    val reason: String? = null,
+    @field:NotBlank @field:Size(max = 500) val reason: String? = null,
 )
 
 // ---- Heartbeat / posture / events / compliance (device-authenticated) ----

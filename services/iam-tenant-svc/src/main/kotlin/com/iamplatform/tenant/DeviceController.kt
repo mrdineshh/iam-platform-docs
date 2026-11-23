@@ -89,13 +89,13 @@ class DeviceController(
     fun approve(
         @PathVariable deviceId: UUID,
         @RequestParam tenantId: UUID,
-        @RequestBody(required = false) request: DeviceActionRequest?,
+        @Valid @RequestBody request: DeviceActionRequest,
         @RequestHeader("X-Session-Token") sessionToken: String,
         httpRequest: HttpServletRequest,
     ): ResponseEntity<Void> {
         val admin = adminAccessGuard.requireValidSession(sessionToken)
         adminAccessGuard.requireTenantAdmin(sessionToken, tenantId)
-        deviceTrustService.approve(tenantId, deviceId, admin.userId.toString(), request?.reason, httpRequest.remoteAddr)
+        deviceTrustService.approve(tenantId, deviceId, admin.userId.toString(), request.reason!!.trim(), httpRequest.remoteAddr)
         return ResponseEntity.noContent().build()
     }
 
@@ -103,13 +103,13 @@ class DeviceController(
     fun reject(
         @PathVariable deviceId: UUID,
         @RequestParam tenantId: UUID,
-        @RequestBody(required = false) request: DeviceActionRequest?,
+        @Valid @RequestBody request: DeviceActionRequest,
         @RequestHeader("X-Session-Token") sessionToken: String,
         httpRequest: HttpServletRequest,
     ): ResponseEntity<Void> {
         val admin = adminAccessGuard.requireValidSession(sessionToken)
         adminAccessGuard.requireTenantAdmin(sessionToken, tenantId)
-        deviceTrustService.reject(tenantId, deviceId, admin.userId.toString(), request?.reason, httpRequest.remoteAddr)
+        deviceTrustService.reject(tenantId, deviceId, admin.userId.toString(), request.reason!!.trim(), httpRequest.remoteAddr)
         return ResponseEntity.noContent().build()
     }
 
@@ -117,13 +117,13 @@ class DeviceController(
     fun suspend(
         @PathVariable deviceId: UUID,
         @RequestParam tenantId: UUID,
-        @RequestBody(required = false) request: DeviceActionRequest?,
+        @Valid @RequestBody request: DeviceActionRequest,
         @RequestHeader("X-Session-Token") sessionToken: String,
         httpRequest: HttpServletRequest,
     ): ResponseEntity<Void> {
         val admin = adminAccessGuard.requireValidSession(sessionToken)
         adminAccessGuard.requireTenantAdmin(sessionToken, tenantId)
-        deviceTrustService.suspend(tenantId, deviceId, admin.userId.toString(), request?.reason, httpRequest.remoteAddr)
+        deviceTrustService.suspend(tenantId, deviceId, admin.userId.toString(), request.reason!!.trim(), httpRequest.remoteAddr)
         return ResponseEntity.noContent().build()
     }
 
@@ -131,13 +131,13 @@ class DeviceController(
     fun revoke(
         @PathVariable deviceId: UUID,
         @RequestParam tenantId: UUID,
-        @RequestBody(required = false) request: DeviceActionRequest?,
+        @Valid @RequestBody request: DeviceActionRequest,
         @RequestHeader("X-Session-Token") sessionToken: String,
         httpRequest: HttpServletRequest,
     ): ResponseEntity<Void> {
         val admin = adminAccessGuard.requireValidSession(sessionToken)
         adminAccessGuard.requireTenantAdmin(sessionToken, tenantId)
-        deviceTrustService.revoke(tenantId, deviceId, admin.userId.toString(), request?.reason, httpRequest.remoteAddr)
+        deviceTrustService.revoke(tenantId, deviceId, admin.userId.toString(), request.reason!!.trim(), httpRequest.remoteAddr)
         return ResponseEntity.noContent().build()
     }
 
@@ -150,13 +150,13 @@ class DeviceController(
     fun decommission(
         @PathVariable deviceId: UUID,
         @RequestParam tenantId: UUID,
-        @RequestBody(required = false) request: DeviceActionRequest?,
+        @Valid @RequestBody request: DeviceActionRequest,
         @RequestHeader("X-Session-Token") sessionToken: String,
         httpRequest: HttpServletRequest,
     ): ResponseEntity<Void> {
         val admin = adminAccessGuard.requireValidSession(sessionToken)
         adminAccessGuard.requireTenantAdmin(sessionToken, tenantId)
-        deviceTrustService.decommission(tenantId, deviceId, admin.userId.toString(), request?.reason, httpRequest.remoteAddr)
+        deviceTrustService.decommission(tenantId, deviceId, admin.userId.toString(), request.reason!!.trim(), httpRequest.remoteAddr)
         return ResponseEntity.noContent().build()
     }
 
@@ -178,13 +178,13 @@ class DeviceController(
     fun removeComplianceException(
         @PathVariable deviceId: UUID,
         @RequestParam tenantId: UUID,
-        @RequestBody(required = false) request: DeviceActionRequest?,
+        @Valid @RequestBody request: DeviceActionRequest,
         @RequestHeader("X-Session-Token") sessionToken: String,
         httpRequest: HttpServletRequest,
     ): ResponseEntity<Void> {
         val admin = adminAccessGuard.requireValidSession(sessionToken)
         adminAccessGuard.requireTenantAdmin(sessionToken, tenantId)
-        deviceTrustService.removeComplianceException(tenantId, deviceId, admin.userId.toString(), request?.reason, httpRequest.remoteAddr)
+        deviceTrustService.removeComplianceException(tenantId, deviceId, admin.userId.toString(), request.reason!!.trim(), httpRequest.remoteAddr)
         return ResponseEntity.noContent().build()
     }
 
