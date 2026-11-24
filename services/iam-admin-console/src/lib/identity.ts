@@ -126,7 +126,7 @@ export async function resetUserPassword(
   return http.post<ResetPasswordResult>(
     `${config.tenantSvcUrl}/api/v1/admin/users/${userId}/reset-password?tenantId=${encodeURIComponent(tenantId)}`,
     { password, reason, alsoResetGoogle },
-    { sessionToken },
+    { sessionToken, timeoutMs: 60_000 },
   );
 }
 

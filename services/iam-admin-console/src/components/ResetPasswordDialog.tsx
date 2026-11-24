@@ -71,11 +71,18 @@ export function ResetPasswordDialog({
       setDone({ password, result });
       toast.success(`Password reset for ${userLabel}.`);
     } catch (err) {
-      if (err instanceof UpstreamError && (err.status === 400 || err.status === 403 || err.status === 404)) {
-        // 400 carries the tenant's own password rule, worded by the server.
-        setError(err.message);
+      if (err instanceof UpstreamError) {
+        // Show the real reason (a password rule, no permission, session ended...). Status 0 means no answer came back at all.
+        const reason = err.message.trim();
+        setError(
+          err.status === 0
+            ? `The server did not answer (${reason || "network error"}). Check that the platform is running, then try again.`
+            : err.status === 401
+              ? "Your session expired. Please sign in again."
+              : `The password was not changed (HTTP ${err.status})${reason ? `: ${reason}` : ""}.`,
+        );
       } else {
-        setError("Could not reset the password. Please try again.");
+        setError("The password was not changed. Please try again.");
       }
     } finally {
       setPending(false);
