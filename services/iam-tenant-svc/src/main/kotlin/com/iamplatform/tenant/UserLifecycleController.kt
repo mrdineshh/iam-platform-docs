@@ -6,10 +6,14 @@ import com.iamplatform.servicekit.audit.AuditPublisher
 import com.iamplatform.servicekit.audit.AuditResult
 import com.iamplatform.servicekit.correlation.CorrelationId
 import jakarta.servlet.http.HttpServletRequest
+import jakarta.validation.Valid
+import jakarta.validation.constraints.NotBlank
+import jakarta.validation.constraints.Size
 import org.springframework.http.ResponseEntity
 import org.springframework.web.bind.annotation.GetMapping
 import org.springframework.web.bind.annotation.PathVariable
 import org.springframework.web.bind.annotation.PostMapping
+import org.springframework.web.bind.annotation.RequestBody
 import org.springframework.web.bind.annotation.RequestHeader
 import org.springframework.web.bind.annotation.RequestMapping
 import org.springframework.web.bind.annotation.RequestParam
@@ -17,6 +21,21 @@ import org.springframework.web.bind.annotation.RestController
 import java.util.UUID
 
 class CannotSuspendSelfException : RuntimeException("You can't suspend your own account.")
+
+data class ResetPasswordRequest(
+    @field:NotBlank @field:Size(min = 8, max = 128) val password: String,
+    // Spec 13.2: a privileged action, so it carries the administrator's reason.
+    @field:NotBlank @field:Size(max = 500) val reason: String,
+    // Also set the same password on the user's Google Workspace account (only possible for a synced Google user).
+    val alsoResetGoogle: Boolean = false,
+)
+
+/**
+ * What happened on the Google side. RESET: changed there too. NOT_REQUESTED: this user is on the synced Google domain but the
+ * admin did not ask to change it. NOT_CONFIGURED / NOT_ON_DOMAIN / NOT_FOUND: the user is not a synced Google Workspace user,
+ * so only the platform password changed. FAILED: asked for, but Google refused (the platform password did change).
+ */
+data class ResetPasswordResponse(val google: String, val googleDetail: String? = null)
 
 data class LifecycleResponse(
     val userId: UUID,
@@ -100,6 +119,79 @@ class UserLifecycleController(
             ),
         )
         return ResponseEntity.noContent().build()
+    }
+
+    /**
+     * Sets a new platform password for one user (the admin chooses it and hands it over). The platform password always changes; Google Workspace changes too only when
+     * the admin asks for it and the user is a synced Google user. Connected apps are not touched. The user's live sessions are ended so the old password stops
+     * working everywhere, except when an admin resets their own (that would sign them out of the screen they are using).
+     * The password itself is never logged or audited.
+     */
+    @PostMapping("/{id}/reset-password")
+    fun resetPassword(
+        @PathVariable id: UUID,
+        @RequestParam tenantId: UUID,
+        @Valid @RequestBody request: ResetPasswordRequest,
+        @RequestHeader("X-Session-Token") sessionToken: String,
+        httpRequest: HttpServletRequest,
+    ): ResponseEntity<ResetPasswordResponse> {
+        adminAccessGuard.requireTenantAdmin(sessionToken, tenantId)
+        val admin = adminAccessGuard.requireValidSession(sessionToken)
+        val user = requireUserInTenant(id, tenantId)
+
+        identityClient.setPassword(id, request.password)
+        // The platform password is already changed; whatever happens in Google is reported, never undone.
+        val google = googlePasswordStep(tenantId, user, request, admin.userId, httpRequest.remoteAddr)
+
+        var sessionsEnded = 0
+        if (admin.userId != id) {
+            sessionsEnded = sessionClient.listForUser(tenantId, id).size
+            sessionClient.terminateAllForUser(tenantId, id, "password-reset-by-admin-${admin.userId}")
+        }
+
+        auditPublisher.publish(
+            AuditEvent(
+                correlationId = CorrelationId.get(),
+                tenantId = tenantId,
+                actorType = ActorType.ADMIN,
+                actorId = admin.userId.toString(),
+                action = "identity.password_reset_by_admin",
+                result = AuditResult.SUCCESS,
+                reason = "${request.reason.trim()} (targetUser=$id ${user.email}; sessionsEnded=$sessionsEnded)",
+                sourceIp = httpRequest.remoteAddr,
+            ),
+        )
+        return ResponseEntity.ok(google)
+    }
+
+    private fun googlePasswordStep(tenantId: UUID, user: RemoteUser, request: ResetPasswordRequest, adminId: UUID, sourceIp: String?): ResetPasswordResponse {
+        val config = googleWorkspaceConfigService.loadProvisioningConfig(tenantId) ?: return ResetPasswordResponse("NOT_CONFIGURED")
+        val email = user.email ?: return ResetPasswordResponse("NOT_ON_DOMAIN")
+        if (!config.manages(email)) return ResetPasswordResponse("NOT_ON_DOMAIN", config.domain)
+        if (!request.alsoResetGoogle) return ResetPasswordResponse("NOT_REQUESTED")
+
+        val response = try {
+            if (googleWorkspaceDirectoryClient.setPassword(config.adminEmail, config.serviceAccountKey, email, request.password)) {
+                ResetPasswordResponse("RESET")
+            } else {
+                ResetPasswordResponse("NOT_FOUND")
+            }
+        } catch (ex: GoogleProvisioningException) {
+            ResetPasswordResponse("FAILED", ex.message)
+        }
+        auditPublisher.publish(
+            AuditEvent(
+                correlationId = CorrelationId.get(),
+                tenantId = tenantId,
+                actorType = ActorType.ADMIN,
+                actorId = adminId.toString(),
+                action = "google_workspace_user.password_reset",
+                result = if (response.google == "FAILED") AuditResult.FAILURE else AuditResult.SUCCESS,
+                reason = "${request.reason.trim()} (targetUser=${user.id} $email; outcome=${response.google})",
+                sourceIp = sourceIp,
+            ),
+        )
+        return response
     }
 
     // Where each integrated app stands for one user, with the last error if a push failed.

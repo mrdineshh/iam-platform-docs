@@ -111,6 +111,25 @@ export async function resetUserTwoFactor(tenantId: string, userId: string, sessi
   );
 }
 
+// What happened on the Google side of a password reset: RESET (changed there too), NOT_REQUESTED (a synced Google user, left
+// alone), NOT_CONFIGURED / NOT_ON_DOMAIN / NOT_FOUND (not a synced Google user, so only the platform password changed), FAILED.
+export interface ResetPasswordResult {
+  google: "RESET" | "NOT_REQUESTED" | "NOT_CONFIGURED" | "NOT_ON_DOMAIN" | "NOT_FOUND" | "FAILED";
+  googleDetail: string | null;
+}
+
+// Admin sets a new platform password for one user (and, if asked and the user is a synced Google user, the Google one too).
+// The user's live sessions are ended. The reason is required and goes to the audit log.
+export async function resetUserPassword(
+  tenantId: string, userId: string, password: string, reason: string, alsoResetGoogle: boolean, sessionToken: string,
+): Promise<ResetPasswordResult> {
+  return http.post<ResetPasswordResult>(
+    `${config.tenantSvcUrl}/api/v1/admin/users/${userId}/reset-password?tenantId=${encodeURIComponent(tenantId)}`,
+    { password, reason, alsoResetGoogle },
+    { sessionToken },
+  );
+}
+
 // "Deleted from everywhere" (2026-10-26) -- also deletes the matching
 // Google Workspace account if one exists; connected-app access is cut off
 // separately by iam-enforcement-svc's own identity check.

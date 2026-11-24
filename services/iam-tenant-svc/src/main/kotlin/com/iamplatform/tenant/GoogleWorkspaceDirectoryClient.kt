@@ -209,6 +209,31 @@ class GoogleWorkspaceDirectoryClient {
     }
 
     /**
+     * Sets the Google account's password (Directory API users.patch, `password`). The new password is the same one an admin
+     * just set on the platform. Returns false when Google has no such user, true when it was applied. The password is never
+     * included in an error message or a log line.
+     */
+    fun setPassword(adminEmail: String, serviceAccountKey: GoogleServiceAccountKey, primaryEmail: String, password: String): Boolean {
+        val accessToken = fetchAccessToken(adminEmail, serviceAccountKey)
+        try {
+            directoryClient.patch()
+                .uri("/admin/directory/v1/users/{email}", primaryEmail)
+                .header("Authorization", "Bearer $accessToken")
+                .body(mapOf("password" to password, "changePasswordAtNextLogin" to false))
+                .retrieve()
+                .toBodilessEntity()
+            return true
+        } catch (ex: org.springframework.web.client.HttpClientErrorException.NotFound) {
+            return false
+        } catch (ex: org.springframework.web.client.HttpClientErrorException) {
+            // Google's own message (e.g. a password rule), without echoing the request.
+            throw GoogleProvisioningException("Google Workspace password change failed: ${ex.statusCode.value()} ${ex.statusText}")
+        } catch (ex: Exception) {
+            throw GoogleProvisioningException("Google Workspace password change failed")
+        }
+    }
+
+    /**
      * Pushing an IAM group INTO Google as an OU (the reverse of the OU-sync feature, added
      * 2026-11-03): returns the OU's path, creating a new top-level OU named [name] first if none
      * exists there yet. Uses ORG_UNIT_SCOPE on its own isolated token -- NOT combined with

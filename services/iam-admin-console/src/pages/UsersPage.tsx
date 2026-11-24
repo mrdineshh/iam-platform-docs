@@ -17,6 +17,9 @@ import { getPolicy, putPolicy, type Policy } from "@/lib/policy";
 import { listGroups, assignUserToGroup, type Group } from "@/lib/groups";
 import { getGoogleWorkspaceConfig } from "@/lib/googleWorkspace";
 import { loadSession } from "@/lib/session";
+import { getTenant } from "@/lib/tenant";
+import { userSignInLink } from "@/lib/signInLink";
+import { config } from "@/lib/config";
 import { UpstreamError } from "@/lib/http";
 import {
   Alert,
@@ -34,6 +37,7 @@ import { useConfirm, useToast } from "@/components/feedback";
 import { useTable } from "@/lib/useTable";
 import { UserSessionsDialog } from "@/components/UserSessionsDialog";
 import { UserProvisioningDialog } from "@/components/UserProvisioningDialog";
+import { ResetPasswordDialog } from "@/components/ResetPasswordDialog";
 
 // "" / "true" / "false" rather than boolean | null directly -- an HTML
 // <select> only ever carries a string value, and this third state
@@ -103,8 +107,11 @@ export function UsersPage() {
   const [provisioningFor, setProvisioningFor] = useState<{ id: string; label: string } | null>(null);
   const [changingStatusId, setChangingStatusId] = useState<string | null>(null);
   const [resettingTwoFactorId, setResettingTwoFactorId] = useState<string | null>(null);
+  const [resetPasswordFor, setResetPasswordFor] = useState<{ id: string; label: string } | null>(null);
   const [justCreated, setJustCreated] = useState<CreatedUser | null>(null);
   const [qrDataUrl, setQrDataUrl] = useState<string | null>(null);
+  // What the admin hands to the new user. The password is kept only until this card is closed.
+  const [handover, setHandover] = useState<{ link: string; email: string; password: string } | null>(null);
 
   const [users, setUsers] = useState<AdminUserListEntry[]>([]);
   const [groups, setGroups] = useState<Group[]>([]);
@@ -358,6 +365,8 @@ export function UsersPage() {
         googleWorkspaceConfigured && createInGoogleWorkspace,
         googleWorkspaceLicenseSkuId,
       );
+      const subdomain = await getTenant(session.tenantId).then((t) => t.subdomain).catch(() => null);
+      setHandover({ link: userSignInLink(config.loginPortalUrl, subdomain), email: created.email, password });
       setJustCreated(created);
       setQrDataUrl(await QRCode.toDataURL(created.provisioningUri));
       setEmail("");
@@ -418,6 +427,36 @@ export function UsersPage() {
             not stored for retrieval). They also need this authenticator QR code to sign in, since every login
             requires a second factor. Scan it now, before this screen is closed.
           </p>
+          {handover && (
+            <div className="card card--padded" style={{ marginBottom: 16 }}>
+              <h4 className="card__title">Sign-in details for {justCreated.displayName}</h4>
+              <p className="card__desc">Send these to the user. The password is shown only now and is not stored for retrieval.</p>
+              {([["Sign-in link", handover.link], ["Email", handover.email], ["Temporary password", handover.password]] as const).map(
+                ([label, value]) => (
+                  <div key={label} style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6, flexWrap: "wrap" }}>
+                    <strong style={{ minWidth: 150 }}>{label}</strong>
+                    <code style={{ wordBreak: "break-all" }}>{value}</code>
+                    <button type="button" className="btn-secondary" onClick={() => void navigator.clipboard.writeText(value).then(() => toast.success(`${label} copied`))}>
+                      Copy
+                    </button>
+                  </div>
+                ),
+              )}
+              <button
+                type="button"
+                className="btn-secondary"
+                onClick={() =>
+                  void navigator.clipboard
+                    .writeText(`Sign in: ${handover.link}
+Email: ${handover.email}
+Temporary password: ${handover.password}`)
+                    .then(() => toast.success("Sign-in details copied"))
+                }
+              >
+                Copy all
+              </button>
+            </div>
+          )}
           <div className="qr-wrap">
             <img src={qrDataUrl} alt="TOTP QR code" width={180} height={180} />
           </div>
@@ -447,7 +486,7 @@ export function UsersPage() {
             </Alert>
           )}
           <div className="form-actions">
-            <button type="button" className="btn-secondary" onClick={() => setJustCreated(null)}>
+            <button type="button" className="btn-secondary" onClick={() => { setJustCreated(null); setHandover(null); }}>
               Done
             </button>
           </div>
@@ -672,6 +711,14 @@ export function UsersPage() {
                         <button
                           type="button"
                           className="btn-secondary btn-sm"
+                          title="Set a new password for this user"
+                          onClick={() => setResetPasswordFor({ id: u.id, label: u.displayName })}
+                        >
+                          Reset password
+                        </button>
+                        <button
+                          type="button"
+                          className="btn-secondary btn-sm"
                           disabled={resettingTwoFactorId === u.id}
                           title="Use this if they lost their phone"
                           onClick={() => void handleResetTwoFactor(u.id, `${u.displayName} (${u.email})`)}
@@ -722,6 +769,13 @@ export function UsersPage() {
           />
         </div>
         </>
+      )}
+      {resetPasswordFor && (
+        <ResetPasswordDialog
+          userId={resetPasswordFor.id}
+          userLabel={resetPasswordFor.label}
+          onClose={() => setResetPasswordFor(null)}
+        />
       )}
       {provisioningFor && (
         <UserProvisioningDialog

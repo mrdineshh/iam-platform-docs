@@ -1,5 +1,6 @@
 package com.iamplatform.tenant
 
+import com.iamplatform.servicekit.correlation.CorrelationId
 import com.iamplatform.servicekit.http.ResilientHttpClient
 import com.iamplatform.servicekit.http.resilientRestClientBuilder
 import io.github.resilience4j.circuitbreaker.CircuitBreakerRegistry
@@ -44,6 +45,8 @@ class UpstreamBadRequestException(message: String, val errorCode: String?) : Run
 
 data class UpdateRemoteStatusRequest(val status: RemoteUserStatus)
 
+data class SetRemotePasswordRequest(val password: String)
+
 data class CreateRemoteUserRequest(
     val tenantId: UUID,
     val email: String,
@@ -67,8 +70,10 @@ class IdentityClient(
     circuitBreakerRegistry: CircuitBreakerRegistry,
     retryRegistry: RetryRegistry,
 ) {
+    private val restClient = resilientRestClientBuilder(restClientBuilder, baseUrl).build()
+
     private val client = ResilientHttpClient(
-        resilientRestClientBuilder(restClientBuilder, baseUrl).build(),
+        restClient,
         circuitBreakerRegistry,
         retryRegistry,
         "identity-svc",
@@ -93,6 +98,23 @@ class IdentityClient(
             val body = runCatching { ex.getResponseBodyAs(UpstreamErrorBody::class.java) }.getOrNull()
             throw UpstreamBadRequestException(body?.message ?: "The request was rejected.", body?.errorCode)
         }
+
+    // Admin-initiated password reset. The identity service applies the tenant's password rules; a rule it names
+    // (e.g. WEAK_PASSWORD) is passed through so the admin sees exactly which one the new password broke.
+    fun setPassword(userId: UUID, password: String) {
+        try {
+            // The identity service answers 204 with no body, which ResilientHttpClient.patch (it expects one) cannot read.
+            restClient.patch()
+                .uri("/api/v1/users/$userId/password")
+                .header(CorrelationId.HEADER, CorrelationId.get())
+                .body(SetRemotePasswordRequest(password))
+                .retrieve()
+                .toBodilessEntity()
+        } catch (ex: HttpClientErrorException.BadRequest) {
+            val body = runCatching { ex.getResponseBodyAs(UpstreamErrorBody::class.java) }.getOrNull()
+            throw UpstreamBadRequestException(body?.message ?: "The request was rejected.", body?.errorCode)
+        }
+    }
 
     // Admin-initiated unlock after a lockout (FR-3.5); the admin is gated and
     // audited by AdminUserController, not here.

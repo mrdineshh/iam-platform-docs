@@ -2664,3 +2664,18 @@ any login work itself.
   (tenant.test.ts) fails on a clean checkout too and is unrelated.
   Still open from 13.2: "force policy sync" and "request re-enrolment" (both need an agent change: the agent only polls, there is no push channel), and the extra
   inventory fields and detail tabs. Not tried in a browser yet.
+- **2026-11-24 -- Operator-only onboarding, sign-in details for new users, admin password reset (+ optional Google), per-tenant logo size. Tier 2.**
+  (1) Onboarding a tenant was public (link on the sign-in page, `POST /api/v1/tenants` open). Now `POST /api/v1/tenants` needs a signed-in session whose user is an
+  ADMIN of the operator tenant (`iam.platform.operator-subdomain`, default `econz`); `GET /api/v1/tenants/can-onboard` tells the console whether to show the sidebar
+  link "Onboard organization". The link is gone from the sign-in page. (A setup-key variant was built and removed the same day.) Verified live: no session -> 400,
+  fake session -> 401, can-onboard fake -> false. Not tried as a real econz admin. Still open: the first admin of a new tenant is created from the server (mTLS), and
+  `PATCH /users/{id}/role` is unauthenticated (known gap).
+  (2) Creating a user now shows the sign-in link (`<login portal>/login?tenant=<subdomain>`), email and the typed temporary password with Copy buttons; the password
+  is held in the page only until Done.
+  (3) Admin password reset: `POST /api/v1/admin/users/{id}/reset-password` (admin of the same tenant, target must be in that tenant, `reason` required, 8-128 chars).
+  It sets the PLATFORM password (identity applies the tenant rules), ends the user's sessions (not the admin's own), and audits `identity.password_reset_by_admin`
+  with the admin as actor (the identity service alone would have recorded SYSTEM) and never the password. Optional `alsoResetGoogle`: sets the same password in
+  Google Workspace via users.patch for a user on the configured domain; the answer reports RESET / NOT_REQUESTED / NOT_CONFIGURED / NOT_ON_DOMAIN / NOT_FOUND / FAILED
+  and the console warns when only the platform password changed. A Google failure never undoes the platform change. Tests: tenant UserLifecycleControllerTest 22.
+  Found: the deploy script ships only the named service folders, so a change to `iam-service-kit` does not reach the VM; the 204-no-body PATCH therefore lives in
+  `IdentityClient` instead of the kit. Console: a tenant logo (Branding page URL) shows in the sidebar and a larger one on the sign-in page.

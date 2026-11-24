@@ -5,6 +5,7 @@ import { logout } from "@/lib/auth";
 import { useIdleTimeout } from "@/lib/useIdleTimeout";
 import { ThemeToggle } from "@/components/ThemeToggle";
 import { loadStoredBranding } from "@/lib/branding";
+import { canOnboardTenants } from "@/lib/tenant";
 import { Icon, type IconName } from "@/components/icons";
 import { BackLink } from "@/components/ui";
 
@@ -19,6 +20,7 @@ const BACK_TARGETS: Record<string, { to: string; label: string }> = {
   "/policy": { to: "/", label: "Dashboard" },
   "/endpoint-security": { to: "/", label: "Dashboard" },
   "/branding": { to: "/", label: "Dashboard" },
+  "/onboard": { to: "/", label: "Dashboard" },
   "/clients/setup": { to: "/clients", label: "Applications" },
   "/google-workspace": { to: "/clients", label: "Applications" },
   "/google-workspace/organizational-units": { to: "/google-workspace", label: "Google Workspace" },
@@ -53,6 +55,18 @@ export function Shell({ children }: { children: ReactNode }) {
     // after that, respect whatever they left it as.
     return stored === null ? true : stored === "1";
   });
+
+  // Only the platform operator's administrators get the "Onboard organization" link; the server enforces it too.
+  const [canOnboard, setCanOnboard] = useState(false);
+  useEffect(() => {
+    if (!admin || !session) return;
+    let live = true;
+    void canOnboardTenants(session.token).then((ok) => live && setCanOnboard(ok));
+    return () => {
+      live = false;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [admin, session?.token]);
 
   useEffect(() => {
     localStorage.setItem(SIDEBAR_COLLAPSED_KEY, collapsed ? "1" : "0");
@@ -94,7 +108,8 @@ export function Shell({ children }: { children: ReactNode }) {
     location.pathname === "/policy" ||
     location.pathname === "/google-workspace" ||
     location.pathname === "/google-workspace/organizational-units" ||
-    location.pathname === "/branding";
+    location.pathname === "/branding" ||
+    location.pathname === "/onboard";
 
   if (collapsed) {
     return (
@@ -177,6 +192,7 @@ export function Shell({ children }: { children: ReactNode }) {
                   <NavLink to="/policy" icon="lock" label="Access policy" active={location.pathname === "/policy"} />
                   <NavLink to="/endpoint-security" icon="device" label="Endpoint Security" active={location.pathname === "/endpoint-security"} />
                   <NavLink to="/branding" icon="palette" label="Branding" active={location.pathname === "/branding"} />
+                  {canOnboard && <NavLink to="/onboard" icon="groups" label="Onboard organization" active={location.pathname === "/onboard"} />}
                 </div>
               )}
             </div>

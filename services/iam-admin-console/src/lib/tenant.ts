@@ -73,6 +73,16 @@ export async function getTenant(tenantId: string): Promise<Tenant> {
  * exist at all), matching iam-tenant-svc's POST /api/v1/tenants, which is
  * deliberately unauthenticated server-side (see contracts/iam-tenant-svc.yaml).
  */
-export async function createTenant(name: string, subdomain: string): Promise<Tenant> {
-  return http.post<Tenant>(`${config.tenantSvcUrl}/api/v1/tenants`, { name, subdomain });
+export async function createTenant(name: string, subdomain: string, sessionToken: string): Promise<Tenant> {
+  return http.post<Tenant>(`${config.tenantSvcUrl}/api/v1/tenants`, { name, subdomain }, { sessionToken });
+}
+
+/** True only for an administrator of the platform operator's own organization. */
+export async function canOnboardTenants(sessionToken: string): Promise<boolean> {
+  try {
+    const r = await http.get<{ allowed: boolean }>(`${config.tenantSvcUrl}/api/v1/tenants/can-onboard`, { sessionToken });
+    return r.allowed;
+  } catch {
+    return false;
+  }
 }

@@ -26,7 +26,14 @@ export function App() {
       <ImpersonationBanner />
       <Routes>
         <Route path="/login" element={<LoginPage />} />
-        <Route path="/onboard" element={<OnboardTenantPage />} />
+        <Route
+          path="/onboard"
+          element={
+            <ProtectedRoute>
+              <OnboardTenantPage />
+            </ProtectedRoute>
+          }
+        />
         <Route
           path="/"
           element={

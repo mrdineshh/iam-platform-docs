@@ -948,6 +948,12 @@ code {
   display: block;
 }
 
+/* Sign-in page: a tenant's logo at a medium size (the sidebar keeps the smaller one above). */
+.login-page__brand-logo {
+  max-height: 72px;
+  max-width: 220px;
+}
+
 .login-page__headline {
   margin: 0 0 4px;
 }

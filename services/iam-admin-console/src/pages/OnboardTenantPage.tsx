@@ -2,20 +2,16 @@ import { useState } from "react";
 
 import { createTenant, type Tenant } from "@/lib/tenant";
 import { UpstreamError } from "@/lib/http";
-import { ThemeToggle } from "@/components/ThemeToggle";
-import { BackLink } from "@/components/ui";
+import { loadSession } from "@/lib/session";
+import { Alert, PageHeader, PendingLabel } from "@/components/ui";
 
 /**
- * Public (no session) tenant self-onboarding -- there's no session to hold
- * yet at this point (this is how the very first tenant comes to exist),
- * same reasoning as LoginPage needing no auth to render. Mirrors
- * POST /api/v1/tenants exactly (contracts/iam-tenant-svc.yaml), which is
- * deliberately unauthenticated server-side already -- this page doesn't
- * change that security posture, just gives it a UI instead of curl.
+ * Platform-operator tenant onboarding. Only an administrator of the operator's own organization (econz) can use it:
+ * the server checks the signed-in session on POST /api/v1/tenants, and the sidebar link only appears for them
+ * (GET /api/v1/tenants/can-onboard). Anyone else, signed in or not, is refused.
  *
- * Only creates the Tenant row. The first admin user still has to be
- * created against iam-identity-svc directly (mTLS-only inbound -- no
- * browser SPA can call it), so that step isn't in scope here.
+ * Only creates the Tenant row. The first admin user still has to be created against iam-identity-svc directly
+ * (mTLS-only inbound -- no browser SPA can call it), so that step isn't in scope here.
  */
 export function OnboardTenantPage() {
   const [name, setName] = useState("");
@@ -28,6 +24,8 @@ export function OnboardTenantPage() {
 
   async function submit() {
     setError(null);
+    const session = loadSession();
+    if (!session) return;
     if (!name.trim()) {
       setError("Enter an organization name.");
       return;
@@ -39,10 +37,11 @@ export function OnboardTenantPage() {
 
     setPending(true);
     try {
-      const tenant = await createTenant(name.trim(), subdomain);
-      setCreated(tenant);
+      setCreated(await createTenant(name.trim(), subdomain, session.token));
     } catch (err) {
-      if (err instanceof UpstreamError && err.status === 409) {
+      if (err instanceof UpstreamError && err.status === 403) {
+        setError("Only the platform operator's administrators can onboard an organization.");
+      } else if (err instanceof UpstreamError && err.status === 409) {
         setError("That subdomain is already taken.");
       } else if (err instanceof UpstreamError && err.status === 400) {
         setError(err.message);
@@ -56,45 +55,47 @@ export function OnboardTenantPage() {
 
   if (created) {
     return (
-      <main className="login-page">
-        <ThemeToggle className="login-page__theme-toggle" />
-        <div className="login-form">
-          <h1>Tenant created</h1>
+      <main className="page">
+        <PageHeader title="Organization created" subtitle={`${created.name} is now onboarded.`} />
+        <div className="card card--padded">
           <p>
-            <strong>{created.name}</strong> is now onboarded on subdomain <code>{created.subdomain}</code>.
+            Subdomain: <code>{created.subdomain}</code>
           </p>
           <p>
             Tenant ID: <code>{created.id}</code>
           </p>
-          <p>
-            Next: the first admin user for this tenant still has to be created against iam-identity-svc directly
-            (it requires mTLS, so no browser page can do it yet) — use the same API call as any other user
-            enrollment for now.
+          <p className="hint">
+            Next: the first admin user for this organization still has to be created against iam-identity-svc directly (it
+            requires mTLS, so no browser page can do it yet).
           </p>
-          <BackLink to="/login">Back to sign in</BackLink>
+          <button
+            type="button"
+            onClick={() => {
+              setCreated(null);
+              setName("");
+              setSubdomain("");
+            }}
+          >
+            Onboard another
+          </button>
         </div>
       </main>
     );
   }
 
   return (
-    <main className="login-page">
-      <ThemeToggle className="login-page__theme-toggle" />
+    <main className="page">
+      <PageHeader title="Onboard an organization" subtitle="Create a new organization on the platform." />
+
+      {error && <Alert kind="error">{error}</Alert>}
+
       <form
-        className="login-form"
+        className="card card--padded"
         onSubmit={(e) => {
           e.preventDefault();
           void submit();
         }}
       >
-        <h1>Onboard a new organization</h1>
-
-        {error && (
-          <p role="alert" className="login-form__error">
-            {error}
-          </p>
-        )}
-
         <label className="login-form__field">
           Organization name
           <input type="text" value={name} onChange={(e) => setName(e.target.value)} required placeholder="Acme Inc." />
@@ -114,13 +115,9 @@ export function OnboardTenantPage() {
 
         <div className="login-form__buttons">
           <button type="submit" disabled={pending}>
-            {pending ? "Creating…" : "Create tenant"}
+            <PendingLabel pending={pending} idle="Create organization" busy="Creating…" />
           </button>
         </div>
-
-        <p>
-          <BackLink to="/login">Back to sign in</BackLink>
-        </p>
       </form>
     </main>
   );

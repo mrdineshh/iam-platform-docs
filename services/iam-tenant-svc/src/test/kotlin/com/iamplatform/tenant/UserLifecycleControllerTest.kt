@@ -231,4 +231,125 @@ class UserLifecycleControllerTest {
 
         verify(deviceClient).resetDevice(tenantId, adminId)
     }
+
+    @Test
+    fun `resetting a password sets it, ends the sessions, and audits the admin and reason without the password`() {
+        givenAdmin()
+        whenever(sessionClient.listForUser(tenantId, targetId)).thenReturn(
+            listOf(RemoteSessionRecord(UUID.randomUUID(), tenantId, targetId, "1.1.1.1", null, Instant.now(), Instant.now().plusSeconds(60))),
+        )
+
+        controller.resetPassword(targetId, tenantId, ResetPasswordRequest("N3w-Secret-Pass", " forgot it "), "tok", httpRequest)
+
+        verify(identityClient).setPassword(targetId, "N3w-Secret-Pass")
+        verify(sessionClient).terminateAllForUser(eq(tenantId), eq(targetId), any())
+        val captor = argumentCaptor<AuditEvent>()
+        verify(auditPublisher).publish(captor.capture())
+        val event = captor.firstValue
+        assertEquals("identity.password_reset_by_admin", event.action)
+        assertEquals(adminId.toString(), event.actorId)
+        assertEquals(ActorType.ADMIN, event.actorType)
+        assertTrue(event.reason!!.startsWith("forgot it"))
+        assertFalse(event.reason!!.contains("N3w-Secret-Pass"))
+    }
+
+    @Test
+    fun `an administrator resetting their own password keeps their session`() {
+        givenAdmin()
+        whenever(identityClient.findUser(adminId)).thenReturn(
+            RemoteUser(adminId, tenantId, RemoteUserRole.ADMIN, email = "ada@econz.net", displayName = "Ada", status = RemoteUserStatus.ACTIVE),
+        )
+
+        controller.resetPassword(adminId, tenantId, ResetPasswordRequest("N3w-Secret-Pass", "rotating"), "tok", httpRequest)
+
+        verify(identityClient).setPassword(adminId, "N3w-Secret-Pass")
+        verify(sessionClient, never()).terminateAllForUser(any(), any(), any())
+    }
+
+    @Test
+    fun `a user from another tenant cannot be reset, and nothing is changed`() {
+        givenAdmin()
+        val otherTenantUser = UUID.randomUUID()
+        whenever(identityClient.findUser(otherTenantUser)).thenReturn(
+            RemoteUser(otherTenantUser, UUID.randomUUID(), RemoteUserRole.USER, email = "x@y.z", displayName = "X", status = RemoteUserStatus.ACTIVE),
+        )
+
+        assertThrows<UserNotFoundForDeletionException> {
+            controller.resetPassword(otherTenantUser, tenantId, ResetPasswordRequest("N3w-Secret-Pass", "why"), "tok", httpRequest)
+        }
+        verify(identityClient, never()).setPassword(any(), any())
+        verify(auditPublisher, never()).publish(any())
+    }
+
+    // ---- Google side of a password reset
+
+    private val googleKey = GoogleServiceAccountKey("sa@x.iam", "pem", "kid")
+
+    private fun googleManaged() {
+        whenever(googleConfigService.loadProvisioningConfig(tenantId)).thenReturn(
+            ProvisionGoogleUserRequest("econz.net", "boss@econz.net", null, googleKey, "", "", ""),
+        )
+    }
+
+    @Test
+    fun `without a Google Workspace connection only the platform password changes and the answer says so`() {
+        givenAdmin()
+        val answer = controller.resetPassword(targetId, tenantId, ResetPasswordRequest("N3w-Secret-Pass", "r", alsoResetGoogle = true), "tok", httpRequest).body!!
+        assertEquals("NOT_CONFIGURED", answer.google)
+        verify(googleClient, never()).setPassword(any(), any(), any(), any())
+    }
+
+    @Test
+    fun `a user whose email is not on the Google domain is reported as not synced, even if Google was asked for`() {
+        givenAdmin(email = "ada@elsewhere.org")
+        googleManaged()
+        val answer = controller.resetPassword(targetId, tenantId, ResetPasswordRequest("N3w-Secret-Pass", "r", alsoResetGoogle = true), "tok", httpRequest).body!!
+        assertEquals("NOT_ON_DOMAIN", answer.google)
+        verify(googleClient, never()).setPassword(any(), any(), any(), any())
+    }
+
+    @Test
+    fun `a synced Google user is left alone unless the admin asks`() {
+        givenAdmin(email = "ada@econz.net")
+        googleManaged()
+        val answer = controller.resetPassword(targetId, tenantId, ResetPasswordRequest("N3w-Secret-Pass", "r"), "tok", httpRequest).body!!
+        assertEquals("NOT_REQUESTED", answer.google)
+        verify(googleClient, never()).setPassword(any(), any(), any(), any())
+    }
+
+    @Test
+    fun `when asked, the same password is set in Google and the Google change is audited without the password`() {
+        givenAdmin(email = "ada@econz.net")
+        googleManaged()
+        whenever(googleClient.setPassword("boss@econz.net", googleKey, "ada@econz.net", "N3w-Secret-Pass")).thenReturn(true)
+
+        val answer = controller.resetPassword(targetId, tenantId, ResetPasswordRequest("N3w-Secret-Pass", "forgot", alsoResetGoogle = true), "tok", httpRequest).body!!
+
+        assertEquals("RESET", answer.google)
+        val captor = argumentCaptor<AuditEvent>()
+        verify(auditPublisher, org.mockito.kotlin.times(2)).publish(captor.capture())
+        assertTrue(captor.allValues.any { it.action == "google_workspace_user.password_reset" })
+        assertTrue(captor.allValues.none { it.reason?.contains("N3w-Secret-Pass") == true })
+    }
+
+    @Test
+    fun `if Google refuses, the platform password stays changed and the answer reports the failure`() {
+        givenAdmin(email = "ada@econz.net")
+        googleManaged()
+        whenever(googleClient.setPassword(any(), any(), any(), any())).thenThrow(GoogleProvisioningException("Google Workspace password change failed: 400"))
+
+        val answer = controller.resetPassword(targetId, tenantId, ResetPasswordRequest("N3w-Secret-Pass", "r", alsoResetGoogle = true), "tok", httpRequest).body!!
+
+        assertEquals("FAILED", answer.google)
+        verify(identityClient).setPassword(targetId, "N3w-Secret-Pass")
+    }
+
+    @Test
+    fun `a Google user that does not exist there is reported as not found`() {
+        givenAdmin(email = "ada@econz.net")
+        googleManaged()
+        whenever(googleClient.setPassword(any(), any(), any(), any())).thenReturn(false)
+        val answer = controller.resetPassword(targetId, tenantId, ResetPasswordRequest("N3w-Secret-Pass", "r", alsoResetGoogle = true), "tok", httpRequest).body!!
+        assertEquals("NOT_FOUND", answer.google)
+    }
 }

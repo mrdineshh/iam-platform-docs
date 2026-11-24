@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Link, useNavigate, useSearchParams } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import QRCode from "qrcode";
 import { login, precheck } from "@/lib/auth";
 import { findTenantBySubdomain, rememberTenantSubdomain, resolveTenantSubdomain } from "@/lib/tenant";
@@ -297,15 +297,6 @@ export function LoginPage() {
           </>
         )}
 
-        {step === "credentials" && (
-          <div className="login-form__alt">
-            <span className="login-form__alt-label">New to the platform?</span>
-            <Link to="/onboard" className="login-form__cta">
-              <span className="login-form__cta-icon">+</span>
-              Onboard a new organization
-            </Link>
-          </div>
-        )}
       </form>
       </section>
     </main>

@@ -52,6 +52,15 @@ body {
   box-shadow: 0 6px 16px rgba(20, 184, 166, 0.3);
 }
 
+/* A tenant's own logo (Branding page) replaces the letter mark and name. */
+.shell__brand-logo {
+  display: block;
+  max-height: 52px;
+  max-width: 100%;
+  width: auto;
+  object-fit: contain;
+}
+
 .shell__nav-link {
   display: flex;
   align-items: center;
